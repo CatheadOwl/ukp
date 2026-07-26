@@ -1,0 +1,5 @@
+{
+  "query": "fixture-cad-search-token",
+  "nativeLimit": 20,
+  "outputFormat": "json"
+}

@@ -1,0 +1,23 @@
+{
+  "name": "ukp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ukp": "src/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "ground-truth": "bun run scripts/project-ground-truth.ts"
+  },
+  "dependencies": {
+    "smol-toml": "1.7.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.5",
+    "typescript": "5.9.3"
+  }
+}

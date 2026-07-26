@@ -1,0 +1,4 @@
+name = "fixture-qmd"
+
+[capabilities.search]
+provider = "qmd"
