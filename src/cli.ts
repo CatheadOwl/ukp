@@ -1,9 +1,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { executeHumanSearch, parseSearchArgs, SearchUsageError } from "./capabilities/search.ts";
+import { SearchUsageError } from "./capabilities/search.ts";
 import { diagnoseService, renderDiagnose, type ProviderResolver } from "./commands/diagnose.ts";
+import { executeSearchCommand, renderSearchHelp } from "./commands/search.ts";
 import { ENDPOINT_NAME } from "./config/manifest.ts";
 import { readRegistry, registerAt, unregisterAt } from "./registry.ts";
+
+export { renderSearchHelp } from "./commands/search.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder"],
@@ -36,28 +39,10 @@ export function renderHelp(): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderSearchHelp(): string {
-  return [
-    "Usage: ukp search <query> [--limit <1-1000>] [-c <endpoint> ... | -g] [--json]",
-    "",
-    "Run atomic lexical search against the selected Service endpoints.",
-    "",
-    "Arguments:",
-    "  <query>             one non-empty search query; quote multi-word queries",
-    "",
-    "Options:",
-    "  --limit <1-1000>    maximum results requested from each endpoint (default: 20)",
-    "  -c <endpoint>       select one endpoint; repeat to select multiple endpoints",
-    "  -g                  search every endpoint in the Host Registry; takes no value",
-    "  --json              write provider-native results to artifacts and print an envelope",
-    "  -h, --help          show this help",
-  ].join("\n") + "\n";
-}
-
 function renderSearchUsageError(message: string): string {
   return [
     `ukp search: ${message}`,
-    "Usage: ukp search <query> [--limit <1-1000>] [-c <endpoint> ... | -g] [--json]",
+    "Usage: ukp search <query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--json]",
     "Run 'ukp search --help' for details.",
   ].join("\n");
 }
@@ -147,7 +132,7 @@ export function runCli(
       return 0;
     }
     try {
-      const result = executeHumanSearch(parseSearchArgs(args.slice(1)), {
+      const result = executeSearchCommand(args.slice(1), {
         currentDirectory,
         registryPath,
         qmdCommand: context.qmdCommand,

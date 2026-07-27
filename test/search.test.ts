@@ -9,7 +9,8 @@ import {
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
-import { executeHumanSearch, parseSearchArgs } from "../src/capabilities/search.ts";
+import { executeHumanSearch } from "../src/capabilities/search.ts";
+import { parseSearchArgs } from "../src/commands/search.ts";
 import { registerAt } from "../src/registry.ts";
 
 const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
@@ -44,7 +45,21 @@ describe("search", () => {
     expect(parseSearchArgs(["hello", "--limit", "30"]).request).toEqual({ query: "hello", limit: 30 });
     expect(parseSearchArgs(["hello"]).request.limit).toBe(20);
     expect(() => parseSearchArgs(["hello", "--limit", "0"])).toThrow("between 1 and 1000");
+    expect(() => parseSearchArgs(["hello", "--limit", "2", "--limit", "3"])).toThrow(
+      "--limit may only be specified once",
+    );
     expect(() => parseSearchArgs(["hello", "extra"])).toThrow("exactly one query");
+  });
+
+  test("parses canonical endpoint selectors and keeps -c as an alias", () => {
+    expect(parseSearchArgs([
+      "hello",
+      "--endpoint",
+      "cad",
+      "-c",
+      "mem0",
+    ]).options.explicitEndpoints).toEqual(["cad", "mem0"]);
+    expect(() => parseSearchArgs(["hello", "--endpoint", "cad", "-g"])).toThrow("--endpoint and -g");
   });
 
   test("uses Service cwd and translates limit to QMD -n", () => {

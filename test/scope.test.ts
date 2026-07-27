@@ -51,10 +51,17 @@ describe("Client scope resolution", () => {
     }
   });
 
-  test("-c and -g conflict and unknown explicit names fail", () => {
+  test("explicit endpoint scope and global scope conflict", () => {
     const root = workspace();
     try {
-      expect(() => resolveScope({ currentDirectory: root, registry, explicitEndpoints: ["cad"], global: true })).toThrow(ScopeError);
+      expect(() => resolveScope({
+        currentDirectory: root,
+        registry,
+        explicitEndpoints: ["cad"],
+        global: true,
+      })).toThrow("explicit endpoint scope and global scope cannot be used together");
+      expect(() => resolveScope({ currentDirectory: root, registry, explicitEndpoints: ["cad"], global: true }))
+        .toThrow(ScopeError);
       expect(() => resolveScope({ currentDirectory: root, registry, explicitEndpoints: ["gone"] })).toThrow("unknown endpoint");
     } finally {
       rmSync(root, { recursive: true, force: true });

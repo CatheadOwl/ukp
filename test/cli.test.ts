@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMMANDS, renderHelp, renderSearchHelp, runCli } from "../src/cli.ts";
+import { registerAt } from "../src/registry.ts";
+
+const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
+const fixtureExecutable = join(fixture, "qmd-fixture.mjs");
+const nodeExecutable = Bun.which("node") ?? process.execPath;
 
 describe("CLI bootstrap", () => {
   test("renders every P0 command in help", () => {
@@ -22,8 +27,12 @@ describe("CLI bootstrap", () => {
     const output: string[] = [];
     expect(renderSearchHelp()).toContain("Usage: ukp search <query>");
     expect(runCli(["search", "--help"], (message) => output.push(message))).toBe(0);
-    expect(output.join("\n")).toContain("-c <endpoint>");
-    expect(output.join("\n")).toContain("-g                  search every endpoint");
+    const help = output.join("\n");
+    expect(help).toContain("--endpoint <name>");
+    expect(help).toContain("-c, --endpoint <name>");
+    expect(help).toContain("-g");
+    expect(help.replace(/\s+/g, " ")).toContain("takes no value");
+    expect(help).not.toContain("default: []");
   });
 
   test("search usage errors include recovery guidance", () => {
@@ -32,6 +41,7 @@ describe("CLI bootstrap", () => {
     const error = errors.join("\n");
     expect(error).toContain("unexpected argument 'product'");
     expect(error).toContain("'-g' takes no value");
+    expect(error).toContain("--endpoint <name>");
     expect(error).toContain("Run 'ukp search --help' for details.");
   });
 
@@ -47,6 +57,38 @@ describe("CLI bootstrap", () => {
     expect(output.join("\n")).toContain("ukp register");
   });
 
+  test("search -c compatibility alias executes end-to-end", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-search-alias-"));
+    const registryPath = join(root, "registry.toml");
+    const invocationPath = join(fixture, "qmd-fixture-invocation.json");
+    const invocationLogPath = join(fixture, "qmd-fixture-invocations.jsonl");
+    const output: string[] = [];
+    registerAt(registryPath, "fixture-qmd", fixture);
+    try {
+      expect(runCli([
+        "search",
+        "fixture-cad-search-token",
+        "-c",
+        "fixture-qmd",
+        "--limit",
+        "2",
+      ], (message) => output.push(message), undefined, {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      })).toBe(0);
+      expect(output.join("\n")).toContain("CAD fixture note");
+      const invocation = JSON.parse(readFileSync(invocationPath, "utf8"));
+      expect(invocation.cwd).toBe(fixture);
+      expect(invocation.query).toBe("fixture-cad-search-token");
+      expect(invocation.nativeLimit).toBe(2);
+    } finally {
+      if (existsSync(invocationPath)) rmSync(invocationPath);
+      if (existsSync(invocationLogPath)) rmSync(invocationLogPath);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("unknown command is a usage error", () => {
     const errors: string[] = [];
     expect(runCli(["wat"], undefined, (message) => errors.push(message))).toBe(2);
@@ -54,7 +96,6 @@ describe("CLI bootstrap", () => {
   });
 
   test("register, list, and unregister form an inventory lifecycle", () => {
-    const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
     const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-")), "registry.toml");
     const context = {
       currentDirectory: fixture,
