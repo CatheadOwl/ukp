@@ -78,7 +78,12 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
       continue;
     }
     if (argument.startsWith("-")) throw new SearchUsageError(`unknown search option '${argument}'`);
-    if (query !== undefined) throw new SearchUsageError("search accepts exactly one query argument");
+    if (query !== undefined) {
+      throw new SearchUsageError(
+        `unexpected argument '${argument}'; search accepts exactly one query. `
+        + "Use '-c <endpoint>' to select an endpoint; '-g' takes no value.",
+      );
+    }
     query = argument;
   }
 
@@ -199,7 +204,9 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
   }
 
   if (!plan.some((endpoint) => endpoint.status === "executable")) {
-    warnings.push("no executable search endpoints");
+    warnings.push(registry.length === 0
+      ? "no executable search endpoints: the Host Registry is empty; run 'ukp register' from a Service folder, then retry"
+      : "no executable search endpoints: run 'ukp list' to inspect registrations and 'ukp diagnose' from the selected Service folder(s)");
   }
   return { plan, warnings };
 }
