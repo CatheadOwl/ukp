@@ -36,6 +36,32 @@ export function renderHelp(): string {
   return `${lines.join("\n")}\n`;
 }
 
+export function renderSearchHelp(): string {
+  return [
+    "Usage: ukp search <query> [--limit <1-1000>] [-c <endpoint> ... | -g] [--json]",
+    "",
+    "Run atomic lexical search against the selected Service endpoints.",
+    "",
+    "Arguments:",
+    "  <query>             one non-empty search query; quote multi-word queries",
+    "",
+    "Options:",
+    "  --limit <1-1000>    maximum results requested from each endpoint (default: 20)",
+    "  -c <endpoint>       select one endpoint; repeat to select multiple endpoints",
+    "  -g                  search every endpoint in the Host Registry; takes no value",
+    "  --json              write provider-native results to artifacts and print an envelope",
+    "  -h, --help          show this help",
+  ].join("\n") + "\n";
+}
+
+function renderSearchUsageError(message: string): string {
+  return [
+    `ukp search: ${message}`,
+    "Usage: ukp search <query> [--limit <1-1000>] [-c <endpoint> ... | -g] [--json]",
+    "Run 'ukp search --help' for details.",
+  ].join("\n");
+}
+
 export function runCli(
   args: readonly string[],
   stdout = console.log,
@@ -116,6 +142,10 @@ export function runCli(
   }
 
   if (command === "search") {
+    if (args.length === 2 && (args[1] === "-h" || args[1] === "--help")) {
+      stdout(renderSearchHelp().trimEnd());
+      return 0;
+    }
     try {
       const result = executeHumanSearch(parseSearchArgs(args.slice(1)), {
         currentDirectory,
@@ -129,7 +159,9 @@ export function runCli(
       if (result.stderr) stderr(result.stderr.trimEnd());
       return result.exitCode;
     } catch (error) {
-      stderr(error instanceof Error ? error.message : String(error));
+      stderr(error instanceof SearchUsageError
+        ? renderSearchUsageError(error.message)
+        : error instanceof Error ? error.message : String(error));
       return error instanceof SearchUsageError ? 2 : 1;
     }
   }
