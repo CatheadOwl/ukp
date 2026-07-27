@@ -38,64 +38,6 @@ export class SearchUsageError extends Error {
   }
 }
 
-export function parseSearchArgs(args: readonly string[]): ParsedSearch {
-  let query: string | undefined;
-  let limit = 20;
-  let limitSeen = false;
-  let global = false;
-  let json = false;
-  const explicit: string[] = [];
-  const warnings: string[] = [];
-
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index]!;
-    if (argument === "--limit") {
-      if (limitSeen) throw new SearchUsageError("--limit may only be specified once");
-      const value = args[++index];
-      if (!value || !/^[0-9]+$/.test(value)) throw new SearchUsageError("--limit must be a decimal integer");
-      limit = Number(value);
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
-        throw new SearchUsageError("--limit must be between 1 and 1000");
-      }
-      limitSeen = true;
-      continue;
-    }
-    if (argument === "-c") {
-      const value = args[++index];
-      if (!value) throw new SearchUsageError("-c requires an endpoint name");
-      if (explicit.includes(value)) warnings.push(`duplicate endpoint '${value}' ignored`);
-      else explicit.push(value);
-      continue;
-    }
-    if (argument === "-g") {
-      if (global) throw new SearchUsageError("-g may only be specified once");
-      global = true;
-      continue;
-    }
-    if (argument === "--json") {
-      if (json) throw new SearchUsageError("--json may only be specified once");
-      json = true;
-      continue;
-    }
-    if (argument.startsWith("-")) throw new SearchUsageError(`unknown search option '${argument}'`);
-    if (query !== undefined) {
-      throw new SearchUsageError(
-        `unexpected argument '${argument}'; search accepts exactly one query. `
-        + "Use '-c <endpoint>' to select an endpoint; '-g' takes no value.",
-      );
-    }
-    query = argument;
-  }
-
-  if (query === undefined || query.length === 0) throw new SearchUsageError("search query must be non-empty");
-  if (global && explicit.length > 0) throw new SearchUsageError("-c and -g cannot be used together");
-  return {
-    request: { query, limit },
-    options: { explicitEndpoints: explicit.length > 0 ? explicit : undefined, global, json },
-    warnings,
-  };
-}
-
 export interface HumanSearchContext {
   currentDirectory: string;
   registryPath: string;

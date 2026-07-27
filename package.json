@@ -13,6 +13,7 @@
     "ground-truth": "bun run scripts/project-ground-truth.ts"
   },
   "dependencies": {
+    "commander": "15.0.0",
     "smol-toml": "1.7.1",
     "zod": "4.4.3"
   },

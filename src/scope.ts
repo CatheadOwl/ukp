@@ -28,7 +28,7 @@ export class ScopeError extends Error {
 export function resolveScope(input: ScopeInput): ResolvedScope {
   const explicit = input.explicitEndpoints;
   if (input.global && explicit !== undefined) {
-    throw new ScopeError("-c and -g cannot be used together");
+    throw new ScopeError("explicit endpoint scope and global scope cannot be used together");
   }
 
   const byName = new Map(input.registry.map((binding) => [binding.name, binding]));
