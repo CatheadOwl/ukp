@@ -90,6 +90,9 @@ describe("CLI bootstrap", () => {
       const error = errors.join("\n");
       expect(error).toContain("error: Service Manifest is not readable:");
       expect(error).toContain(join(root, ".ukp", "service.toml"));
+      expect(error).toContain("Hint: 'ukp diagnose' checks the current folder as a Service.");
+      expect(error).toContain("Use 'ukp diagnose -g' to validate every registered endpoint");
+      expect(error).toContain("ukp diagnose --endpoint <name>");
       expect(error).not.toContain("ManifestError:");
       expect(error).not.toContain("at loadManifest");
     } finally {
