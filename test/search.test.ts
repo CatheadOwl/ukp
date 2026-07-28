@@ -62,6 +62,10 @@ describe("search", () => {
     expect(() => parseSearchArgs(["hello", "--endpoint", "cad", "-g"])).toThrow("--endpoint and -g");
   });
 
+  test("rejects bundled repeated global flags like -gg", () => {
+    expect(() => parseSearchArgs(["hello", "-gg"])).toThrow("-g may only be specified once");
+  });
+
   test("uses Service cwd and translates limit to QMD -n", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-"));
     const registryPath = join(root, "registry.toml");

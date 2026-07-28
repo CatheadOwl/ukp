@@ -6,13 +6,10 @@ import {
   type HumanSearchResult,
   type ParsedSearch,
 } from "../capabilities/search.ts";
+import { countFlagOccurrences } from "./flags.ts";
 
 function collectValues(value: string, previous: string[] = []): string[] {
   return [...previous, value];
-}
-
-function countFlag(args: readonly string[], flag: string): number {
-  return args.filter((argument) => argument === flag).length;
 }
 
 function createSearchCommand(): Command {
@@ -74,9 +71,9 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
   const warnings: string[] = [];
   const parsed = parseSearchCommand(args);
 
-  if (countFlag(args, "--limit") > 1) throw new SearchUsageError("--limit may only be specified once");
-  if (countFlag(args, "-g") > 1) throw new SearchUsageError("-g may only be specified once");
-  if (countFlag(args, "--json") > 1) throw new SearchUsageError("--json may only be specified once");
+  if (countFlagOccurrences(args, "--limit") > 1) throw new SearchUsageError("--limit may only be specified once");
+  if (countFlagOccurrences(args, "-g") > 1) throw new SearchUsageError("-g may only be specified once");
+  if (countFlagOccurrences(args, "--json") > 1) throw new SearchUsageError("--json may only be specified once");
 
   if (parsed.limit !== undefined) {
     if (!/^[0-9]+$/.test(parsed.limit)) throw new SearchUsageError("--limit must be a decimal integer");

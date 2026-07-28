@@ -1,4 +1,8 @@
 import { loadManifest, type LoadedManifest } from "../config/manifest.ts";
+import { readRegistry, type RegistryBinding } from "../registry.ts";
+import { resolveScope } from "../scope.ts";
+import { Command, CommanderError } from "commander";
+import { countFlagOccurrences } from "./flags.ts";
 
 export interface ProviderCheck {
   supported: boolean;
@@ -15,6 +19,25 @@ export interface DiagnoseReport {
     status: "ok" | "warning";
     reason?: string;
   }>;
+}
+
+export interface DiagnoseCommandContext {
+  currentDirectory: string;
+  registryPath: string;
+  resolveProvider?: ProviderResolver;
+}
+
+export interface DiagnoseCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export class DiagnoseUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DiagnoseUsageError";
+  }
 }
 
 function defaultProviderResolver(provider: string): ProviderCheck {
@@ -48,6 +71,153 @@ export function diagnoseService(
   return { service, capabilities };
 }
 
+function collectValues(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function createDiagnoseCommand(): Command {
+  return new Command("ukp diagnose")
+    .exitOverride()
+    .allowUnknownOption(false)
+    .allowExcessArguments(true)
+    .helpOption("-h, --help", "show this help")
+    .usage("[--endpoint <name> ... | -g]")
+    .description("Validate a Service folder or selected registered Service endpoints.")
+    .option(
+      "-c, --endpoint <name>",
+      "validate one registered endpoint; repeat to validate multiple endpoints",
+      collectValues,
+    )
+    .option("-g", "validate every endpoint in the Host Registry; takes no value");
+}
+
+function parseDiagnoseCommand(args: readonly string[]): {
+  positionals: string[];
+  endpoints: string[];
+  global?: boolean;
+} {
+  const command = createDiagnoseCommand()
+    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
+
+  try {
+    command.parse(args, { from: "user" });
+  } catch (error) {
+    if (error instanceof CommanderError) {
+      throw new DiagnoseUsageError(error.message.replace(/^error: /, ""));
+    }
+    throw error;
+  }
+
+  const options = command.opts<{
+    endpoint?: string[];
+    g?: boolean;
+  }>();
+  return {
+    positionals: command.args,
+    endpoints: options.endpoint ?? [],
+    global: options.g,
+  };
+}
+
+function parseDiagnoseArgs(args: readonly string[]): {
+  explicitEndpoints?: string[];
+  global: boolean;
+  warnings: string[];
+} {
+  const parsed = parseDiagnoseCommand(args);
+  const explicit: string[] = [];
+  const warnings: string[] = [];
+
+  if (countFlagOccurrences(args, "-g") > 1) throw new DiagnoseUsageError("-g may only be specified once");
+  const [unexpected] = parsed.positionals;
+  if (unexpected !== undefined) {
+    throw new DiagnoseUsageError(
+      `unexpected argument '${unexpected}'. Use '--endpoint <name>' to select an endpoint; '-g' takes no value.`,
+    );
+  }
+
+  for (const endpoint of parsed.endpoints) {
+    if (explicit.includes(endpoint)) warnings.push(`duplicate endpoint '${endpoint}' ignored`);
+    else explicit.push(endpoint);
+  }
+
+  if (parsed.global && explicit.length > 0) {
+    throw new DiagnoseUsageError("--endpoint and -g cannot be used together");
+  }
+
+  return {
+    explicitEndpoints: explicit.length > 0 ? explicit : undefined,
+    global: parsed.global ?? false,
+    warnings,
+  };
+}
+
+function diagnoseBinding(
+  binding: RegistryBinding,
+  resolveProvider: ProviderResolver | undefined,
+): { status: "ok"; report: DiagnoseReport } | { status: "failed"; message: string } {
+  try {
+    const report = diagnoseService(binding.path, resolveProvider);
+    if (report.service.effectiveName !== binding.name) {
+      return {
+        status: "failed",
+        message: `endpoint '${binding.name}' no longer matches Service effective name '${report.service.effectiveName}'`,
+      };
+    }
+    return { status: "ok", report };
+  } catch (error) {
+    return { status: "failed", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function executeDiagnoseCommand(
+  args: readonly string[],
+  context: DiagnoseCommandContext,
+): DiagnoseCommandResult {
+  const parsed = parseDiagnoseArgs(args);
+  if (!parsed.explicitEndpoints && !parsed.global) {
+    return {
+      exitCode: 0,
+      stdout: renderDiagnose(diagnoseService(context.currentDirectory, context.resolveProvider)),
+      stderr: parsed.warnings.length > 0 ? `${parsed.warnings.join("\n")}\n` : "",
+    };
+  }
+
+  const registry = readRegistry(context.registryPath);
+  const scope = resolveScope({
+    currentDirectory: context.currentDirectory,
+    registry,
+    explicitEndpoints: parsed.explicitEndpoints,
+    global: parsed.global,
+  });
+  const warnings = [...parsed.warnings, ...scope.warnings];
+  const output: string[] = [];
+  let failed = false;
+
+  for (const binding of scope.bindings) {
+    output.push(`== ${binding.name} ==`);
+    const result = diagnoseBinding(binding, context.resolveProvider);
+    if (result.status === "ok") {
+      output.push(renderDiagnose(result.report).trimEnd());
+    } else {
+      failed = true;
+      output.push("status: failed");
+      output.push(`error: ${result.message}`);
+    }
+  }
+
+  if (scope.bindings.length === 0) {
+    failed = true;
+    warnings.push("no endpoints selected: the Host Registry is empty; run 'ukp register' from a Service folder, then retry");
+  }
+
+  return {
+    exitCode: failed ? 1 : 0,
+    stdout: output.length > 0 ? `${output.join("\n")}\n` : "",
+    stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
+  };
+}
+
 export function renderDiagnose(report: DiagnoseReport): string {
   const lines = [
     `endpoint: ${report.service.effectiveName} (source: ${report.service.nameSource})`,
@@ -60,4 +230,8 @@ export function renderDiagnose(report: DiagnoseReport): string {
     if (capability.reason) lines.push(`warning: ${capability.reason}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function renderDiagnoseHelp(): string {
+  return createDiagnoseCommand().helpInformation();
 }

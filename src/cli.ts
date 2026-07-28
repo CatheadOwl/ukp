@@ -1,15 +1,22 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { SearchUsageError } from "./capabilities/search.ts";
-import { diagnoseService, renderDiagnose, type ProviderResolver } from "./commands/diagnose.ts";
+import {
+  DiagnoseUsageError,
+  executeDiagnoseCommand,
+  renderDiagnoseHelp,
+  diagnoseService,
+  type ProviderResolver,
+} from "./commands/diagnose.ts";
 import { executeSearchCommand, renderSearchHelp } from "./commands/search.ts";
 import { ENDPOINT_NAME } from "./config/manifest.ts";
 import { readRegistry, registerAt, unregisterAt } from "./registry.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
+export { renderDiagnoseHelp } from "./commands/diagnose.ts";
 
 export const COMMANDS = [
-  ["diagnose", "validate a Service folder"],
+  ["diagnose", "validate a Service folder or endpoint scope"],
   ["register", "register a Service endpoint"],
   ["unregister", "remove a registered endpoint"],
   ["list", "list registered endpoint bindings"],
@@ -47,6 +54,14 @@ function renderSearchUsageError(message: string): string {
   ].join("\n");
 }
 
+function renderDiagnoseUsageError(message: string): string {
+  return [
+    `ukp diagnose: ${message}`,
+    "Usage: ukp diagnose [--endpoint <name> ... | -g]",
+    "Run 'ukp diagnose --help' for details.",
+  ].join("\n");
+}
+
 export function runCli(
   args: readonly string[],
   stdout = console.log,
@@ -63,16 +78,24 @@ export function runCli(
   }
 
   if (command === "diagnose") {
-    if (args.length !== 1) {
-      stderr("Usage: ukp diagnose");
-      return 2;
+    if (args.length === 2 && (args[1] === "-h" || args[1] === "--help")) {
+      stdout(renderDiagnoseHelp().trimEnd());
+      return 0;
     }
     try {
-      stdout(renderDiagnose(diagnoseService(currentDirectory, context.resolveProvider)).trimEnd());
-      return 0;
+      const result = executeDiagnoseCommand(args.slice(1), {
+        currentDirectory,
+        registryPath,
+        resolveProvider: context.resolveProvider,
+      });
+      if (result.stdout) stdout(result.stdout.trimEnd());
+      if (result.stderr) stderr(result.stderr.trimEnd());
+      return result.exitCode;
     } catch (error) {
-      stderr(error instanceof Error ? error.message : String(error));
-      return 1;
+      stderr(error instanceof DiagnoseUsageError
+        ? renderDiagnoseUsageError(error.message)
+        : error instanceof Error ? error.message : String(error));
+      return error instanceof DiagnoseUsageError ? 2 : 1;
     }
   }
 
