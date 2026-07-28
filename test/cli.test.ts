@@ -79,6 +79,24 @@ describe("CLI bootstrap", () => {
     expect(error).toContain("Run 'ukp diagnose --help' for details.");
   });
 
+  test("diagnose local Service errors are rendered without a stack trace", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-diagnose-missing-manifest-"));
+    const errors: string[] = [];
+    try {
+      expect(runCli(["diagnose"], undefined, (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(1);
+      const error = errors.join("\n");
+      expect(error).toContain("error: Service Manifest is not readable:");
+      expect(error).toContain(join(root, ".ukp", "service.toml"));
+      expect(error).not.toContain("ManifestError:");
+      expect(error).not.toContain("at loadManifest");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("empty Registry search explains how to recover", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-empty-"));
     const output: string[] = [];
