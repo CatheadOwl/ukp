@@ -1,5 +1,9 @@
 export function countFlagOccurrences(args: readonly string[], flag: string): number {
-  if (!flag.startsWith("-") || flag.startsWith("--") || flag.length !== 2) {
+  if (flag.startsWith("--")) {
+    return args.filter((argument) => argument === flag || argument.startsWith(`${flag}=`)).length;
+  }
+
+  if (!flag.startsWith("-") || flag.length !== 2) {
     return args.filter((argument) => argument === flag).length;
   }
 
@@ -13,4 +17,8 @@ export function countFlagOccurrences(args: readonly string[], flag: string): num
     if (!bundle.split("").every((character) => character === shortFlag)) return count;
     return count + bundle.length;
   }, 0);
+}
+
+export function isHelpRequest(args: readonly string[]): boolean {
+  return args.length === 1 && (args[0] === "-h" || args[0] === "--help");
 }

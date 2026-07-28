@@ -1,0 +1,137 @@
+import { Command, CommanderError } from "commander";
+import { ENDPOINT_NAME } from "../config/manifest.ts";
+import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
+import { readRegistry, registerAt, unregisterAt } from "../registry.ts";
+import { isHelpRequest } from "./flags.ts";
+
+export interface InventoryCommandContext {
+  currentDirectory: string;
+  registryPath: string;
+  resolveProvider?: ProviderResolver;
+}
+
+export interface InventoryCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export class InventoryUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InventoryUsageError";
+  }
+}
+
+function createCommand(name: string, description: string): Command {
+  return new Command(`ukp ${name}`)
+    .exitOverride()
+    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined })
+    .allowUnknownOption(false)
+    .allowExcessArguments(false)
+    .helpOption("-h, --help", "show this help")
+    .description(description);
+}
+
+function parseCommand(command: Command, args: readonly string[]): void {
+  try {
+    command.parse(args, { from: "user" });
+  } catch (error) {
+    if (error instanceof CommanderError) {
+      throw new InventoryUsageError(error.message.replace(/^error: /, ""));
+    }
+    throw error;
+  }
+}
+
+function renderUsageError(name: string, message: string, usage: string): string {
+  return [
+    `ukp ${name}: ${message}`,
+    `Usage: ${usage}`,
+    `Run 'ukp ${name} --help' for details.`,
+  ].join("\n");
+}
+
+export function executeRegisterCommand(
+  args: readonly string[],
+  context: InventoryCommandContext,
+): InventoryCommandResult {
+  const command = createCommand("register", "Register the current Service folder.");
+  if (isHelpRequest(args)) {
+    return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
+  }
+  try {
+    parseCommand(command, args);
+    if (args.length !== 0) {
+      throw new InventoryUsageError("register takes no arguments");
+    }
+    const report = diagnoseService(context.currentDirectory, context.resolveProvider);
+    registerAt(context.registryPath, report.service.effectiveName, report.service.folder);
+    return {
+      exitCode: 0,
+      stdout: `registered: ${report.service.effectiveName}\nlocation: ${report.service.folder}`,
+      stderr: "",
+    };
+  } catch (error) {
+    if (error instanceof InventoryUsageError) {
+      return { exitCode: 2, stdout: "", stderr: renderUsageError("register", error.message, "ukp register") };
+    }
+    return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function executeListCommand(args: readonly string[], context: InventoryCommandContext): InventoryCommandResult {
+  const command = createCommand("list", "List registered endpoint bindings.");
+  if (isHelpRequest(args)) {
+    return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
+  }
+  try {
+    parseCommand(command, args);
+    if (args.length !== 0) {
+      throw new InventoryUsageError("list takes no arguments");
+    }
+    const endpoints = readRegistry(context.registryPath);
+    return {
+      exitCode: 0,
+      stdout: endpoints.length === 0
+        ? "No endpoints registered."
+        : endpoints.map((endpoint) => `${endpoint.name}\t${endpoint.path}`).join("\n"),
+      stderr: "",
+    };
+  } catch (error) {
+    if (error instanceof InventoryUsageError) {
+      return { exitCode: 2, stdout: "", stderr: renderUsageError("list", error.message, "ukp list") };
+    }
+    return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function executeUnregisterCommand(
+  args: readonly string[],
+  context: InventoryCommandContext,
+): InventoryCommandResult {
+  const command = createCommand("unregister", "Remove a registered endpoint.")
+    .argument("[name]", "registered endpoint name");
+  if (isHelpRequest(args)) {
+    return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
+  }
+  try {
+    parseCommand(command, args);
+    const [name] = args;
+    if (!name || !ENDPOINT_NAME.test(name)) {
+      throw new InventoryUsageError("unregister requires a valid endpoint name");
+    }
+    const previous = readRegistry(context.registryPath).find((binding) => binding.name === name);
+    unregisterAt(context.registryPath, name);
+    return {
+      exitCode: 0,
+      stdout: `unregistered: ${name}\nlocation: ${previous?.path ?? "unknown"}`,
+      stderr: "",
+    };
+  } catch (error) {
+    if (error instanceof InventoryUsageError) {
+      return { exitCode: 2, stdout: "", stderr: renderUsageError("unregister", error.message, "ukp unregister <name>") };
+    }
+    return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+  }
+}

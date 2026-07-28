@@ -6,7 +6,7 @@ import {
   type HumanSearchResult,
   type ParsedSearch,
 } from "../capabilities/search.ts";
-import { countFlagOccurrences } from "./flags.ts";
+import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 
 function collectValues(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -111,9 +111,28 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
 }
 
 export function executeSearchCommand(args: readonly string[], context: HumanSearchContext): HumanSearchResult {
-  return executeHumanSearch(parseSearchArgs(args), context);
+  if (isHelpRequest(args)) {
+    return { exitCode: 0, stdout: renderSearchHelp(), stderr: "" };
+  }
+
+  try {
+    return executeHumanSearch(parseSearchArgs(args), context);
+  } catch (error) {
+    if (error instanceof SearchUsageError) {
+      return { exitCode: 2, stdout: "", stderr: renderSearchUsageError(error.message) };
+    }
+    throw error;
+  }
 }
 
 export function renderSearchHelp(): string {
   return createSearchCommand().helpInformation();
+}
+
+export function renderSearchUsageError(message: string): string {
+  return [
+    `ukp search: ${message}`,
+    "Usage: ukp search <query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--json]",
+    "Run 'ukp search --help' for details.",
+  ].join("\n");
 }

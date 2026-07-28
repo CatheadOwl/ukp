@@ -44,8 +44,15 @@ describe("search", () => {
   test("parses the stable UKP query and limit contract", () => {
     expect(parseSearchArgs(["hello", "--limit", "30"]).request).toEqual({ query: "hello", limit: 30 });
     expect(parseSearchArgs(["hello"]).request.limit).toBe(20);
+    expect(parseSearchArgs(["hello", "--limit=30"]).request).toEqual({ query: "hello", limit: 30 });
     expect(() => parseSearchArgs(["hello", "--limit", "0"])).toThrow("between 1 and 1000");
     expect(() => parseSearchArgs(["hello", "--limit", "2", "--limit", "3"])).toThrow(
+      "--limit may only be specified once",
+    );
+    expect(() => parseSearchArgs(["hello", "--limit=2", "--limit=3"])).toThrow(
+      "--limit may only be specified once",
+    );
+    expect(() => parseSearchArgs(["hello", "--limit=2", "--limit", "3"])).toThrow(
       "--limit may only be specified once",
     );
     expect(() => parseSearchArgs(["hello", "extra"])).toThrow("exactly one query");
