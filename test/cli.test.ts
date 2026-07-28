@@ -46,6 +46,19 @@ describe("CLI bootstrap", () => {
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
   });
 
+  test("inventory command help is owned by command handlers", () => {
+    const listOutput: string[] = [];
+    const registerOutput: string[] = [];
+    const unregisterOutput: string[] = [];
+    expect(runCli(["list", "--help"], (message) => listOutput.push(message))).toBe(0);
+    expect(runCli(["register", "--help"], (message) => registerOutput.push(message))).toBe(0);
+    expect(runCli(["unregister", "--help"], (message) => unregisterOutput.push(message))).toBe(0);
+    expect(listOutput.join("\n")).toContain("Usage: ukp list");
+    expect(registerOutput.join("\n")).toContain("Usage: ukp register");
+    expect(unregisterOutput.join("\n")).toContain("Usage: ukp unregister");
+    expect(unregisterOutput.join("\n")).toContain("[name]");
+  });
+
   test("search usage errors include recovery guidance", () => {
     const errors: string[] = [];
     expect(runCli(["search", "query", "-g", "product"], undefined, (message) => errors.push(message))).toBe(2);
@@ -91,8 +104,7 @@ describe("CLI bootstrap", () => {
         "fixture-cad-search-token",
         "-c",
         "fixture-qmd",
-        "--limit",
-        "2",
+        "--limit=2",
       ], (message) => output.push(message), undefined, {
         currentDirectory: root,
         registryPath,
@@ -165,6 +177,18 @@ describe("CLI bootstrap", () => {
     expect(runCli(["diagnose", "--endpoint", "fixture-qmd", "-g"], undefined, (message) => errors.push(message)))
       .toBe(2);
     expect(errors.join("\n")).toContain("--endpoint and -g cannot be used together");
+  });
+
+  test("inventory misuse includes command recovery guidance", () => {
+    const listErrors: string[] = [];
+    const unregisterErrors: string[] = [];
+    expect(runCli(["list", "extra"], undefined, (message) => listErrors.push(message))).toBe(2);
+    expect(listErrors.join("\n")).toContain("ukp list:");
+    expect(listErrors.join("\n")).toContain("Run 'ukp list --help' for details.");
+
+    expect(runCli(["unregister", "BadName"], undefined, (message) => unregisterErrors.push(message))).toBe(2);
+    expect(unregisterErrors.join("\n")).toContain("valid endpoint name");
+    expect(unregisterErrors.join("\n")).toContain("Run 'ukp unregister --help' for details.");
   });
 
   test("unknown command is a usage error", () => {

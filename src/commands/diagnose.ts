@@ -2,7 +2,7 @@ import { loadManifest, type LoadedManifest } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { Command, CommanderError } from "commander";
-import { countFlagOccurrences } from "./flags.ts";
+import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 
 export interface ProviderCheck {
   supported: boolean;
@@ -174,48 +174,59 @@ export function executeDiagnoseCommand(
   args: readonly string[],
   context: DiagnoseCommandContext,
 ): DiagnoseCommandResult {
-  const parsed = parseDiagnoseArgs(args);
-  if (!parsed.explicitEndpoints && !parsed.global) {
-    return {
-      exitCode: 0,
-      stdout: renderDiagnose(diagnoseService(context.currentDirectory, context.resolveProvider)),
-      stderr: parsed.warnings.length > 0 ? `${parsed.warnings.join("\n")}\n` : "",
-    };
+  if (isHelpRequest(args)) {
+    return { exitCode: 0, stdout: renderDiagnoseHelp(), stderr: "" };
   }
 
-  const registry = readRegistry(context.registryPath);
-  const scope = resolveScope({
-    currentDirectory: context.currentDirectory,
-    registry,
-    explicitEndpoints: parsed.explicitEndpoints,
-    global: parsed.global,
-  });
-  const warnings = [...parsed.warnings, ...scope.warnings];
-  const output: string[] = [];
-  let failed = false;
-
-  for (const binding of scope.bindings) {
-    output.push(`== ${binding.name} ==`);
-    const result = diagnoseBinding(binding, context.resolveProvider);
-    if (result.status === "ok") {
-      output.push(renderDiagnose(result.report).trimEnd());
-    } else {
-      failed = true;
-      output.push("status: failed");
-      output.push(`error: ${result.message}`);
+  try {
+    const parsed = parseDiagnoseArgs(args);
+    if (!parsed.explicitEndpoints && !parsed.global) {
+      return {
+        exitCode: 0,
+        stdout: renderDiagnose(diagnoseService(context.currentDirectory, context.resolveProvider)),
+        stderr: parsed.warnings.length > 0 ? `${parsed.warnings.join("\n")}\n` : "",
+      };
     }
-  }
 
-  if (scope.bindings.length === 0) {
-    failed = true;
-    warnings.push("no endpoints selected: the Host Registry is empty; run 'ukp register' from a Service folder, then retry");
-  }
+    const registry = readRegistry(context.registryPath);
+    const scope = resolveScope({
+      currentDirectory: context.currentDirectory,
+      registry,
+      explicitEndpoints: parsed.explicitEndpoints,
+      global: parsed.global,
+    });
+    const warnings = [...parsed.warnings, ...scope.warnings];
+    const output: string[] = [];
+    let failed = false;
 
-  return {
-    exitCode: failed ? 1 : 0,
-    stdout: output.length > 0 ? `${output.join("\n")}\n` : "",
-    stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
-  };
+    for (const binding of scope.bindings) {
+      output.push(`== ${binding.name} ==`);
+      const result = diagnoseBinding(binding, context.resolveProvider);
+      if (result.status === "ok") {
+        output.push(renderDiagnose(result.report).trimEnd());
+      } else {
+        failed = true;
+        output.push("status: failed");
+        output.push(`error: ${result.message}`);
+      }
+    }
+
+    if (scope.bindings.length === 0) {
+      failed = true;
+      warnings.push("no endpoints selected: the Host Registry is empty; run 'ukp register' from a Service folder, then retry");
+    }
+
+    return {
+      exitCode: failed ? 1 : 0,
+      stdout: output.length > 0 ? `${output.join("\n")}\n` : "",
+      stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
+    };
+  } catch (error) {
+    if (error instanceof DiagnoseUsageError) {
+      return { exitCode: 2, stdout: "", stderr: renderDiagnoseUsageError(error.message) };
+    }
+    throw error;
+  }
 }
 
 export function renderDiagnose(report: DiagnoseReport): string {
@@ -234,4 +245,12 @@ export function renderDiagnose(report: DiagnoseReport): string {
 
 export function renderDiagnoseHelp(): string {
   return createDiagnoseCommand().helpInformation();
+}
+
+export function renderDiagnoseUsageError(message: string): string {
+  return [
+    `ukp diagnose: ${message}`,
+    "Usage: ukp diagnose [--endpoint <name> ... | -g]",
+    "Run 'ukp diagnose --help' for details.",
+  ].join("\n");
 }

@@ -1,16 +1,11 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { SearchUsageError } from "./capabilities/search.ts";
 import {
-  DiagnoseUsageError,
   executeDiagnoseCommand,
-  renderDiagnoseHelp,
-  diagnoseService,
   type ProviderResolver,
 } from "./commands/diagnose.ts";
-import { executeSearchCommand, renderSearchHelp } from "./commands/search.ts";
-import { ENDPOINT_NAME } from "./config/manifest.ts";
-import { readRegistry, registerAt, unregisterAt } from "./registry.ts";
+import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
+import { executeSearchCommand } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
 export { renderDiagnoseHelp } from "./commands/diagnose.ts";
@@ -33,6 +28,12 @@ export interface CliContext {
   now?: Date;
 }
 
+interface CliCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
 export function renderHelp(): string {
   const lines = [
     "Usage: ukp <command> [options]",
@@ -46,20 +47,14 @@ export function renderHelp(): string {
   return `${lines.join("\n")}\n`;
 }
 
-function renderSearchUsageError(message: string): string {
-  return [
-    `ukp search: ${message}`,
-    "Usage: ukp search <query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--json]",
-    "Run 'ukp search --help' for details.",
-  ].join("\n");
-}
-
-function renderDiagnoseUsageError(message: string): string {
-  return [
-    `ukp diagnose: ${message}`,
-    "Usage: ukp diagnose [--endpoint <name> ... | -g]",
-    "Run 'ukp diagnose --help' for details.",
-  ].join("\n");
+function writeCommandResult(
+  result: CliCommandResult,
+  stdout: (message?: unknown) => void,
+  stderr: (message?: unknown) => void,
+): number {
+  if (result.stdout) stdout(result.stdout.trimEnd());
+  if (result.stderr) stderr(result.stderr.trimEnd());
+  return result.exitCode;
 }
 
 export function runCli(
@@ -78,105 +73,44 @@ export function runCli(
   }
 
   if (command === "diagnose") {
-    if (args.length === 2 && (args[1] === "-h" || args[1] === "--help")) {
-      stdout(renderDiagnoseHelp().trimEnd());
-      return 0;
-    }
-    try {
-      const result = executeDiagnoseCommand(args.slice(1), {
-        currentDirectory,
-        registryPath,
-        resolveProvider: context.resolveProvider,
-      });
-      if (result.stdout) stdout(result.stdout.trimEnd());
-      if (result.stderr) stderr(result.stderr.trimEnd());
-      return result.exitCode;
-    } catch (error) {
-      stderr(error instanceof DiagnoseUsageError
-        ? renderDiagnoseUsageError(error.message)
-        : error instanceof Error ? error.message : String(error));
-      return error instanceof DiagnoseUsageError ? 2 : 1;
-    }
+    return writeCommandResult(executeDiagnoseCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+      resolveProvider: context.resolveProvider,
+    }), stdout, stderr);
   }
 
   if (command === "register") {
-    if (args.length !== 1) {
-      stderr("Usage: ukp register");
-      return 2;
-    }
-    try {
-      const report = diagnoseService(currentDirectory, context.resolveProvider);
-      registerAt(registryPath, report.service.effectiveName, report.service.folder);
-      stdout(`registered: ${report.service.effectiveName}\nlocation: ${report.service.folder}`);
-      return 0;
-    } catch (error) {
-      stderr(error instanceof Error ? error.message : String(error));
-      return 1;
-    }
+    return writeCommandResult(executeRegisterCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+      resolveProvider: context.resolveProvider,
+    }), stdout, stderr);
   }
 
   if (command === "unregister") {
-    const name = args[1];
-    if (args.length !== 2 || !name || !ENDPOINT_NAME.test(name)) {
-      stderr("Usage: ukp unregister <name>");
-      return 2;
-    }
-    try {
-      const previous = readRegistry(registryPath).find((binding) => binding.name === name);
-      unregisterAt(registryPath, name);
-      stdout(`unregistered: ${name}\nlocation: ${previous?.path ?? "unknown"}`);
-      return 0;
-    } catch (error) {
-      stderr(error instanceof Error ? error.message : String(error));
-      return 1;
-    }
+    return writeCommandResult(executeUnregisterCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+    }), stdout, stderr);
   }
 
   if (command === "list") {
-    if (args.length !== 1) {
-      stderr("Usage: ukp list");
-      return 2;
-    }
-    try {
-      const endpoints = readRegistry(registryPath);
-      stdout(endpoints.length === 0
-        ? "No endpoints registered."
-        : endpoints.map((endpoint) => `${endpoint.name}\t${endpoint.path}`).join("\n"));
-      return 0;
-    } catch (error) {
-      stderr(error instanceof Error ? error.message : String(error));
-      return 1;
-    }
+    return writeCommandResult(executeListCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+    }), stdout, stderr);
   }
 
   if (command === "search") {
-    if (args.length === 2 && (args[1] === "-h" || args[1] === "--help")) {
-      stdout(renderSearchHelp().trimEnd());
-      return 0;
-    }
-    try {
-      const result = executeSearchCommand(args.slice(1), {
-        currentDirectory,
-        registryPath,
-        qmdCommand: context.qmdCommand,
-        artifactRoot: context.artifactRoot,
-        artifactRunId: context.artifactRunId,
-        now: context.now,
-      });
-      if (result.stdout) stdout(result.stdout.trimEnd());
-      if (result.stderr) stderr(result.stderr.trimEnd());
-      return result.exitCode;
-    } catch (error) {
-      stderr(error instanceof SearchUsageError
-        ? renderSearchUsageError(error.message)
-        : error instanceof Error ? error.message : String(error));
-      return error instanceof SearchUsageError ? 2 : 1;
-    }
-  }
-
-  if (COMMANDS.some(([name]) => name === command)) {
-    stderr(`ukp ${command}: command implementation is not initialized yet`);
-    return 3;
+    return writeCommandResult(executeSearchCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+      qmdCommand: context.qmdCommand,
+      artifactRoot: context.artifactRoot,
+      artifactRunId: context.artifactRunId,
+      now: context.now,
+    }), stdout, stderr);
   }
 
   stderr(`ukp: unknown command '${command}'`);
