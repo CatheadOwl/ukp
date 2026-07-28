@@ -181,11 +181,19 @@ export function executeDiagnoseCommand(
   try {
     const parsed = parseDiagnoseArgs(args);
     if (!parsed.explicitEndpoints && !parsed.global) {
-      return {
-        exitCode: 0,
-        stdout: renderDiagnose(diagnoseService(context.currentDirectory, context.resolveProvider)),
-        stderr: parsed.warnings.length > 0 ? `${parsed.warnings.join("\n")}\n` : "",
-      };
+      try {
+        return {
+          exitCode: 0,
+          stdout: renderDiagnose(diagnoseService(context.currentDirectory, context.resolveProvider)),
+          stderr: parsed.warnings.length > 0 ? `${parsed.warnings.join("\n")}\n` : "",
+        };
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: renderLocalDiagnoseError(error instanceof Error ? error.message : String(error)),
+        };
+      }
     }
 
     const registry = readRegistry(context.registryPath);
@@ -231,6 +239,14 @@ export function executeDiagnoseCommand(
       stderr: `error: ${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
+}
+
+export function renderLocalDiagnoseError(message: string): string {
+  return [
+    `error: ${message}`,
+    "Hint: 'ukp diagnose' checks the current folder as a Service.",
+    "Use 'ukp diagnose -g' to validate every registered endpoint, or 'ukp diagnose --endpoint <name>' for one endpoint.",
+  ].join("\n") + "\n";
 }
 
 export function renderDiagnose(report: DiagnoseReport): string {
