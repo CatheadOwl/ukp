@@ -140,6 +140,30 @@ describe("CLI bootstrap", () => {
     }
   }, 15_000);
 
+  test("search unknown endpoint errors without a stack trace", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-search-unknown-endpoint-"));
+    const registryPath = join(root, "registry.toml");
+    const errors: string[] = [];
+    registerAt(registryPath, "fixture-qmd", fixture);
+    try {
+      expect(runCli([
+        "search",
+        "operation surface",
+        "--endpoint",
+        "does-not-exist",
+      ], undefined, (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath,
+      })).toBe(1);
+      const error = errors.join("\n");
+      expect(error).toContain("ukp search: unknown endpoint 'does-not-exist'");
+      expect(error).not.toContain("ScopeError:");
+      expect(error).not.toContain("at resolveScope");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("diagnose endpoint selectors execute against registered Service folders", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-diagnose-scope-"));
     const registryPath = join(root, "registry.toml");

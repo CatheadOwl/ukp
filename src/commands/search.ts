@@ -6,6 +6,7 @@ import {
   type HumanSearchResult,
   type ParsedSearch,
 } from "../capabilities/search.ts";
+import { ScopeError } from "../scope.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 
 function collectValues(value: string, previous: string[] = []): string[] {
@@ -120,6 +121,9 @@ export function executeSearchCommand(args: readonly string[], context: HumanSear
   } catch (error) {
     if (error instanceof SearchUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderSearchUsageError(error.message) };
+    }
+    if (error instanceof ScopeError) {
+      return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
     }
     throw error;
   }
