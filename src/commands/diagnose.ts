@@ -225,7 +225,11 @@ export function executeDiagnoseCommand(
     if (error instanceof DiagnoseUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderDiagnoseUsageError(error.message) };
     }
-    throw error;
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `error: ${error instanceof Error ? error.message : String(error)}\n`,
+    };
   }
 }
 
