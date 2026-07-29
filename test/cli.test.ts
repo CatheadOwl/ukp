@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMMANDS, renderDiagnoseHelp, renderHelp, renderSearchHelp, runCli } from "../src/cli.ts";
@@ -93,6 +93,29 @@ describe("CLI bootstrap", () => {
       expect(error).toContain("Hint: 'ukp diagnose' checks the current folder as a Service.");
       expect(error).toContain("Use 'ukp diagnose -g' to validate every registered endpoint");
       expect(error).toContain("ukp diagnose --endpoint <name>");
+      expect(error).not.toContain("ManifestError:");
+      expect(error).not.toContain("at loadManifest");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnose registered endpoint errors when the Service folder has no manifest", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-diagnose-stale-endpoint-"));
+    const registryPath = join(root, "registry.toml");
+    const endpointRoot = join(root, "meeting-room");
+    const output: string[] = [];
+    const errors: string[] = [];
+    mkdirSync(endpointRoot, { recursive: true });
+    registerAt(registryPath, "stale-meeting-room", endpointRoot);
+    try {
+      expect(runCli(["diagnose", "--endpoint", "stale-meeting-room"], (message) => output.push(message), (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath,
+      })).toBe(1);
+      const error = [...output, ...errors].join("\n");
+      expect(error).toContain("error: Service Manifest is not readable:");
+      expect(error).toContain(join(endpointRoot, ".ukp", "service.toml"));
       expect(error).not.toContain("ManifestError:");
       expect(error).not.toContain("at loadManifest");
     } finally {
