@@ -11,6 +11,7 @@ const capabilitySchema = z.object({
 
 const manifestSchema = z.object({
   name: z.string().optional(),
+  description: z.string().min(1).optional(),
   capabilities: z.record(z.string(), capabilitySchema),
 }).strict();
 

@@ -206,6 +206,7 @@ describe("CLI bootstrap", () => {
         .toBe(0);
       expect(output.join("\n")).toContain("== fixture-qmd ==");
       expect(output.join("\n")).toContain("endpoint: fixture-qmd");
+      expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
       expect(output.join("\n")).toContain(`location: ${fixture}`);
 
       expect(runCli(["diagnose", "-c", "fixture-qmd"], (message) => aliasOutput.push(message), undefined, context))
@@ -276,6 +277,8 @@ describe("CLI bootstrap", () => {
     expect(runCli(["register"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(output.join("\n")).toContain("fixture-qmd");
+    expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
+    expect(readFileSync(registryPath, "utf8")).not.toContain("description");
     expect(runCli(["unregister", "fixture-qmd"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(output.at(-1)).toBe("No endpoints registered.");

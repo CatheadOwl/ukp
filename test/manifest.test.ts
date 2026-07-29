@@ -12,6 +12,7 @@ describe("Service Manifest and diagnose", () => {
     const loaded = loadManifest(fixture);
     expect(loaded.effectiveName).toBe("fixture-qmd");
     expect(loaded.nameSource).toBe("manifest");
+    expect(loaded.manifest.description).toBe("Deterministic QMD-compatible search fixture for UKP tests.");
     expect(loaded.manifest.capabilities.search.provider).toBe("qmd");
   });
 
@@ -23,6 +24,7 @@ describe("Service Manifest and diagnose", () => {
     expect(report.capabilities).toHaveLength(1);
     expect(report.capabilities[0]?.status).toBe("ok");
     expect(renderDiagnose(report)).toContain("endpoint: fixture-qmd");
+    expect(renderDiagnose(report)).toContain("description: Deterministic QMD-compatible search fixture");
   });
 
   test("derives a valid basename without writing back to the Manifest", () => {
@@ -50,6 +52,22 @@ describe("Service Manifest and diagnose", () => {
     writeFileSync(join(folder, ".ukp", "service.toml"), "name = \"CAD\"\n[capabilities.search]\nprovider = \"qmd\"\n");
     try {
       expect(() => loadManifest(folder)).toThrow("invalid endpoint name");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an empty description", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "invalid-description");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(
+      join(folder, ".ukp", "service.toml"),
+      "description = \"\"\n[capabilities.search]\nprovider = \"qmd\"\n",
+    );
+    try {
+      expect(() => loadManifest(folder)).toThrow("Service Manifest schema is invalid");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

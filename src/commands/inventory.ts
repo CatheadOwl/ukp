@@ -67,9 +67,14 @@ export function executeRegisterCommand(
     }
     const report = diagnoseService(context.currentDirectory, context.resolveProvider);
     registerAt(context.registryPath, report.service.effectiveName, report.service.folder);
+    const lines = [
+      `registered: ${report.service.effectiveName}`,
+      ...(report.service.manifest.description ? [`description: ${report.service.manifest.description}`] : []),
+      `location: ${report.service.folder}`,
+    ];
     return {
       exitCode: 0,
-      stdout: `registered: ${report.service.effectiveName}\nlocation: ${report.service.folder}`,
+      stdout: lines.join("\n"),
       stderr: "",
     };
   } catch (error) {
