@@ -245,6 +245,7 @@ export function renderLocalDiagnoseError(message: string): string {
   return [
     `error: ${message}`,
     "Hint: 'ukp diagnose' checks the current folder as a Service.",
+    "Run 'ukp guide service' for the short onboarding guide.",
     "Use 'ukp diagnose -g' to validate every registered endpoint, or 'ukp diagnose --endpoint <name>' for one endpoint.",
   ].join("\n") + "\n";
 }

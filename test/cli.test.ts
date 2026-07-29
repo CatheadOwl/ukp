@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { COMMANDS, renderDiagnoseHelp, renderHelp, renderSearchHelp, runCli } from "../src/cli.ts";
+import {
+  COMMANDS,
+  renderDiagnoseHelp,
+  renderGuideHelp,
+  renderHelp,
+  renderSearchHelp,
+  renderServiceGuide,
+  runCli,
+} from "../src/cli.ts";
 import { registerAt } from "../src/registry.ts";
 
 const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
@@ -44,6 +52,26 @@ describe("CLI bootstrap", () => {
     expect(help).toContain("-c, --endpoint <name>");
     expect(help).toContain("-g");
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
+  });
+
+  test("guide service is a short CLI-accessible onboarding guide", () => {
+    const output: string[] = [];
+    expect(renderGuideHelp()).toContain("Usage: ukp guide <topic>");
+    expect(renderServiceGuide()).toContain("UKP Service onboarding");
+    expect(runCli(["guide", "service"], (message) => output.push(message))).toBe(0);
+    const guide = output.join("\n");
+    expect(guide).toContain(".ukp/service.toml");
+    expect(guide).toContain("qmd init");
+    expect(guide).toContain("ukp diagnose");
+    expect(guide).toContain("ukp register");
+    expect(guide).toContain("Register does not edit .ukp/client.toml");
+  });
+
+  test("guide rejects unknown topics with recovery guidance", () => {
+    const errors: string[] = [];
+    expect(runCli(["guide", "remote"], undefined, (message) => errors.push(message))).toBe(2);
+    expect(errors.join("\n")).toContain("unknown guide topic 'remote'");
+    expect(errors.join("\n")).toContain("Run 'ukp guide --help' for details.");
   });
 
   test("inventory command help is owned by command handlers", () => {
@@ -91,6 +119,7 @@ describe("CLI bootstrap", () => {
       expect(error).toContain("error: Service Manifest is not readable:");
       expect(error).toContain(join(root, ".ukp", "service.toml"));
       expect(error).toContain("Hint: 'ukp diagnose' checks the current folder as a Service.");
+      expect(error).toContain("ukp guide service");
       expect(error).toContain("Use 'ukp diagnose -g' to validate every registered endpoint");
       expect(error).toContain("ukp diagnose --endpoint <name>");
       expect(error).not.toContain("ManifestError:");
