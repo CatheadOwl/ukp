@@ -252,8 +252,11 @@ export function renderLocalDiagnoseError(message: string): string {
 export function renderDiagnose(report: DiagnoseReport): string {
   const lines = [
     `endpoint: ${report.service.effectiveName} (source: ${report.service.nameSource})`,
-    `location: ${report.service.folder}`,
   ];
+  if (report.service.manifest.description) {
+    lines.push(`description: ${report.service.manifest.description}`);
+  }
+  lines.push(`location: ${report.service.folder}`);
   for (const capability of report.capabilities) {
     lines.push(`capability: ${capability.name}`);
     lines.push(`provider: ${capability.provider}`);

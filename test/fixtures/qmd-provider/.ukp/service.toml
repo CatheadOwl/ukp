@@ -1,4 +1,5 @@
 name = "fixture-qmd"
+description = "Deterministic QMD-compatible search fixture for UKP tests."
 
 [capabilities.search]
 provider = "qmd"
