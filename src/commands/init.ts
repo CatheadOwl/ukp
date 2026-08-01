@@ -213,5 +213,16 @@ export function renderInitHelp(): string {
 }
 
 export function renderInitServiceHelp(): string {
-  return createInitServiceCommand().helpInformation();
+  return createInitServiceCommand().helpInformation() + [
+    "Creates .ukp/service.toml with the current minimal search provider:",
+    "  [capabilities.search]",
+    "  provider = \"qmd\"",
+    "",
+    "Next:",
+    "  ukp guide service",
+    "  qmd init",
+    "  ukp diagnose",
+    "  ukp register",
+    "",
+  ].join("\n");
 }
