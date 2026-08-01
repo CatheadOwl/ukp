@@ -16,6 +16,7 @@ export interface ResolvedScope {
   source: "explicit" | "global" | "client-config" | "registry-fallback";
   bindings: RegistryBinding[];
   warnings: string[];
+  configPath?: string;
 }
 
 export class ScopeError extends Error {
@@ -61,5 +62,5 @@ export function resolveScope(input: ScopeInput): ResolvedScope {
   if (bindings.length === 0) {
     throw new ScopeError("Client Config does not resolve to any registered endpoint");
   }
-  return { source: "client-config", bindings, warnings };
+  return { source: "client-config", bindings, warnings, configPath };
 }

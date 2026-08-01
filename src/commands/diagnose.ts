@@ -9,7 +9,7 @@ export interface ProviderCheck {
   reason?: string;
 }
 
-export type ProviderResolver = (provider: string, capability: string) => ProviderCheck;
+export type ProviderResolver = (provider: string, capability?: string) => ProviderCheck;
 
 export interface DiagnoseReport {
   service: LoadedManifest;
@@ -40,7 +40,10 @@ export class DiagnoseUsageError extends Error {
   }
 }
 
-function defaultProviderResolver(provider: string): ProviderCheck {
+export function defaultProviderResolver(provider: string, capability = "search"): ProviderCheck {
+  if (capability !== "search") {
+    return { supported: false, reason: `capability '${capability}' is not implemented by this UKP build` };
+  }
   if (provider !== "qmd") {
     return { supported: false, reason: `provider '${provider}' is not supported by this UKP build` };
   }
@@ -50,12 +53,11 @@ function defaultProviderResolver(provider: string): ProviderCheck {
     : { supported: false, reason: "qmd executable is not available" };
 }
 
-export function diagnoseService(
-  serviceFolder: string,
+export function evaluateServiceCapabilities(
+  service: LoadedManifest,
   resolveProvider: ProviderResolver = defaultProviderResolver,
-): DiagnoseReport {
-  const service = loadManifest(serviceFolder);
-  const capabilities = Object.entries(service.manifest.capabilities).map(([name, declaration]) => {
+): DiagnoseReport["capabilities"] {
+  return Object.entries(service.manifest.capabilities).map(([name, declaration]) => {
     const check = resolveProvider(declaration.provider, name);
     return {
       name,
@@ -64,6 +66,14 @@ export function diagnoseService(
       ...(check.reason ? { reason: check.reason } : {}),
     };
   });
+}
+
+export function diagnoseService(
+  serviceFolder: string,
+  resolveProvider: ProviderResolver = defaultProviderResolver,
+): DiagnoseReport {
+  const service = loadManifest(serviceFolder);
+  const capabilities = evaluateServiceCapabilities(service, resolveProvider);
 
   if (!capabilities.some((capability) => capability.status === "ok")) {
     throw new Error("NO_SUPPORTED_CAPABILITY");

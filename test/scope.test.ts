@@ -33,6 +33,7 @@ describe("Client scope resolution", () => {
     try {
       const result = resolveScope({ currentDirectory: join(root, "workspace", "child"), registry });
       expect(result.source).toBe("client-config");
+      expect(result.configPath).toBe(join(root, "workspace", ".ukp", "client.toml"));
       expect(result.bindings.map((binding) => binding.name)).toEqual(["cad"]);
       expect(result.warnings).toHaveLength(1);
     } finally {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -7,6 +7,9 @@ import {
   renderDiagnoseHelp,
   renderGuideHelp,
   renderHelp,
+  renderInitHelp,
+  renderInitServiceHelp,
+  renderInspectHelp,
   renderSearchHelp,
   renderServiceGuide,
   runCli,
@@ -54,6 +57,17 @@ describe("CLI bootstrap", () => {
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
   });
 
+  test("inspect help documents endpoint selectors and exits successfully", () => {
+    const output: string[] = [];
+    expect(renderInspectHelp()).toContain("Usage: ukp inspect");
+    expect(runCli(["inspect", "--help"], (message) => output.push(message))).toBe(0);
+    const help = output.join("\n");
+    expect(help).toContain("--endpoint <name>");
+    expect(help).toContain("-c, --endpoint <name>");
+    expect(help).toContain("-g");
+    expect(help.replace(/\s+/g, " ")).toContain("takes no value");
+  });
+
   test("guide service is a short CLI-accessible onboarding guide", () => {
     const output: string[] = [];
     expect(renderGuideHelp()).toContain("Usage: ukp guide <topic>");
@@ -65,6 +79,104 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("ukp diagnose");
     expect(guide).toContain("ukp register");
     expect(guide).toContain("Register does not edit .ukp/client.toml");
+  });
+
+  test("init help documents service target and exits successfully", () => {
+    const initOutput: string[] = [];
+    const serviceOutput: string[] = [];
+    expect(renderInitHelp()).toContain("Usage: ukp init <target>");
+    expect(renderInitServiceHelp()).toContain("Usage: ukp init service");
+    expect(runCli(["init", "--help"], (message) => initOutput.push(message))).toBe(0);
+    expect(runCli(["init", "service", "--help"], (message) => serviceOutput.push(message))).toBe(0);
+    expect(initOutput.join("\n")).toContain("service");
+    expect(serviceOutput.join("\n")).toContain("--name <name>");
+    expect(serviceOutput.join("\n")).toContain("--description <text>");
+  });
+
+  test("init service creates the minimal Manifest without Registry, Client Config, or QMD side effects", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-service-"));
+    const service = join(root, "valid-service");
+    const registryPath = join(root, "registry.toml");
+    const output: string[] = [];
+    mkdirSync(service);
+    try {
+      expect(runCli(["init", "service"], (message) => output.push(message), undefined, {
+        currentDirectory: service,
+        registryPath,
+      })).toBe(0);
+      const manifestPath = join(service, ".ukp", "service.toml");
+      const manifest = readFileSync(manifestPath, "utf8");
+      expect(manifest).not.toContain("name =");
+      expect(manifest).toContain("[capabilities.search]");
+      expect(manifest).toContain("provider = \"qmd\"");
+      expect(output.join("\n")).toContain("initialized Service: valid-service");
+      expect(output.join("\n")).toContain("name_source: folder-name");
+      expect(output.join("\n")).toContain("next: ukp diagnose");
+      expect(output.join("\n")).toContain("next: ukp register");
+      expect(existsSync(registryPath)).toBe(false);
+      expect(existsSync(join(service, ".ukp", "client.toml"))).toBe(false);
+      expect(existsSync(join(service, ".qmd"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("init service writes optional name and description", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-service-options-"));
+    const output: string[] = [];
+    try {
+      expect(runCli([
+        "init",
+        "service",
+        "--name",
+        "named-service",
+        "--description",
+        "A test knowledge service.",
+      ], (message) => output.push(message), undefined, {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(0);
+      const manifest = readFileSync(join(root, ".ukp", "service.toml"), "utf8");
+      expect(manifest).toContain("name = \"named-service\"");
+      expect(manifest).toContain("description = \"A test knowledge service.\"");
+      expect(output.join("\n")).toContain("name_source: option");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("init service refuses invalid derived names unless --name is provided", () => {
+    const root = mkdtempSync(join(tmpdir(), "UKP Bad Name "));
+    const errors: string[] = [];
+    try {
+      expect(runCli(["init", "service"], undefined, (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(2);
+      const error = errors.join("\n");
+      expect(error).toContain("invalid Service name");
+      expect(error).toContain("Pass '--name <name>'");
+      expect(existsSync(join(root, ".ukp", "service.toml"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("init service refuses to overwrite an existing Manifest", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-existing-"));
+    const errors: string[] = [];
+    mkdirSync(join(root, ".ukp"));
+    writeFileSync(join(root, ".ukp", "service.toml"), "[capabilities.search]\nprovider = \"qmd\"\n");
+    try {
+      expect(runCli(["init", "service", "--name", "again"], undefined, (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(1);
+      expect(errors.join("\n")).toContain("Service Manifest already exists");
+      expect(readFileSync(join(root, ".ukp", "service.toml"), "utf8")).not.toContain("again");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("guide rejects unknown topics with recovery guidance", () => {
@@ -107,6 +219,16 @@ describe("CLI bootstrap", () => {
     expect(error).toContain("Run 'ukp diagnose --help' for details.");
   });
 
+  test("inspect usage errors include recovery guidance", () => {
+    const errors: string[] = [];
+    expect(runCli(["inspect", "-g", "product"], undefined, (message) => errors.push(message))).toBe(2);
+    const error = errors.join("\n");
+    expect(error).toContain("unexpected argument 'product'");
+    expect(error).toContain("'-g' takes no value");
+    expect(error).toContain("--endpoint <name>");
+    expect(error).toContain("Run 'ukp inspect --help' for details.");
+  });
+
   test("diagnose local Service errors are rendered without a stack trace", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-diagnose-missing-manifest-"));
     const errors: string[] = [];
@@ -147,6 +269,23 @@ describe("CLI bootstrap", () => {
       expect(error).toContain(join(endpointRoot, ".ukp", "service.toml"));
       expect(error).not.toContain("ManifestError:");
       expect(error).not.toContain("at loadManifest");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("empty Registry inspect explains how to recover", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-inspect-empty-"));
+    const output: string[] = [];
+    const errors: string[] = [];
+    try {
+      expect(runCli(["inspect"], (message) => output.push(message), (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(1);
+      expect(output.join("\n")).toContain("scope: registry-fallback");
+      expect(errors.join("\n")).toContain("the Host Registry is empty");
+      expect(errors.join("\n")).toContain("ukp register");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -241,6 +380,113 @@ describe("CLI bootstrap", () => {
       expect(runCli(["diagnose", "-c", "fixture-qmd"], (message) => aliasOutput.push(message), undefined, context))
         .toBe(0);
       expect(aliasOutput.join("\n")).toContain("endpoint: fixture-qmd");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("inspect explains explicit endpoint routing without starting search", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-inspect-explicit-"));
+    const registryPath = join(root, "registry.toml");
+    const output: string[] = [];
+    registerAt(registryPath, "fixture-qmd", fixture);
+    try {
+      expect(runCli(["inspect", "--endpoint", "fixture-qmd"], (message) => output.push(message), undefined, {
+        currentDirectory: root,
+        registryPath,
+        resolveProvider: () => ({ supported: true }),
+      })).toBe(0);
+      const rendered = output.join("\n");
+      expect(rendered).toContain("scope: explicit");
+      expect(rendered).toContain("source: explicit endpoint selector");
+      expect(rendered).toContain("selected_endpoints: 1");
+      expect(rendered).toContain(`binding: fixture-qmd -> ${fixture}`);
+      expect(rendered).toContain(`manifest: ${join(fixture, ".ukp", "service.toml")}`);
+      expect(rendered).toContain("description: Deterministic QMD-compatible search fixture");
+      expect(rendered).toContain("capability: search");
+      expect(rendered).toContain("provider: qmd");
+      expect(rendered).toContain("status: ok");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("inspect explains workspace Client Config scope and dangling defaults", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-inspect-client-config-"));
+    const registryPath = join(root, "registry.toml");
+    const workspace = join(root, "workspace");
+    const child = join(workspace, "child");
+    const output: string[] = [];
+    const errors: string[] = [];
+    mkdirSync(join(workspace, ".ukp"), { recursive: true });
+    mkdirSync(child, { recursive: true });
+    writeFileSync(join(workspace, ".ukp", "client.toml"), "default_endpoints = [\"fixture-qmd\", \"gone\"]\n");
+    registerAt(registryPath, "fixture-qmd", fixture);
+    try {
+      expect(runCli(["inspect"], (message) => output.push(message), (message) => errors.push(message), {
+        currentDirectory: child,
+        registryPath,
+        resolveProvider: () => ({ supported: true }),
+      })).toBe(0);
+      const rendered = output.join("\n");
+      expect(rendered).toContain("scope: client-config");
+      expect(rendered).toContain(`source: Client Config (${join(workspace, ".ukp", "client.toml")})`);
+      expect(rendered).toContain("selected_endpoints: 1");
+      expect(errors.join("\n")).toContain("dangling endpoint 'gone'");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("inspect does not report deferred qmd capabilities as available", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-inspect-deferred-"));
+    const registryPath = join(root, "registry.toml");
+    const service = join(root, "service");
+    const output: string[] = [];
+    mkdirSync(join(service, ".ukp"), { recursive: true });
+    writeFileSync(join(service, ".ukp", "service.toml"), [
+      'name = "deferred-qmd"',
+      "",
+      "[capabilities.vsearch]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
+    registerAt(registryPath, "deferred-qmd", service);
+    try {
+      expect(runCli(["inspect", "--endpoint", "deferred-qmd"], (message) => output.push(message), undefined, {
+        currentDirectory: root,
+        registryPath,
+      })).toBe(1);
+      const rendered = output.join("\n");
+      expect(rendered).toContain("service_status: unavailable");
+      expect(rendered).toContain("capability: vsearch");
+      expect(rendered).toContain("provider: qmd");
+      expect(rendered).toContain("status: warning");
+      expect(rendered).toContain("capability 'vsearch' is not implemented by this UKP build");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("inspect still shows manifest details when every provider is unavailable", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-inspect-unavailable-"));
+    const registryPath = join(root, "registry.toml");
+    const output: string[] = [];
+    registerAt(registryPath, "fixture-qmd", fixture);
+    try {
+      expect(runCli(["inspect", "--endpoint", "fixture-qmd"], (message) => output.push(message), undefined, {
+        currentDirectory: root,
+        registryPath,
+        resolveProvider: () => ({ supported: false, reason: "provider disabled for test" }),
+      })).toBe(1);
+      const rendered = output.join("\n");
+      expect(rendered).toContain(`manifest: ${join(fixture, ".ukp", "service.toml")}`);
+      expect(rendered).toContain("service_status: unavailable");
+      expect(rendered).toContain("capability: search");
+      expect(rendered).toContain("provider: qmd");
+      expect(rendered).toContain("status: warning");
+      expect(rendered).toContain("warning: provider disabled for test");
+      expect(rendered).not.toContain("NO_SUPPORTED_CAPABILITY");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

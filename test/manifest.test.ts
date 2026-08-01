@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadManifest } from "../src/config/manifest.ts";
-import { diagnoseService, renderDiagnose } from "../src/commands/diagnose.ts";
+import { defaultProviderResolver, diagnoseService, renderDiagnose } from "../src/commands/diagnose.ts";
 
 const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
 
@@ -25,6 +25,13 @@ describe("Service Manifest and diagnose", () => {
     expect(report.capabilities[0]?.status).toBe("ok");
     expect(renderDiagnose(report)).toContain("endpoint: fixture-qmd");
     expect(renderDiagnose(report)).toContain("description: Deterministic QMD-compatible search fixture");
+  });
+
+  test("default provider resolver remains compatible with provider-only calls", () => {
+    expect(defaultProviderResolver("not-qmd").supported).toBe(false);
+    expect(defaultProviderResolver("not-qmd").reason).toContain("provider 'not-qmd' is not supported");
+    expect(defaultProviderResolver("qmd", "vsearch").supported).toBe(false);
+    expect(defaultProviderResolver("qmd", "vsearch").reason).toContain("capability 'vsearch' is not implemented");
   });
 
   test("derives a valid basename without writing back to the Manifest", () => {
