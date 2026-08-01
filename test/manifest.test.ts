@@ -14,6 +14,7 @@ describe("Service Manifest and diagnose", () => {
     expect(loaded.nameSource).toBe("manifest");
     expect(loaded.manifest.description).toBe("Deterministic QMD-compatible search fixture for UKP tests.");
     expect(loaded.manifest.capabilities.search.provider).toBe("qmd");
+    expect(loaded.manifest.capabilities.refresh.provider).toBe("qmd");
   });
 
   test("resolves supported and unsupported providers independently", () => {
@@ -21,8 +22,8 @@ describe("Service Manifest and diagnose", () => {
       supported: provider === "qmd",
       reason: provider === "qmd" ? undefined : "unsupported",
     }));
-    expect(report.capabilities).toHaveLength(1);
-    expect(report.capabilities[0]?.status).toBe("ok");
+    expect(report.capabilities).toHaveLength(2);
+    expect(report.capabilities.every((capability) => capability.status === "ok")).toBe(true);
     expect(renderDiagnose(report)).toContain("endpoint: fixture-qmd");
     expect(renderDiagnose(report)).toContain("description: Deterministic QMD-compatible search fixture");
   });
@@ -32,6 +33,10 @@ describe("Service Manifest and diagnose", () => {
     expect(defaultProviderResolver("not-qmd").reason).toContain("provider 'not-qmd' is not supported");
     expect(defaultProviderResolver("file", "get").supported).toBe(true);
     expect(defaultProviderResolver("qmd", "get").reason).toContain("provider 'qmd' is not supported for capability 'get'");
+    expect(typeof defaultProviderResolver("qmd", "refresh").supported).toBe("boolean");
+    expect(defaultProviderResolver("file", "refresh").reason).toContain(
+      "provider 'file' is not supported for capability 'refresh'",
+    );
     expect(defaultProviderResolver("qmd", "vsearch").supported).toBe(false);
     expect(defaultProviderResolver("qmd", "vsearch").reason).toContain("capability 'vsearch' is not implemented");
   });

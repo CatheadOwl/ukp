@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import process from "node:process";
 
 const args = process.argv.slice(2);
+const commandName = args[0];
 const searchIndex = args.indexOf("search");
 const query = searchIndex >= 0 ? args[searchIndex + 1] : undefined;
 const limitIndex = args.indexOf("-n");
@@ -14,6 +15,7 @@ const outputFormat = formatIndex >= 0 ? args[formatIndex + 1] : "text";
 
 const invocation = {
   cwd: process.cwd(),
+  commandName,
   args,
   query,
   nativeLimit,
@@ -24,10 +26,19 @@ await writeFile("qmd-fixture-invocation.json", `${JSON.stringify(invocation, nul
 await appendFile("qmd-fixture-invocations.jsonl", `${JSON.stringify(invocation)}\n`, "utf8");
 
 const serviceFolder = basename(process.cwd());
+const isRefresh = commandName === "update";
 const hasMatch = query === "fixture-cad-search-token" && !serviceFolder.includes("no-match");
 const shouldFail = serviceFolder.includes("provider-fail");
+const shouldCancel = serviceFolder.includes("provider-sigint");
 
-if (outputFormat === "json") {
+if (shouldCancel) {
+  process.stderr.write("fixture provider cancelled\n");
+  process.exit(130);
+}
+
+if (isRefresh) {
+  process.stdout.write("fixture update complete\n");
+} else if (outputFormat === "json") {
   const result = hasMatch
     ? [{ uri: "qmd://fixture-cad/cad-notes.md", title: "CAD fixture note", score: 1 }]
     : [];
