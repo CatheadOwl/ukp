@@ -4,6 +4,7 @@ import {
   executeDiagnoseCommand,
   type ProviderResolver,
 } from "./commands/diagnose.ts";
+import { executeGetCommand } from "./commands/get.ts";
 import { executeGuideCommand } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
 import { executeInspectCommand } from "./commands/inspect.ts";
@@ -12,12 +13,14 @@ import { executeSearchCommand } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
 export { renderDiagnoseHelp } from "./commands/diagnose.ts";
+export { renderGetHelp } from "./commands/get.ts";
 export { renderGuideHelp, renderServiceGuide } from "./commands/guide.ts";
 export { renderInitHelp, renderInitServiceHelp } from "./commands/init.ts";
 export { renderInspectHelp } from "./commands/inspect.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
+  ["get", "read an endpoint-relative resource"],
   ["guide", "show short operational guides"],
   ["init", "initialize UKP-owned files"],
   ["inspect", "explain current scope and endpoint routing"],
@@ -86,6 +89,13 @@ export function runCli(
       currentDirectory,
       registryPath,
       resolveProvider: context.resolveProvider,
+    }), stdout, stderr);
+  }
+
+  if (command === "get") {
+    return writeCommandResult(executeGetCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
     }), stdout, stderr);
   }
 
