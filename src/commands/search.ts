@@ -138,7 +138,16 @@ export function executeSearchCommand(args: readonly string[], context: HumanSear
 }
 
 export function renderSearchHelp(): string {
-  return createSearchCommand().helpInformation();
+  return createSearchCommand().helpInformation() + [
+    "",
+    "Result scope:",
+    "  --endpoint <name> requests that Service's search capability. The result",
+    "  range is decided by the Service's provider configuration and may include",
+    "  shared collections; results are not guaranteed to be the endpoint's own",
+    "  content. '== <name> (provider) ==' reports which Service was asked and",
+    "  which provider answered, not content ownership.",
+    "",
+  ].join("\n");
 }
 
 export function renderSearchUsageError(message: string): string {

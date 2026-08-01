@@ -15,7 +15,7 @@ import { executeSearchCommand } from "./commands/search.ts";
 export { renderSearchHelp } from "./commands/search.ts";
 export { renderDiagnoseHelp } from "./commands/diagnose.ts";
 export { renderGetHelp } from "./commands/get.ts";
-export { renderGuideHelp, renderServiceGuide } from "./commands/guide.ts";
+export { renderGuideHelp, renderServiceGuide, renderClientGuide } from "./commands/guide.ts";
 export { renderInitHelp, renderInitServiceHelp } from "./commands/init.ts";
 export { renderInspectHelp } from "./commands/inspect.ts";
 export { renderRefreshHelp } from "./commands/refresh.ts";
@@ -58,6 +58,7 @@ export function renderHelp(): string {
     "",
     "Guides:",
     "  ukp guide service  first Service setup, inspect, search, get, and refresh path",
+    "  ukp guide client   use registered Services by default from a workspace",
     "",
     "Options:",
     "  -h, --help  show this help",

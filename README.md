@@ -6,13 +6,26 @@ It turns folders into named knowledge endpoints, then lets people and agents use
 stable commands to inspect, search, read, and refresh them without remembering
 physical paths or backend-specific command details.
 
-```text
-init service -> diagnose/register/list -> inspect -> search -> get -> refresh
-```
-
 > [!NOTE]
 > The current minimum runnable Service uses QMD for lexical search. QMD is the
 > first supported provider path, not the definition of UKP.
+
+## Three Journeys
+
+UKP separates three journeys. They do not replace each other:
+
+- **Provider path**: `ukp init service` + `ukp register` make a folder an
+  addressable Service — a named endpoint that can be inspected, called, and
+  maintained.
+- **Content-searchable**: `qmd init` / `qmd collection add` / `qmd update`
+  decide what content inside the Service is indexed. This is provider-owned.
+  Registered as a Service does not mean its content is searchable; both steps
+  are needed.
+- **Client path**: a workspace `.ukp/client.toml` default scope lets you use
+  Services by default instead of naming one each call.
+
+Run `ukp guide service` for the concrete first-setup steps, and
+`ukp <command> --help` for any command's exact syntax.
 
 ## Why UKP
 
@@ -29,58 +42,6 @@ UKP adds a small control plane around those folders:
 - search through one CLI surface;
 - read known endpoint-local files after a result;
 - refresh provider-owned indexes through a stable UKP command.
-
-## Quick Start
-
-Run these commands from the folder that should become a Knowledge Service:
-
-```bash
-ukp init service --name your-endpoint-name
-qmd init
-qmd collection add ./docs
-qmd update
-ukp diagnose
-ukp register
-ukp list
-ukp inspect --endpoint your-endpoint-name
-ukp search "keyword" --endpoint your-endpoint-name --limit 3
-```
-
-The same path is available inside the CLI:
-
-```bash
-ukp guide service
-```
-
-## Service Manifest
-
-`ukp init service` creates `.ukp/service.toml` with the current minimal search
-capability:
-
-```toml
-[capabilities.search]
-provider = "qmd"
-```
-
-That is enough for the first `diagnose -> register -> inspect -> search` path.
-
-Add optional capabilities only when the Service should expose those operations
-through UKP:
-
-```toml
-[capabilities.get]
-provider = "file"
-
-[capabilities.refresh]
-provider = "qmd"
-```
-
-Then you can read endpoint-local files and refresh the provider:
-
-```bash
-ukp get --endpoint your-endpoint-name docs/example.md
-ukp refresh --endpoint your-endpoint-name
-```
 
 ## Commands
 

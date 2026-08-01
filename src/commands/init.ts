@@ -171,6 +171,7 @@ function executeInitServiceCommand(args: readonly string[], context: InitCommand
         `location: ${result.folder}`,
         "capability: search",
         "provider: qmd",
+        "next: qmd init",
         "next: ukp diagnose",
         "next: ukp register",
       ].join("\n"),
