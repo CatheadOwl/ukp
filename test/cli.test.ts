@@ -33,7 +33,9 @@ describe("CLI bootstrap", () => {
   test("help exits successfully", () => {
     const output: string[] = [];
     expect(runCli(["--help"], (message) => output.push(message))).toBe(0);
-    expect(output.join("\n")).toContain("Usage: ukp");
+    const help = output.join("\n");
+    expect(help).toContain("Usage: ukp");
+    expect(help).toContain("ukp guide service");
   });
 
   test("search help documents selectors and exits successfully", () => {
@@ -94,14 +96,18 @@ describe("CLI bootstrap", () => {
   test("guide service is a short CLI-accessible onboarding guide", () => {
     const output: string[] = [];
     expect(renderGuideHelp()).toContain("Usage: ukp guide <topic>");
-    expect(renderServiceGuide()).toContain("UKP Service onboarding");
+    expect(renderServiceGuide()).toContain("UKP Service quickstart");
     expect(runCli(["guide", "service"], (message) => output.push(message))).toBe(0);
     const guide = output.join("\n");
     expect(guide).toContain(".ukp/service.toml");
+    expect(guide).toContain("QMD is the current default search/refresh provider");
     expect(guide).toContain("qmd init");
     expect(guide).toContain("ukp diagnose");
     expect(guide).toContain("ukp register");
-    expect(guide).toContain("Register does not edit .ukp/client.toml");
+    expect(guide).toContain("ukp inspect --endpoint your-endpoint-name");
+    expect(guide).toContain("ukp get --endpoint your-endpoint-name docs/example.md");
+    expect(guide).toContain("ukp refresh --endpoint your-endpoint-name");
+    expect(guide).toContain("Future providers should add provider adapters");
   });
 
   test("init help documents service target and exits successfully", () => {
@@ -112,8 +118,12 @@ describe("CLI bootstrap", () => {
     expect(runCli(["init", "--help"], (message) => initOutput.push(message))).toBe(0);
     expect(runCli(["init", "service", "--help"], (message) => serviceOutput.push(message))).toBe(0);
     expect(initOutput.join("\n")).toContain("service");
-    expect(serviceOutput.join("\n")).toContain("--name <name>");
-    expect(serviceOutput.join("\n")).toContain("--description <text>");
+    const serviceHelp = serviceOutput.join("\n");
+    expect(serviceHelp).toContain("--name <name>");
+    expect(serviceHelp).toContain("--description <text>");
+    expect(serviceHelp).toContain("[capabilities.search]");
+    expect(serviceHelp).toContain("provider = \"qmd\"");
+    expect(serviceHelp).toContain("ukp guide service");
   });
 
   test("init service creates the minimal Manifest without Registry, Client Config, or QMD side effects", () => {

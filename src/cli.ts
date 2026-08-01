@@ -56,6 +56,9 @@ export function renderHelp(): string {
     "Commands:",
     ...COMMANDS.map(([name, description]) => `  ${name.padEnd(10)} ${description}`),
     "",
+    "Guides:",
+    "  ukp guide service  first Service setup, inspect, search, get, and refresh path",
+    "",
     "Options:",
     "  -h, --help  show this help",
   ];
