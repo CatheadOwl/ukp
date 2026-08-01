@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { createArtifactRun } from "../artifacts.ts";
-import { loadManifest } from "../config/manifest.ts";
+import { loadManifest, ManifestError } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 
@@ -35,6 +35,13 @@ export class SearchUsageError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SearchUsageError";
+  }
+}
+
+export class SearchPlanningError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SearchPlanningError";
   }
 }
 
@@ -68,6 +75,12 @@ interface PlannedEndpoint {
   folder?: string;
   command?: readonly string[];
   warning?: string;
+}
+
+function isStaleServiceBinding(error: unknown): boolean {
+  if (!(error instanceof ManifestError)) return false;
+  return error.message.startsWith("Service folder is not accessible:")
+    || error.message.startsWith("Service Manifest is not readable:");
 }
 
 export interface SearchEndpointEnvelope {
@@ -108,9 +121,24 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
   const plan: PlannedEndpoint[] = [];
 
   for (const binding of scope.bindings) {
-    const service = loadManifest(binding.path);
+    let service;
+    try {
+      service = loadManifest(binding.path);
+    } catch (error) {
+      if (!isStaleServiceBinding(error)) throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      const warning = [
+        `endpoint '${binding.name}' is not accessible: ${detail}`,
+        `Hint: run 'ukp inspect --endpoint ${binding.name}' or re-register/remove the stale endpoint.`,
+      ].join("\n");
+      warnings.push(warning);
+      plan.push({ name: binding.name, provider: null, status: "skipped", warning });
+      continue;
+    }
     if (service.effectiveName !== binding.name) {
-      throw new Error(`endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'`);
+      throw new SearchPlanningError(
+        `endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'`,
+      );
     }
     const capability = service.manifest.capabilities.search;
     if (!capability) {

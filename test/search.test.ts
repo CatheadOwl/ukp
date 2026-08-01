@@ -183,6 +183,66 @@ describe("search", () => {
     }
   }, 15_000);
 
+  test("skips stale default endpoint bindings while executing valid endpoints", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-stale-default-"));
+    const registryPath = join(root, "registry.toml");
+    const workspace = join(root, "workspace");
+    const stale = join(root, "missing-service");
+    const valid = createService(root, "valid-service", "valid");
+    mkdirSync(join(workspace, ".ukp"), { recursive: true });
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(workspace, ".ukp", "client.toml"), 'default_endpoints = ["stale", "valid"]\n', "utf8");
+    registerAt(registryPath, "stale", stale);
+    registerAt(registryPath, "valid", valid);
+    rmSync(stale, { recursive: true, force: true });
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+      ]), {
+        currentDirectory: workspace,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("endpoint 'stale' is not accessible");
+      expect(result.stderr).toContain("Service folder is not accessible");
+      expect(result.stderr).toContain("ukp inspect --endpoint stale");
+      expect(result.stdout).toContain("== valid (search/qmd) ==");
+      expect(invocationCount(valid)).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("skips default endpoint bindings when the Service Manifest is missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-missing-manifest-"));
+    const registryPath = join(root, "registry.toml");
+    const workspace = join(root, "workspace");
+    const stale = join(root, "manifestless-service");
+    const valid = createService(root, "valid-service", "valid");
+    mkdirSync(join(workspace, ".ukp"), { recursive: true });
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(workspace, ".ukp", "client.toml"), 'default_endpoints = ["stale", "valid"]\n', "utf8");
+    registerAt(registryPath, "stale", stale);
+    registerAt(registryPath, "valid", valid);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+      ]), {
+        currentDirectory: workspace,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("Service Manifest is not readable");
+      expect(result.stderr).toContain("ukp inspect --endpoint stale");
+      expect(result.stdout).toContain("== valid (search/qmd) ==");
+      expect(invocationCount(valid)).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("continues after provider failure and returns aggregate exit 1", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-failure-"));
     const registryPath = join(root, "registry.toml");
