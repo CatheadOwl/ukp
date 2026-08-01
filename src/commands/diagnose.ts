@@ -46,6 +46,15 @@ export function defaultProviderResolver(provider: string, capability = "search")
       ? { supported: true }
       : { supported: false, reason: `provider '${provider}' is not supported for capability 'get' by this UKP build` };
   }
+  if (capability === "refresh") {
+    if (provider !== "qmd") {
+      return { supported: false, reason: `provider '${provider}' is not supported for capability 'refresh' by this UKP build` };
+    }
+    const executable = Bun.which("qmd") ?? Bun.which("qmd.ps1") ?? Bun.which("qmd.cmd");
+    return executable
+      ? { supported: true }
+      : { supported: false, reason: "qmd executable is not available" };
+  }
   if (capability !== "search") {
     return { supported: false, reason: `capability '${capability}' is not implemented by this UKP build` };
   }

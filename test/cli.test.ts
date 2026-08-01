@@ -11,6 +11,7 @@ import {
   renderInitHelp,
   renderInitServiceHelp,
   renderInspectHelp,
+  renderRefreshHelp,
   renderSearchHelp,
   renderServiceGuide,
   runCli,
@@ -72,6 +73,17 @@ describe("CLI bootstrap", () => {
     const output: string[] = [];
     expect(renderInspectHelp()).toContain("Usage: ukp inspect");
     expect(runCli(["inspect", "--help"], (message) => output.push(message))).toBe(0);
+    const help = output.join("\n");
+    expect(help).toContain("--endpoint <name>");
+    expect(help).toContain("-c, --endpoint <name>");
+    expect(help).toContain("-g");
+    expect(help.replace(/\s+/g, " ")).toContain("takes no value");
+  });
+
+  test("refresh help documents endpoint selectors and exits successfully", () => {
+    const output: string[] = [];
+    expect(renderRefreshHelp()).toContain("Usage: ukp refresh");
+    expect(runCli(["refresh", "--help"], (message) => output.push(message))).toBe(0);
     const help = output.join("\n");
     expect(help).toContain("--endpoint <name>");
     expect(help).toContain("-c, --endpoint <name>");

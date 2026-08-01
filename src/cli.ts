@@ -9,6 +9,7 @@ import { executeGuideCommand } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
 import { executeInspectCommand } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
+import { executeRefreshCommand } from "./commands/refresh.ts";
 import { executeSearchCommand } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
@@ -17,6 +18,7 @@ export { renderGetHelp } from "./commands/get.ts";
 export { renderGuideHelp, renderServiceGuide } from "./commands/guide.ts";
 export { renderInitHelp, renderInitServiceHelp } from "./commands/init.ts";
 export { renderInspectHelp } from "./commands/inspect.ts";
+export { renderRefreshHelp } from "./commands/refresh.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
@@ -24,6 +26,7 @@ export const COMMANDS = [
   ["guide", "show short operational guides"],
   ["init", "initialize UKP-owned files"],
   ["inspect", "explain current scope and endpoint routing"],
+  ["refresh", "trigger provider-owned Service maintenance"],
   ["register", "register a Service endpoint"],
   ["unregister", "remove a registered endpoint"],
   ["list", "list registered endpoint bindings"],
@@ -122,6 +125,14 @@ export function runCli(
       currentDirectory,
       registryPath,
       resolveProvider: context.resolveProvider,
+    }), stdout, stderr);
+  }
+
+  if (command === "refresh") {
+    return writeCommandResult(executeRefreshCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+      qmdCommand: context.qmdCommand,
     }), stdout, stderr);
   }
 
