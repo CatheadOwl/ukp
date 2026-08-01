@@ -1,11 +1,13 @@
 import { Command, CommanderError } from "commander";
 import {
   executeHumanSearch,
+  SearchPlanningError,
   SearchUsageError,
   type HumanSearchContext,
   type HumanSearchResult,
   type ParsedSearch,
 } from "../capabilities/search.ts";
+import { ManifestError } from "../config/manifest.ts";
 import { ScopeError } from "../scope.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 
@@ -123,6 +125,12 @@ export function executeSearchCommand(args: readonly string[], context: HumanSear
       return { exitCode: 2, stdout: "", stderr: renderSearchUsageError(error.message) };
     }
     if (error instanceof ScopeError) {
+      return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
+    }
+    if (error instanceof SearchPlanningError) {
+      return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
+    }
+    if (error instanceof ManifestError) {
       return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
     }
     throw error;

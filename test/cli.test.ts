@@ -416,6 +416,72 @@ describe("CLI bootstrap", () => {
     }
   });
 
+  test("search stale default endpoint bindings warn without a stack trace", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-search-stale-default-"));
+    const registryPath = join(root, "registry.toml");
+    const workspace = join(root, "workspace");
+    const stale = join(root, "meeting-room");
+    const output: string[] = [];
+    const errors: string[] = [];
+    mkdirSync(join(workspace, ".ukp"), { recursive: true });
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(workspace, ".ukp", "client.toml"), 'default_endpoints = ["stale-meeting-room", "fixture-qmd"]\n');
+    registerAt(registryPath, "stale-meeting-room", stale);
+    registerAt(registryPath, "fixture-qmd", fixture);
+    rmSync(stale, { recursive: true, force: true });
+    try {
+      expect(runCli([
+        "search",
+        "fixture-cad-search-token",
+      ], (message) => output.push(message), (message) => errors.push(message), {
+        currentDirectory: workspace,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      })).toBe(0);
+      const rendered = [...output, ...errors].join("\n");
+      expect(rendered).toContain("endpoint 'stale-meeting-room' is not accessible");
+      expect(rendered).toContain("Service folder is not accessible");
+      expect(rendered).toContain("ukp inspect --endpoint stale-meeting-room");
+      expect(rendered).toContain("CAD fixture note");
+      expect(rendered).not.toContain("ManifestError:");
+      expect(rendered).not.toContain("at loadManifest");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("search endpoint name mismatch fails without a stack trace", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-search-name-mismatch-"));
+    const registryPath = join(root, "registry.toml");
+    const service = join(root, "renamed-service");
+    const errors: string[] = [];
+    mkdirSync(join(service, ".ukp"), { recursive: true });
+    writeFileSync(
+      join(service, ".ukp", "service.toml"),
+      'name = "actual-name"\n\n[capabilities.search]\nprovider = "qmd"\n',
+      "utf8",
+    );
+    registerAt(registryPath, "expected-name", service);
+    try {
+      expect(runCli([
+        "search",
+        "fixture-cad-search-token",
+        "--endpoint",
+        "expected-name",
+      ], undefined, (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      })).toBe(1);
+      const rendered = errors.join("\n");
+      expect(rendered).toContain("ukp search: endpoint 'expected-name' no longer matches Service effective name 'actual-name'");
+      expect(rendered).not.toContain("SearchPlanningError:");
+      expect(rendered).not.toContain("at planSearch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("diagnose endpoint selectors execute against registered Service folders", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-diagnose-scope-"));
     const registryPath = join(root, "registry.toml");
