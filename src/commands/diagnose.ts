@@ -41,6 +41,11 @@ export class DiagnoseUsageError extends Error {
 }
 
 export function defaultProviderResolver(provider: string, capability = "search"): ProviderCheck {
+  if (capability === "get") {
+    return provider === "file"
+      ? { supported: true }
+      : { supported: false, reason: `provider '${provider}' is not supported for capability 'get' by this UKP build` };
+  }
   if (capability !== "search") {
     return { supported: false, reason: `capability '${capability}' is not implemented by this UKP build` };
   }

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import {
   COMMANDS,
   renderDiagnoseHelp,
+  renderGetHelp,
   renderGuideHelp,
   renderHelp,
   renderInitHelp,
@@ -55,6 +56,16 @@ describe("CLI bootstrap", () => {
     expect(help).toContain("-c, --endpoint <name>");
     expect(help).toContain("-g");
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
+  });
+
+  test("get help documents endpoint selector and line ranges", () => {
+    const output: string[] = [];
+    expect(renderGetHelp()).toContain("Usage: ukp get --endpoint <name> <path>");
+    expect(runCli(["get", "--help"], (message) => output.push(message))).toBe(0);
+    const help = output.join("\n");
+    expect(help).toContain("--endpoint <name>");
+    expect(help).toContain("-c, --endpoint <name>");
+    expect(help).toContain("--lines <start[:count]>");
   });
 
   test("inspect help documents endpoint selectors and exits successfully", () => {
@@ -333,6 +344,31 @@ describe("CLI bootstrap", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 15_000);
+
+  test("get -c compatibility alias reads an endpoint-relative file", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-get-alias-"));
+    const registryPath = join(root, "registry.toml");
+    const service = join(root, "notes");
+    const output: string[] = [];
+    mkdirSync(join(service, ".ukp"), { recursive: true });
+    mkdirSync(join(service, "docs"), { recursive: true });
+    writeFileSync(
+      join(service, ".ukp", "service.toml"),
+      'name = "notes"\n\n[capabilities.get]\nprovider = "file"\n',
+      "utf8",
+    );
+    writeFileSync(join(service, "docs", "note.md"), "alpha\nbeta\ngamma\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      expect(runCli(["get", "-c", "notes", "docs/note.md", "--lines=2:1"], (message) => output.push(message), undefined, {
+        currentDirectory: root,
+        registryPath,
+      })).toBe(0);
+      expect(output.join("\n")).toBe("beta");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test("search unknown endpoint errors without a stack trace", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-search-unknown-endpoint-"));

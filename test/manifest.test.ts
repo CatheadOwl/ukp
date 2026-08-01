@@ -30,6 +30,8 @@ describe("Service Manifest and diagnose", () => {
   test("default provider resolver remains compatible with provider-only calls", () => {
     expect(defaultProviderResolver("not-qmd").supported).toBe(false);
     expect(defaultProviderResolver("not-qmd").reason).toContain("provider 'not-qmd' is not supported");
+    expect(defaultProviderResolver("file", "get").supported).toBe(true);
+    expect(defaultProviderResolver("qmd", "get").reason).toContain("provider 'qmd' is not supported for capability 'get'");
     expect(defaultProviderResolver("qmd", "vsearch").supported).toBe(false);
     expect(defaultProviderResolver("qmd", "vsearch").reason).toContain("capability 'vsearch' is not implemented");
   });
