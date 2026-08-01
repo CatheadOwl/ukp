@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { executeRefresh, type RefreshContext } from "../src/capabilities/refresh.ts";
@@ -66,7 +66,7 @@ describe("refresh", () => {
       expect(result.stdout).toContain("status: refreshed");
       expect(result.stdout).toContain("fixture update complete");
       const invocation = JSON.parse(readFileSync(join(service, "qmd-fixture-invocation.json"), "utf8"));
-      expect(invocation.cwd).toBe(service);
+      expect(invocation.cwd).toBe(realpathSync(service));
       expect(invocation.args).toEqual(["update"]);
     } finally {
       rmSync(root, { recursive: true, force: true });

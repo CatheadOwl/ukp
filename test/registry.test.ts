@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { readRegistry, registerAt, serializeRegistry, unregisterAt, parseRegistry, RegistryError } from "../src/registry.ts";
 
@@ -19,8 +19,9 @@ describe("Registry", () => {
 
   test("serializes and parses canonical empty and non-empty states", () => {
     expect(serializeRegistry([])).toContain("endpoints = []");
-    const encoded = serializeRegistry([{ name: "cad", path: "C:/cad" }]);
-    expect(parseRegistry(encoded)).toEqual([{ name: "cad", path: "C:/cad" }]);
+    const absPath = resolve("/cad");
+    const encoded = serializeRegistry([{ name: "cad", path: absPath }]);
+    expect(parseRegistry(encoded)).toEqual([{ name: "cad", path: absPath }]);
   });
 
   test("register is idempotent and rejects both conflict dimensions", () => {
