@@ -22,7 +22,7 @@ function createGuideCommand(): Command {
     .helpOption("-h, --help", "show this help")
     .usage("<topic>")
     .description("Show short operational guides.")
-    .argument("<topic>", "guide topic: service");
+    .argument("<topic>", "guide topic: service | client");
 }
 
 function parseGuideCommand(args: readonly string[]): string {
@@ -48,10 +48,14 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
 
   try {
     const topic = parseGuideCommand(args);
-    if (topic !== "service") {
-      throw new GuideUsageError(`unknown guide topic '${topic}'. Available topic: service`);
+    switch (topic) {
+      case "service":
+        return { exitCode: 0, stdout: renderServiceGuide(), stderr: "" };
+      case "client":
+        return { exitCode: 0, stdout: renderClientGuide(), stderr: "" };
+      default:
+        throw new GuideUsageError(`unknown guide topic '${topic}'. Available topics: service, client`);
     }
-    return { exitCode: 0, stdout: renderServiceGuide(), stderr: "" };
   } catch (error) {
     if (error instanceof GuideUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderGuideUsageError(error.message) };
@@ -77,6 +81,11 @@ export function renderServiceGuide(): string {
     "",
     "Model:",
     "- A UKP Service is a knowledge endpoint that declares capabilities.",
+    "- Three separate journeys:",
+    "  - provider path: init service + register make a folder an addressable Service;",
+    "  - content-searchable: qmd init / collection add / update decide what content inside the Service is indexed (provider-owned);",
+    "  - client path: a workspace .ukp/client.toml default scope lets you use Services by default instead of naming one each call.",
+    "- Registered as a Service does not mean its content is searchable; both steps are needed.",
     "- QMD is the current default search/refresh provider, not the definition of a Service.",
     "- QMD owns collection, index, ranking, and local/global config.",
     "",
@@ -101,6 +110,8 @@ export function renderServiceGuide(): string {
     "   ukp diagnose",
     "   ukp register",
     "   ukp list",
+    "   At this point the folder is a registered Service: addressable and callable.",
+    "   Its content is searchable only because step 3 configured the provider.",
     "",
     "5. Inspect the effective route",
     "   ukp inspect --endpoint your-endpoint-name",
@@ -130,8 +141,49 @@ export function renderServiceGuide(): string {
     "- Endpoint name identifies the Service.",
     "- Host Registry stores endpoint name -> Service folder path.",
     "- QMD collection decides what content inside the Service is indexed.",
+    "- Register makes the folder addressable; it does not make content searchable (provider indexing does).",
     "- Register does not edit .ukp/client.toml or provider configuration.",
     "- Future providers should add provider adapters instead of turning QMD internals into UKP rules.",
+  ].join("\n") + "\n";
+}
+
+export function renderClientGuide(): string {
+  return [
+    "UKP Client quickstart",
+    "",
+    "Goal: use registered Services from a workspace by default, without naming an endpoint on every call.",
+    "",
+    "Model:",
+    "- Client path is separate from the provider path: it uses Services; it does not declare one.",
+    "- A workspace .ukp/client.toml default_endpoints list selects which registered endpoints you mean when no selector is given.",
+    "- UKP walks up from the current directory to find the nearest .ukp/client.toml.",
+    "- Client Config stores endpoint names only; bindings live in the Host Registry.",
+    "- Explicit --endpoint <name> or -g overrides the client defaults. With no Client Config, most commands fall back to every registered endpoint.",
+    "- ukp refresh is stricter: it does not fall back to the Registry. It uses your Client Config defaults, or requires --endpoint <name> / -g.",
+    "- ukp register does not edit .ukp/client.toml.",
+    "",
+    "1. Create a workspace Client Config",
+    "   .ukp/client.toml at the workspace root:",
+    "   default_endpoints = [\"endpoint-a\", \"endpoint-b\"]",
+    "   Each name must match a registered endpoint; run 'ukp list' to see what is registered.",
+    "",
+    "2. Use Services without a selector",
+    "   ukp search \"keyword\"",
+    "   ukp inspect",
+    "   ukp get --endpoint endpoint-a docs/example.md   (get still names a path, and --endpoint here wins)",
+    "",
+    "3. Check which scope is active",
+    "   ukp inspect",
+    "   It prints scope: explicit / global / client-config / registry-fallback and the source.",
+    "",
+    "4. Dangling defaults warn instead of failing silently",
+    "   A default_endpoints entry not registered yet is reported as a warning by inspect, and commands still run on the resolvable ones.",
+    "",
+    "Remember:",
+    "- Client path consumes Services; provider path (ukp guide service) creates them.",
+    "- Client Config lists names, not paths or provider details.",
+    "- Explicit selectors always beat Client Config defaults.",
+    "- Register does not edit Client Config, and Client Config does not register endpoints.",
   ].join("\n") + "\n";
 }
 

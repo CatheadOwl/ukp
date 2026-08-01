@@ -14,6 +14,7 @@ import {
   renderRefreshHelp,
   renderSearchHelp,
   renderServiceGuide,
+  renderClientGuide,
   runCli,
 } from "../src/cli.ts";
 import { registerAt } from "../src/registry.ts";
@@ -210,6 +211,23 @@ describe("CLI bootstrap", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("guide client is a short CLI-accessible client-path guide", () => {
+    const output: string[] = [];
+    expect(renderClientGuide()).toContain("UKP Client quickstart");
+    expect(runCli(["guide", "client"], (message) => output.push(message))).toBe(0);
+    const guide = output.join("\n");
+    expect(guide).toContain(".ukp/client.toml");
+    expect(guide).toContain("default_endpoints");
+    expect(guide).toContain("scope: explicit / global / client-config / registry-fallback");
+    expect(guide).toContain("provider path (ukp guide service)");
+    expect(guide).toContain("does not fall back to the Registry");
+    expect(guide).toContain("ukp register does not edit .ukp/client.toml");
+  });
+
+  test("guide help lists both topics", () => {
+    expect(renderGuideHelp()).toContain("guide topic: service | client");
   });
 
   test("guide rejects unknown topics with recovery guidance", () => {
