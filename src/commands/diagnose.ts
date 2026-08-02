@@ -34,6 +34,12 @@ export interface DiagnoseCommandResult {
   stderr: string;
 }
 
+export interface RenderDiagnoseOptions {
+  includeSearchabilityHint?: boolean;
+}
+
+const SEARCHABILITY_HINT = "hint: diagnose checks wiring, not indexed content; for QMD run qmd init / collection add / update.";
+
 export class DiagnoseUsageError extends Error {
   constructor(message: string) {
     super(message);
@@ -222,7 +228,9 @@ export function executeDiagnoseCommand(
       try {
         return {
           exitCode: 0,
-          stdout: renderDiagnose(diagnoseService(context.currentDirectory, context.resolveProvider)),
+          stdout: renderDiagnose(diagnoseService(context.currentDirectory, context.resolveProvider), {
+            includeSearchabilityHint: true,
+          }),
           stderr: parsed.warnings.length > 0 ? `${parsed.warnings.join("\n")}\n` : "",
         };
       } catch (error) {
@@ -249,7 +257,7 @@ export function executeDiagnoseCommand(
       output.push(`== ${binding.name} ==`);
       const result = diagnoseBinding(binding, context.resolveProvider);
       if (result.status === "ok") {
-        output.push(renderDiagnose(result.report).trimEnd());
+        output.push(renderDiagnose(result.report, { includeSearchabilityHint: true }).trimEnd());
       } else {
         failed = true;
         output.push("status: failed");
@@ -288,7 +296,7 @@ export function renderLocalDiagnoseError(message: string): string {
   ].join("\n") + "\n";
 }
 
-export function renderDiagnose(report: DiagnoseReport): string {
+export function renderDiagnose(report: DiagnoseReport, options: RenderDiagnoseOptions = {}): string {
   const lines = [
     `endpoint: ${report.service.effectiveName} (source: ${report.service.nameSource})`,
   ];
@@ -296,6 +304,8 @@ export function renderDiagnose(report: DiagnoseReport): string {
     lines.push(`description: ${report.service.manifest.description}`);
   }
   lines.push(`location: ${report.service.folder}`);
+  const showSearchabilityHint = options.includeSearchabilityHint
+    && report.capabilities.some((capability) => capability.name === "search" && capability.status === "ok");
   for (const capability of report.capabilities) {
     lines.push(capability.source === "derived-local"
       ? `capability: ${capability.name} (derived local baseline)`
@@ -304,6 +314,7 @@ export function renderDiagnose(report: DiagnoseReport): string {
     lines.push(`status: ${capability.status}`);
     if (capability.reason) lines.push(`warning: ${capability.reason}`);
   }
+  if (showSearchabilityHint) lines.push(SEARCHABILITY_HINT);
   return `${lines.join("\n")}\n`;
 }
 
