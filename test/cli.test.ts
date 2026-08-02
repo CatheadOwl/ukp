@@ -520,6 +520,7 @@ describe("CLI bootstrap", () => {
       expect(output.join("\n")).toContain("endpoint: fixture-qmd");
       expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
       expect(output.join("\n")).toContain(`location: ${fixture}`);
+      expect(output.join("\n")).toContain("hint: diagnose checks wiring, not indexed content");
 
       expect(runCli(["diagnose", "-c", "fixture-qmd"], (message) => aliasOutput.push(message), undefined, context))
         .toBe(0);
@@ -550,6 +551,7 @@ describe("CLI bootstrap", () => {
       expect(rendered).toContain("capability: search");
       expect(rendered).toContain("provider: qmd");
       expect(rendered).toContain("status: ok");
+      expect(rendered).not.toContain("indexed content");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -34,6 +34,11 @@ describe("Service Manifest and diagnose", () => {
     expect(renderDiagnose(report)).toContain("endpoint: fixture-qmd");
     expect(renderDiagnose(report)).toContain("description: Deterministic QMD-compatible search fixture");
     expect(renderDiagnose(report)).toContain("capability: get (derived local baseline)");
+    expect(renderDiagnose(report)).not.toContain("indexed content");
+    const diagnoseOutput = renderDiagnose(report, { includeSearchabilityHint: true });
+    expect(diagnoseOutput).toContain("hint: diagnose checks wiring, not indexed content");
+    expect(diagnoseOutput).toContain("qmd init / collection add / update");
+    expect(diagnoseOutput.match(/indexed content/g)).toHaveLength(1);
   });
 
   test("default provider resolver remains compatible with provider-only calls", () => {
