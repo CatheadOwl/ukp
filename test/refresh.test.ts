@@ -63,6 +63,8 @@ describe("refresh", () => {
     try {
       const result = executeRefresh(parseRefreshArgs(["--endpoint", "fixture"]), context(root, registryPath));
       expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("maintenance_scope: provider-owned");
+      expect(result.stdout).toContain("QMD decides which configured collections are maintained");
       expect(result.stdout).toContain("status: refreshed");
       expect(result.stdout).toContain("fixture update complete");
       const invocation = JSON.parse(readFileSync(join(service, "qmd-fixture-invocation.json"), "utf8"));

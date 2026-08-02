@@ -212,6 +212,9 @@ function commandFor(endpoint: Extract<PlannedEndpoint, { status: "executable" }>
   return [...endpoint.command, "update"];
 }
 
+const QMD_MAINTENANCE_SCOPE =
+  "provider-owned (qmd update in the Service folder; QMD decides which configured collections are maintained)";
+
 export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): RefreshResult {
   const { plan, warnings } = planRefresh(parsed, context);
   const output: string[] = [];
@@ -227,6 +230,7 @@ export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): 
     output.push(`== ${endpoint.name} ==`);
     output.push("capability: refresh");
     output.push("provider: qmd");
+    output.push(`maintenance_scope: ${QMD_MAINTENANCE_SCOPE}`);
     const command = commandFor(endpoint);
     const result = spawnSync(command[0]!, command.slice(1), {
       cwd: endpoint.folder,
