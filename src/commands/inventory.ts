@@ -52,14 +52,25 @@ function renderUsageError(name: string, message: string, usage: string): string 
   ].join("\n");
 }
 
+export function renderRegisterHelp(): string {
+  return createCommand("register", "Register the current Service folder.").helpInformation() + [
+    "",
+    "Recovery:",
+    "  Registering a name already bound to a different location is rejected.",
+    "  Unregister the old binding first, then register from the new Service folder:",
+    "  ukp unregister --endpoint <name>",
+    "",
+  ].join("\n");
+}
+
 export function executeRegisterCommand(
   args: readonly string[],
   context: InventoryCommandContext,
 ): InventoryCommandResult {
-  const command = createCommand("register", "Register the current Service folder.");
   if (isHelpRequest(args)) {
-    return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
+    return { exitCode: 0, stdout: renderRegisterHelp(), stderr: "" };
   }
+  const command = createCommand("register", "Register the current Service folder.");
   try {
     parseCommand(command, args);
     if (args.length !== 0) {

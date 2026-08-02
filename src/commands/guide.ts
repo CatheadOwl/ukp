@@ -1,5 +1,4 @@
 import { Command, CommanderError } from "commander";
-import { isHelpRequest } from "./flags.ts";
 
 export interface GuideCommandResult {
   exitCode: number;
@@ -20,12 +19,13 @@ function createGuideCommand(): Command {
     .allowUnknownOption(false)
     .allowExcessArguments(false)
     .helpOption("-h, --help", "show this help")
-    .usage("<topic>")
+    .usage("<topic> [subtopic]")
     .description("Show short operational guides.")
-    .argument("<topic>", "guide topic: service | client");
+    .argument("<topic>", "guide topic: service | service qmd | client")
+    .argument("[subtopic]", "provider subtopic for a topic, e.g. service qmd");
 }
 
-function parseGuideCommand(args: readonly string[]): string {
+function parseGuideCommand(args: readonly string[]): [topic: string, subtopic?: string] {
   const command = createGuideCommand()
     .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
 
@@ -38,23 +38,33 @@ function parseGuideCommand(args: readonly string[]): string {
     throw error;
   }
 
-  return command.args[0] ?? "";
+  return [command.args[0] ?? "", command.args[1]];
 }
 
 export function executeGuideCommand(args: readonly string[]): GuideCommandResult {
-  if (isHelpRequest(args)) {
+  if (args.includes("-h") || args.includes("--help")) {
     return { exitCode: 0, stdout: renderGuideHelp(), stderr: "" };
   }
 
   try {
-    const topic = parseGuideCommand(args);
+    const [topic, subtopic] = parseGuideCommand(args);
+    if (topic === "service") {
+      if (subtopic === "qmd") {
+        return { exitCode: 0, stdout: renderServiceQmdGuide(), stderr: "" };
+      }
+      if (subtopic) {
+        throw new GuideUsageError(`unknown provider subtopic '${subtopic}'. Available subtopic for service: qmd`);
+      }
+      return { exitCode: 0, stdout: renderServiceGuide(), stderr: "" };
+    }
+    if (subtopic) {
+      throw new GuideUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client`);
+    }
     switch (topic) {
-      case "service":
-        return { exitCode: 0, stdout: renderServiceGuide(), stderr: "" };
       case "client":
         return { exitCode: 0, stdout: renderClientGuide(), stderr: "" };
       default:
-        throw new GuideUsageError(`unknown guide topic '${topic}'. Available topics: service, client`);
+        throw new GuideUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client`);
     }
   } catch (error) {
     if (error instanceof GuideUsageError) {
@@ -83,14 +93,14 @@ export function renderServiceGuide(): string {
     "- A UKP Service is a knowledge endpoint that declares capabilities.",
     "- Three separate journeys:",
     "  - provider path: init service + register make a folder an addressable Service;",
-    "  - content-searchable: qmd init / collection add / update decide what content inside the Service is indexed (provider-owned);",
+    "  - content-searchable: provider setup decides what content inside the Service is indexed (provider-owned; see 'ukp guide service qmd');",
     "  - client path: a workspace .ukp/client.toml default scope lets you use Services by default instead of naming one each call.",
     "- Registered as a Service does not mean its content is searchable; both steps are needed.",
     "- QMD is the current default search/refresh provider, not the definition of a Service.",
-    "- QMD owns collection, index, ranking, and local/global config.",
+    "- Provider setup is provider-owned: the provider owns collection, index, ranking, and config.",
     "",
     "1. Choose a stable Service folder",
-    "   Use the project or knowledge-domain root. Limit searchable subfolders in QMD, not in the UKP Registry.",
+    "   Use the project or knowledge-domain root. Limit searchable subfolders in the provider, not in the UKP Registry.",
     "",
     "2. Create the UKP Service Manifest",
     "   ukp init service --name your-endpoint-name",
@@ -100,11 +110,10 @@ export function renderServiceGuide(): string {
     "   [capabilities.search]",
     "   provider = \"qmd\"",
     "",
-    "3. Configure the current provider inside the Service folder",
-    "   qmd init",
-    "   qmd collection add <searchable-folder>",
-    "   Example: qmd collection add .\\docs",
-    "   qmd update",
+    "3. Make content searchable through the provider (provider-owned)",
+    "   Provider setup is not a UKP step. For the default QMD provider:",
+    "   ukp guide service qmd",
+    "   That topic reuses QMD's own help for exact syntax.",
     "",
     "4. Validate and register",
     "   ukp diagnose",
@@ -138,10 +147,46 @@ export function renderServiceGuide(): string {
     "Remember:",
     "- Endpoint name identifies the Service.",
     "- Host Registry stores endpoint name -> Service folder path.",
-    "- QMD collection decides what content inside the Service is indexed.",
+    "- Provider collection decides what content inside the Service is indexed.",
     "- Register makes the folder addressable; it does not make content searchable (provider indexing does).",
     "- Register does not edit .ukp/client.toml or provider configuration.",
-    "- Future providers should add provider adapters instead of turning QMD internals into UKP rules.",
+    "- Future providers should add provider adapters instead of turning provider internals into UKP rules.",
+    "- To register an already-used name at a new location, unregister the old binding first:",
+    "  ukp unregister --endpoint <name>",
+  ].join("\n") + "\n";
+}
+
+export function renderServiceQmdGuide(): string {
+  return [
+    "UKP Service quickstart — QMD provider setup",
+    "",
+    "Goal: make a registered Service's content searchable through the default QMD provider.",
+    "Run these from the Service folder root.",
+    "",
+    "Boundary:",
+    "- These are provider-owned steps. QMD owns collection, index, ranking, and config.",
+    "- UKP only routes capability requests. This topic carries the journey; QMD's",
+    "  own help (qmd --help) is the authority for exact flags and arguments.",
+    "",
+    "1. Initialize QMD (qmd init)",
+    "2. Add the searchable collections (qmd collection add)",
+    "   For a pure knowledge base, add the folder root; otherwise add the folder(s)",
+    "   whose content should be searchable.",
+    "3. Use a stable short collection name (qmd collection rename)",
+    "   QMD may name a collection after the full Windows path. Rename it so",
+    "   provider-native artifact URIs stay clean.",
+    "4. Update the index (qmd update, qmd status)",
+    "5. Verify the provider before returning to UKP (qmd search)",
+    "   If a search returns matches, the provider is ready; return to",
+    "   'ukp guide service' step 4.",
+    "",
+    "Exact syntax for every command above comes from QMD's own help:",
+    "  qmd --help lists commands; qmd <command> --help gives one command's syntax.",
+    "",
+    "Remember:",
+    "- Provider config is not stored in the UKP Registry.",
+    "- A registered Service is addressable; it is searchable only after provider setup.",
+    "- Keep the local index out of version control: ignore .qmd/*.sqlite and .qmd/*.sqlite-*.",
   ].join("\n") + "\n";
 }
 

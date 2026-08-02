@@ -14,6 +14,7 @@ import {
   renderRefreshHelp,
   renderSearchHelp,
   renderServiceGuide,
+  renderServiceQmdGuide,
   renderClientGuide,
   runCli,
 } from "../src/cli.ts";
@@ -94,7 +95,7 @@ describe("CLI bootstrap", () => {
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
   });
 
-  test("guide service is a short CLI-accessible onboarding guide", () => {
+  test("guide service is a short provider-agnostic CLI-accessible onboarding guide", () => {
     const output: string[] = [];
     expect(renderGuideHelp()).toContain("Usage: ukp guide <topic>");
     expect(renderServiceGuide()).toContain("UKP Service quickstart");
@@ -102,7 +103,6 @@ describe("CLI bootstrap", () => {
     const guide = output.join("\n");
     expect(guide).toContain(".ukp/service.toml");
     expect(guide).toContain("QMD is the current default search/refresh provider");
-    expect(guide).toContain("qmd init");
     expect(guide).toContain("ukp diagnose");
     expect(guide).toContain("ukp register");
     expect(guide).toContain("ukp inspect --endpoint your-endpoint-name");
@@ -110,7 +110,40 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("derived get/file baseline");
     expect(guide).toContain("ukp refresh --endpoint your-endpoint-name");
     expect(guide).toContain("Future providers should add provider adapters");
+    expect(guide).toContain("ukp unregister --endpoint <name>");
     expect(guide).not.toContain("[capabilities.get]");
+    expect(guide).not.toContain("qmd init");
+    expect(guide).not.toContain("qmd collection");
+  });
+
+  test("guide service qmd is the provider-owned setup topic delegating syntax to QMD help", () => {
+    const output: string[] = [];
+    expect(renderServiceQmdGuide()).toContain("QMD provider setup");
+    expect(renderHelp()).toContain("ukp guide service qmd");
+    expect(runCli(["guide", "service", "qmd"], (message) => output.push(message))).toBe(0);
+    const guide = output.join("\n");
+    expect(guide).toContain("qmd init");
+    expect(guide).toContain("qmd collection add");
+    expect(guide).toContain("provider-owned");
+    expect(guide).toContain("qmd --help");
+    expect(guide).toContain("qmd <command> --help");
+    expect(guide).not.toContain("ukp register");
+    expect(guide).not.toContain("-n 3 --format json");
+    expect(guide).not.toContain("short-name");
+    expect(guide).not.toContain("<searchable-folder>");
+  });
+
+  test("guide shows help when -h/--help follows a topic or subtopic", () => {
+    const help: string[] = [];
+    expect(runCli(["guide", "service", "qmd", "--help"], (message) => help.push(message))).toBe(0);
+    expect(help.join("\n")).toContain("Usage: ukp guide <topic>");
+  });
+
+  test("guide rejects an unknown provider subtopic with recovery guidance", () => {
+    const errors: string[] = [];
+    expect(runCli(["guide", "service", "badsub"], undefined, (message) => errors.push(message))).toBe(2);
+    expect(errors.join("\n")).toContain("unknown provider subtopic 'badsub'");
+    expect(errors.join("\n")).toContain("Available subtopic for service: qmd");
   });
 
   test("init help documents service target and exits successfully", () => {
@@ -228,8 +261,8 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("ukp register does not edit .ukp/client.toml");
   });
 
-  test("guide help lists both topics", () => {
-    expect(renderGuideHelp()).toContain("guide topic: service | client");
+  test("guide help lists the topics and subtopics", () => {
+    expect(renderGuideHelp()).toContain("guide topic: service | service qmd | client");
   });
 
   test("guide rejects unknown topics with recovery guidance", () => {
@@ -248,6 +281,7 @@ describe("CLI bootstrap", () => {
     expect(runCli(["unregister", "--help"], (message) => unregisterOutput.push(message))).toBe(0);
     expect(listOutput.join("\n")).toContain("Usage: ukp list");
     expect(registerOutput.join("\n")).toContain("Usage: ukp register");
+    expect(registerOutput.join("\n")).toContain("ukp unregister --endpoint <name>");
     expect(unregisterOutput.join("\n")).toContain("Usage: ukp unregister");
     expect(unregisterOutput.join("\n")).toContain("--endpoint <name>");
     expect(unregisterOutput.join("\n")).toContain("-c, --endpoint <name>");
