@@ -17,15 +17,15 @@ UKP separates three journeys. They do not replace each other:
 - **Provider path**: `ukp init service` + `ukp register` make a folder an
   addressable Service — a named endpoint that can be inspected, called, and
   maintained.
-- **Content-searchable**: `qmd init` / `qmd collection add` / `qmd update`
-  decide what content inside the Service is indexed. This is provider-owned.
-  Registered as a Service does not mean its content is searchable; both steps
-  are needed.
+- **Content-searchable**: provider setup decides what content inside the Service
+  is indexed. This is provider-owned. Registered as a Service does not mean its
+  content is searchable; both steps are needed.
 - **Client path**: a workspace `.ukp/client.toml` default scope lets you use
   Services by default instead of naming one each call.
 
-Run `ukp guide service` for the concrete first-setup steps, and
-`ukp <command> --help` for any command's exact syntax.
+Run `ukp guide service` for the UKP Service setup path, `ukp guide service qmd`
+for the default provider's setup, and `ukp <command> --help` for any command's
+exact syntax.
 
 ## Why UKP
 
@@ -47,7 +47,8 @@ UKP adds a small control plane around those folders:
 
 | Command | What it does |
 |---|---|
-| `ukp guide service` | Shows the first-use Service setup path. |
+| `ukp guide service` | Shows the provider-agnostic Service setup path. |
+| `ukp guide service qmd` | Shows provider-owned setup for the default QMD provider. |
 | `ukp init service` | Creates a minimal Service Manifest in the current folder. |
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp register` / `ukp unregister --endpoint <name>` / `ukp list` | Manage Host Registry endpoint bindings. |
