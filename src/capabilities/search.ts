@@ -4,11 +4,12 @@ import {
   existsSync,
   openSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { createArtifactRun } from "../artifacts.ts";
 import { loadManifest, ManifestError } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
@@ -89,6 +90,8 @@ export interface SearchEndpointEnvelope {
   status: "succeeded" | "no_matches" | "skipped" | "failed" | "cancelled";
   artifact?: string;
   format?: string;
+  references_artifact?: string;
+  references_format?: "ukp-search-references-v1";
   error_artifact?: string;
   message?: string;
 }
@@ -215,7 +218,7 @@ function executeHumanMode(
       maxBuffer: 64 * 1024 * 1024,
     });
     const providerOutput = (result.stdout ?? "").trimEnd();
-    if (providerOutput) output.push(providerOutput);
+    if (providerOutput) output.push(renderHumanProviderOutput(providerOutput, endpoint));
     else if (result.status === 0) output.push("(no matches)");
     if (result.signal === "SIGINT") {
       warnings.push(`endpoint '${endpoint.name}' provider cancelled`);
@@ -253,6 +256,225 @@ function classifyQmdArtifact(path: string): "succeeded" | "no_matches" {
   return Array.isArray(value) && value.length === 0 ? "no_matches" : "succeeded";
 }
 
+interface QmdReferenceMapping {
+  provider_location: string;
+  endpoint: string;
+  reference?: string;
+  line?: number;
+  status: "get_ready" | "provider_only";
+  reason?: string;
+}
+
+interface QmdReferenceSidecar {
+  schema: "ukp.search.references.v1";
+  endpoint: string;
+  source_artifact: string;
+  results: Array<QmdReferenceMapping & { index: number }>;
+}
+
+function splitQmdLocation(location: string): { target: string; line?: number } {
+  const match = /:(\d+)$/.exec(location);
+  if (!match) return { target: location };
+  return {
+    target: location.slice(0, -match[0].length),
+    line: Number(match[1]),
+  };
+}
+
+function normalizeReferencePath(path: string): string | undefined {
+  const segments = path.split(/[\\/]/);
+  if (
+    segments.length === 0
+    || segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
+  ) {
+    return undefined;
+  }
+  return segments.join("/");
+}
+
+function maybeLine(line: number | undefined): { line?: number } {
+  return line ? { line } : {};
+}
+
+function mapExistingEndpointRelativePath(
+  endpointName: string,
+  serviceFolder: string,
+  providerLocation: string,
+  reference: string,
+  line?: number,
+): QmdReferenceMapping {
+  const normalized = normalizeReferencePath(reference);
+  if (!normalized) {
+    return {
+      provider_location: providerLocation,
+      endpoint: endpointName,
+      status: "provider_only",
+      reason: "provider location is not a valid endpoint-relative path",
+    };
+  }
+  try {
+    const serviceReal = realpathSync(serviceFolder);
+    const targetReal = realpathSync(resolve(join(serviceFolder, ...normalized.split("/"))));
+    const rel = relative(serviceReal, targetReal);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      return {
+        provider_location: providerLocation,
+        endpoint: endpointName,
+        status: "provider_only",
+        reason: "provider location resolves outside the endpoint folder",
+      };
+    }
+    return {
+      provider_location: providerLocation,
+      endpoint: endpointName,
+      reference: rel.split(/[\\/]/).join("/"),
+      ...maybeLine(line),
+      status: "get_ready",
+    };
+  } catch {
+    return {
+      provider_location: providerLocation,
+      endpoint: endpointName,
+      status: "provider_only",
+      reason: "provider location cannot be resolved inside the endpoint folder",
+    };
+  }
+}
+
+function mapQmdUri(
+  endpointName: string,
+  serviceFolder: string,
+  uri: string,
+  explicitLine?: number,
+): QmdReferenceMapping {
+  if (!uri.startsWith("qmd://")) {
+    return {
+      provider_location: uri,
+      endpoint: endpointName,
+      status: "provider_only",
+      reason: "provider location is not a qmd URI",
+    };
+  }
+
+  const { target, line } = splitQmdLocation(uri.slice("qmd://".length));
+  const resultLine = line ?? explicitLine;
+  if (win32.isAbsolute(target) || isAbsolute(target) || /^[A-Za-z]:[\\/]/.test(target)) {
+    try {
+      const serviceReal = realpathSync(serviceFolder);
+      const targetReal = realpathSync(target);
+      const rel = relative(serviceReal, targetReal);
+      if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+        return {
+          provider_location: uri,
+          endpoint: endpointName,
+          status: "provider_only",
+          reason: "provider absolute path is outside the endpoint folder",
+        };
+      }
+      return {
+        provider_location: uri,
+        endpoint: endpointName,
+        reference: rel.split(/[\\/]/).join("/"),
+        ...maybeLine(resultLine),
+        status: "get_ready",
+      };
+    } catch {
+      return {
+        provider_location: uri,
+        endpoint: endpointName,
+        status: "provider_only",
+        reason: "provider absolute path cannot be resolved",
+      };
+    }
+  }
+
+  const [authority, ...referenceParts] = target.split(/[\\/]/);
+  if (authority !== endpointName) {
+    return {
+      provider_location: uri,
+      endpoint: endpointName,
+      status: "provider_only",
+      reason: "provider collection does not match the endpoint name",
+    };
+  }
+  return mapExistingEndpointRelativePath(endpointName, serviceFolder, uri, referenceParts.join("/"), resultLine);
+}
+
+function extractQmdUrisFromText(output: string): string[] {
+  return (output.match(/qmd:\/\/\S+/g) ?? []).map((uri) => uri.replace(/[),.;!?]+$/, ""));
+}
+
+function renderHumanProviderOutput(providerOutput: string, endpoint: PlannedEndpoint): string {
+  const lines = [providerOutput];
+  const seen = new Set<string>();
+  for (const uri of extractQmdUrisFromText(providerOutput)) {
+    if (seen.has(uri)) continue;
+    seen.add(uri);
+    const mapping = mapQmdUri(endpoint.name, endpoint.folder!, uri);
+    if (mapping.status === "get_ready") {
+      const lineHint = mapping.line ? ` --lines ${mapping.line}` : "";
+      lines.push(`UKP reference: ukp get --endpoint ${endpoint.name} ${mapping.reference}${lineHint}`);
+    } else {
+      lines.push(`Provider-only location: ${uri}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function buildQmdReferenceSidecar(
+  endpointName: string,
+  serviceFolder: string,
+  sourceArtifact: string,
+): QmdReferenceSidecar {
+  if (statSync(sourceArtifact).size > 1024 * 1024) {
+    return {
+      schema: "ukp.search.references.v1",
+      endpoint: endpointName,
+      source_artifact: sourceArtifact,
+      results: [],
+    };
+  }
+  const nativeResults = JSON.parse(readFileSync(sourceArtifact, "utf8"));
+  if (!Array.isArray(nativeResults)) {
+    throw new Error("qmd-json output is not an array");
+  }
+  return {
+    schema: "ukp.search.references.v1",
+    endpoint: endpointName,
+    source_artifact: sourceArtifact,
+    results: nativeResults
+      .map((result, index) => {
+        const uri = result && typeof result === "object" && "uri" in result ? result.uri : undefined;
+        const file = result && typeof result === "object" && "file" in result ? result.file : undefined;
+        const line = result && typeof result === "object" && "line" in result ? result.line : undefined;
+        const providerLocation = typeof uri === "string" ? uri : typeof file === "string" ? file : undefined;
+        const explicitLine = Number.isSafeInteger(line) && line > 0 ? line : undefined;
+        const mapping = typeof providerLocation === "string"
+          ? mapQmdUri(endpointName, serviceFolder, providerLocation, explicitLine)
+          : {
+            provider_location: "",
+            endpoint: endpointName,
+            status: "provider_only" as const,
+            reason: "qmd result does not contain a string uri or file",
+          };
+        return { index, ...mapping };
+      }),
+  };
+}
+
+function writeQmdReferenceSidecar(
+  endpointName: string,
+  serviceFolder: string,
+  sourceArtifact: string,
+  sidecarPath: string,
+): void {
+  const sidecar = buildQmdReferenceSidecar(endpointName, serviceFolder, sourceArtifact);
+  writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+}
+
 function executeJsonMode(
   parsed: ParsedSearch,
   context: HumanSearchContext,
@@ -285,6 +507,7 @@ function executeJsonMode(
     }
 
     const artifact = resolve(join(run.directory, `${endpoint.name}.json`));
+    const referencesArtifact = resolve(join(run.directory, `${endpoint.name}.references.json`));
     const errorArtifact = resolve(join(run.directory, `${endpoint.name}.stderr.txt`));
     let stdoutFd: number | undefined;
     let stderrFd: number | undefined;
@@ -357,6 +580,15 @@ function executeJsonMode(
       }
 
       succeeded = true;
+      let hasReferenceSidecar = false;
+      try {
+        writeQmdReferenceSidecar(endpoint.name, endpoint.folder!, artifact, referencesArtifact);
+        hasReferenceSidecar = true;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        appendErrorArtifact(errorArtifact, `invalid qmd-json reference mapping: ${detail}`);
+        warnings.push(`endpoint '${endpoint.name}' reference sidecar unavailable: ${detail}`);
+      }
       const hasProviderStderr = statSync(errorArtifact).size > 0;
       if (!hasProviderStderr) unlinkSync(errorArtifact);
       endpoints.push({
@@ -365,6 +597,12 @@ function executeJsonMode(
         status,
         artifact,
         format: "qmd-json",
+        ...(hasReferenceSidecar
+          ? {
+            references_artifact: referencesArtifact,
+            references_format: "ukp-search-references-v1" as const,
+          }
+          : {}),
         ...(hasProviderStderr ? { error_artifact: errorArtifact } : {}),
       });
     } catch (error) {

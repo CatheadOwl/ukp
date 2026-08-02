@@ -94,6 +94,7 @@ describe("search", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("== fixture-qmd (search/qmd) ==");
       expect(result.stdout).toContain("CAD fixture note");
+      expect(result.stdout).toContain("UKP reference: ukp get --endpoint fixture-qmd documents/cad-notes.md --lines 1");
       const invocation = JSON.parse(readFileSync(invocationPath, "utf8"));
       expect(invocation.cwd).toBe(fixture);
       expect(invocation.query).toBe("fixture-cad-search-token");
@@ -355,9 +356,105 @@ describe("search", () => {
       const successArtifact = envelope.endpoints[0].artifact;
       expect(isAbsolute(successArtifact)).toBe(true);
       expect(JSON.parse(readFileSync(successArtifact, "utf8"))).toHaveLength(1);
+      const successReferencesArtifact = envelope.endpoints[0].references_artifact;
+      expect(isAbsolute(successReferencesArtifact)).toBe(true);
+      expect(envelope.endpoints[0].references_format).toBe("ukp-search-references-v1");
+      const successReferences = JSON.parse(readFileSync(successReferencesArtifact, "utf8"));
+      expect(successReferences.schema).toBe("ukp.search.references.v1");
+      expect(successReferences.results[0]).toMatchObject({
+        index: 0,
+        endpoint: "success",
+        status: "provider_only",
+      });
       expect(JSON.parse(readFileSync(envelope.endpoints[1].artifact, "utf8"))).toEqual([]);
+      const noMatchReferencesArtifact = envelope.endpoints[1].references_artifact;
+      expect(isAbsolute(noMatchReferencesArtifact)).toBe(true);
+      expect(JSON.parse(readFileSync(noMatchReferencesArtifact, "utf8")).results).toEqual([]);
       expect(readFileSync(envelope.endpoints[2].error_artifact, "utf8")).toContain("fixture provider failure");
       expect(result.stdout).not.toContain("CAD fixture note");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("writes UKP-owned get-ready references for safe QMD result locations", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-references-"));
+    const registryPath = join(root, "registry.toml");
+    const artifactRoot = join(root, "artifacts");
+    const collectionShaped = createService(root, "collection-shaped", "collection-shaped");
+    const pathShaped = createService(root, "path-shaped", "path-shaped");
+    const outsideResult = createService(root, "outside-result", "outside-result");
+    mkdirSync(join(collectionShaped, "docs"), { recursive: true });
+    mkdirSync(join(pathShaped, "docs"), { recursive: true });
+    writeFileSync(join(collectionShaped, "docs", "collection-note.md"), "alpha\nbeta\ngamma\n", "utf8");
+    writeFileSync(join(pathShaped, "docs", "path-note.md"), "one\ntwo\n", "utf8");
+    writeFileSync(join(root, "outside.md"), "outside\n", "utf8");
+    registerAt(registryPath, "collection-shaped", collectionShaped);
+    registerAt(registryPath, "path-shaped", pathShaped);
+    registerAt(registryPath, "outside-result", outsideResult);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--json",
+        "-c",
+        "collection-shaped",
+        "-c",
+        "path-shaped",
+        "-c",
+        "outside-result",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+        artifactRoot,
+        artifactRunId: "reference-run",
+      });
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(result.stdout);
+      const references = envelope.endpoints.map((endpoint: { references_artifact: string }) =>
+        JSON.parse(readFileSync(endpoint.references_artifact, "utf8")).results[0]
+      );
+      expect(references[0]).toMatchObject({
+        endpoint: "collection-shaped",
+        reference: "docs/collection-note.md",
+        line: 3,
+        status: "get_ready",
+      });
+      expect(references[1]).toMatchObject({
+        endpoint: "path-shaped",
+        reference: "docs/path-note.md",
+        line: 7,
+        status: "get_ready",
+      });
+      expect(references[2]).toMatchObject({
+        endpoint: "outside-result",
+        status: "provider_only",
+      });
+      expect(references[2].reference).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("prints provider-only QMD locations in human output without trailing punctuation", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-human-provider-only-"));
+    const registryPath = join(root, "registry.toml");
+    const embedded = createService(root, "embedded-uri", "embedded-uri");
+    registerAt(registryPath, "embedded-uri", embedded);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "embedded-uri",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Embedded provider location (qmd://external-collection/docs/provider-note.md:5).");
+      expect(result.stdout).toContain("Provider-only location: qmd://external-collection/docs/provider-note.md:5");
+      expect(result.stdout).not.toContain("Provider-only location: qmd://external-collection/docs/provider-note.md:5).");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { appendFile, writeFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
 import process from "node:process";
 
 const args = process.argv.slice(2);
@@ -39,12 +39,25 @@ if (shouldCancel) {
 if (isRefresh) {
   process.stdout.write("fixture update complete\n");
 } else if (outputFormat === "json") {
-  const result = hasMatch
-    ? [{ uri: "qmd://fixture-cad/cad-notes.md", title: "CAD fixture note", score: 1 }]
-    : [];
+  let result = [];
+  if (hasMatch) {
+    if (serviceFolder.includes("path-shaped")) {
+      result = [{ file: `qmd://${join(process.cwd(), "docs", "path-note.md")}`, line: 7, title: "Path-shaped fixture note", score: 1 }];
+    } else if (serviceFolder.includes("collection-shaped")) {
+      result = [{ uri: "qmd://collection-shaped/docs/collection-note.md:3", title: "Collection-shaped fixture note", score: 1 }];
+    } else if (serviceFolder.includes("outside-result")) {
+      result = [{ uri: `qmd://${join(dirname(process.cwd()), "outside.md")}:2`, title: "Outside fixture note", score: 1 }];
+    } else {
+      result = [{ uri: "qmd://fixture-qmd/documents/cad-notes.md:1", title: "CAD fixture note", score: 1 }];
+    }
+  }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } else {
-  process.stdout.write(hasMatch ? "CAD fixture note\n" : "");
+  if (hasMatch && serviceFolder.includes("embedded-uri")) {
+    process.stdout.write("Embedded provider location (qmd://external-collection/docs/provider-note.md:5).\n");
+  } else {
+    process.stdout.write(hasMatch ? "CAD fixture note\nqmd://fixture-qmd/documents/cad-notes.md:1\n" : "");
+  }
 }
 
 if (shouldFail) {
