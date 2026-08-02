@@ -58,6 +58,25 @@ function parseName(value: string, source: string): string {
   return value;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function removeLegacyGetCapability(raw: unknown): { normalized: unknown; hadLegacyGet: boolean } {
+  if (!isRecord(raw) || !isRecord(raw.capabilities) || !Object.hasOwn(raw.capabilities, "get")) {
+    return { normalized: raw, hadLegacyGet: false };
+  }
+
+  const { get: _ignoredLegacyGet, ...capabilities } = raw.capabilities;
+  return {
+    normalized: {
+      ...raw,
+      capabilities,
+    },
+    hadLegacyGet: true,
+  };
+}
+
 export interface LoadedManifest {
   folder: string;
   manifestPath: string;
@@ -91,12 +110,13 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
   }
   assertRestrictedToml(raw);
 
-  const result = manifestSchema.safeParse(raw);
+  const { normalized, hadLegacyGet } = removeLegacyGetCapability(raw);
+  const result = manifestSchema.safeParse(normalized);
   if (!result.success) {
     throw new ManifestError(`Service Manifest schema is invalid: ${result.error.message}`);
   }
   const manifest = result.data;
-  if (Object.keys(manifest.capabilities).length === 0) {
+  if (Object.keys(manifest.capabilities).length === 0 && !hadLegacyGet) {
     throw new ManifestError("Service Manifest must declare at least one capability");
   }
 

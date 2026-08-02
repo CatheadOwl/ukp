@@ -16,6 +16,7 @@ export interface DiagnoseReport {
   capabilities: Array<{
     name: string;
     provider: string;
+    source: "manifest" | "derived-local";
     status: "ok" | "warning";
     reason?: string;
   }>;
@@ -71,15 +72,28 @@ export function evaluateServiceCapabilities(
   service: LoadedManifest,
   resolveProvider: ProviderResolver = defaultProviderResolver,
 ): DiagnoseReport["capabilities"] {
-  return Object.entries(service.manifest.capabilities).map(([name, declaration]) => {
+  const manifestCapabilities = Object.entries(service.manifest.capabilities).map(([name, declaration]) => {
     const check = resolveProvider(declaration.provider, name);
     return {
       name,
       provider: declaration.provider,
+      source: "manifest" as const,
       status: check.supported ? "ok" as const : "warning" as const,
       ...(check.reason ? { reason: check.reason } : {}),
     };
   });
+
+  const getCheck = resolveProvider("file", "get");
+  return [
+    ...manifestCapabilities,
+    {
+      name: "get",
+      provider: "file",
+      source: "derived-local" as const,
+      status: getCheck.supported ? "ok" as const : "warning" as const,
+      ...(getCheck.reason ? { reason: getCheck.reason } : {}),
+    },
+  ];
 }
 
 export function diagnoseService(
@@ -283,7 +297,9 @@ export function renderDiagnose(report: DiagnoseReport): string {
   }
   lines.push(`location: ${report.service.folder}`);
   for (const capability of report.capabilities) {
-    lines.push(`capability: ${capability.name}`);
+    lines.push(capability.source === "derived-local"
+      ? `capability: ${capability.name} (derived local baseline)`
+      : `capability: ${capability.name}`);
     lines.push(`provider: ${capability.provider}`);
     lines.push(`status: ${capability.status}`);
     if (capability.reason) lines.push(`warning: ${capability.reason}`);

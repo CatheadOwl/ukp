@@ -99,22 +99,6 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     };
   }
 
-  const capability = service.manifest.capabilities.get;
-  if (!capability) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp get: endpoint '${binding.name}' does not provide get\nHint: add [capabilities.get] provider = "file" to the Service Manifest when this endpoint should expose endpoint-relative reads.\n`,
-    };
-  }
-  if (capability.provider !== "file") {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp get: endpoint '${binding.name}' uses unsupported get provider '${capability.provider}'\n`,
-    };
-  }
-
   let targetPath: string;
   try {
     targetPath = resolveEndpointPath(service.folder, request.path);
