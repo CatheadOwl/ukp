@@ -40,7 +40,7 @@ UKP adds a small control plane around those folders:
 - declare what capabilities it supports;
 - inspect what a command will touch before running it;
 - search through one CLI surface;
-- read known endpoint-local files after a result;
+- read known endpoint-local files through the derived local `get/file` baseline;
 - refresh provider-owned indexes through a stable UKP command.
 
 ## Commands
@@ -53,7 +53,7 @@ UKP adds a small control plane around those folders:
 | `ukp register` / `ukp unregister` / `ukp list` | Manage Host Registry endpoint bindings. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp search` | Runs atomic lexical search against selected endpoints. |
-| `ukp get` | Reads an endpoint-local resource when `get/file` is declared. |
+| `ukp get` | Reads a known endpoint-local resource from any registered local Service. |
 | `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
 
 `--endpoint <name>` is the canonical endpoint selector. `-c <name>` remains a

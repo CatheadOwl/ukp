@@ -135,7 +135,7 @@ describe("get", () => {
     }
   });
 
-  test("fails clearly when get capability or provider is not available", () => {
+  test("reads through the derived file baseline without a declared get capability", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-capability-"));
     const registryPath = join(root, "registry.toml");
     const searchOnly = createService(root, "search-only", "qmd", "search");
@@ -143,20 +143,17 @@ describe("get", () => {
     registerAt(registryPath, "search-only", searchOnly);
     registerAt(registryPath, "qmd-get", qmdGet);
     try {
-      const missing = executeGetCommand(["--endpoint", "search-only", "docs/note.md"], {
+      const searchOnlyRead = executeGetCommand(["--endpoint", "search-only", "docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
-      expect(missing.exitCode).toBe(1);
-      expect(missing.stderr).toContain("does not provide get");
-      expect(missing.stderr).toContain("[capabilities.get]");
+      expect(searchOnlyRead).toEqual({ exitCode: 0, stdout: "one\ntwo\nthree\nfour\n", stderr: "" });
 
-      const unsupported = executeGetCommand(["--endpoint", "qmd-get", "docs/note.md"], {
+      const legacyQmdGet = executeGetCommand(["--endpoint", "qmd-get", "docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
-      expect(unsupported.exitCode).toBe(1);
-      expect(unsupported.stderr).toContain("unsupported get provider 'qmd'");
+      expect(legacyQmdGet).toEqual({ exitCode: 0, stdout: "one\ntwo\nthree\nfour\n", stderr: "" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

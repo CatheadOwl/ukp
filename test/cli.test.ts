@@ -107,8 +107,10 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("ukp register");
     expect(guide).toContain("ukp inspect --endpoint your-endpoint-name");
     expect(guide).toContain("ukp get --endpoint your-endpoint-name docs/example.md");
+    expect(guide).toContain("derived get/file baseline");
     expect(guide).toContain("ukp refresh --endpoint your-endpoint-name");
     expect(guide).toContain("Future providers should add provider adapters");
+    expect(guide).not.toContain("[capabilities.get]");
   });
 
   test("init help documents service target and exits successfully", () => {
@@ -580,7 +582,7 @@ describe("CLI bootstrap", () => {
     }
   });
 
-  test("inspect does not report deferred qmd capabilities as available", () => {
+  test("inspect reports deferred qmd capabilities as warnings while local get remains derived", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-inspect-deferred-"));
     const registryPath = join(root, "registry.toml");
     const service = join(root, "service");
@@ -598,13 +600,15 @@ describe("CLI bootstrap", () => {
       expect(runCli(["inspect", "--endpoint", "deferred-qmd"], (message) => output.push(message), undefined, {
         currentDirectory: root,
         registryPath,
-      })).toBe(1);
+      })).toBe(0);
       const rendered = output.join("\n");
-      expect(rendered).toContain("service_status: unavailable");
       expect(rendered).toContain("capability: vsearch");
       expect(rendered).toContain("provider: qmd");
       expect(rendered).toContain("status: warning");
       expect(rendered).toContain("capability 'vsearch' is not implemented by this UKP build");
+      expect(rendered).toContain("capability: get (derived local baseline)");
+      expect(rendered).toContain("provider: file");
+      expect(rendered).toContain("status: ok");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

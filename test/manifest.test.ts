@@ -15,6 +15,7 @@ describe("Service Manifest and diagnose", () => {
     expect(loaded.manifest.description).toBe("Deterministic QMD-compatible search fixture for UKP tests.");
     expect(loaded.manifest.capabilities.search.provider).toBe("qmd");
     expect(loaded.manifest.capabilities.refresh.provider).toBe("qmd");
+    expect(loaded.manifest.capabilities.get).toBeUndefined();
   });
 
   test("resolves supported and unsupported providers independently", () => {
@@ -22,10 +23,17 @@ describe("Service Manifest and diagnose", () => {
       supported: provider === "qmd",
       reason: provider === "qmd" ? undefined : "unsupported",
     }));
-    expect(report.capabilities).toHaveLength(2);
-    expect(report.capabilities.every((capability) => capability.status === "ok")).toBe(true);
+    expect(report.capabilities).toHaveLength(3);
+    expect(report.capabilities.filter((capability) => capability.source === "manifest")).toHaveLength(2);
+    expect(report.capabilities.some((capability) =>
+      capability.name === "get"
+      && capability.provider === "file"
+      && capability.source === "derived-local"
+      && capability.status === "warning"
+    )).toBe(true);
     expect(renderDiagnose(report)).toContain("endpoint: fixture-qmd");
     expect(renderDiagnose(report)).toContain("description: Deterministic QMD-compatible search fixture");
+    expect(renderDiagnose(report)).toContain("capability: get (derived local baseline)");
   });
 
   test("default provider resolver remains compatible with provider-only calls", () => {
@@ -53,6 +61,44 @@ describe("Service Manifest and diagnose", () => {
       expect(loaded.nameSource).toBe("folder-name");
       expect(derivedName).toBeDefined();
       expect(loaded.effectiveName).toBe(derivedName as string);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("ignores legacy get capability contents before schema validation", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "legacy-get");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      "[capabilities.get]",
+      'provider = "qmd"',
+      'legacy_field = "ignored"',
+      "",
+    ].join("\n"));
+    try {
+      const loaded = loadManifest(folder);
+      expect(loaded.effectiveName).toBe("legacy-get");
+      expect(Object.keys(loaded.manifest.capabilities)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps unrelated Manifest capability fields strict", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "invalid-capability-field");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      "[capabilities.search]",
+      'provider = "qmd"',
+      'legacy_field = "not ignored"',
+      "",
+    ].join("\n"));
+    try {
+      expect(() => loadManifest(folder)).toThrow("Service Manifest schema is invalid");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
