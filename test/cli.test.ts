@@ -249,7 +249,9 @@ describe("CLI bootstrap", () => {
     expect(listOutput.join("\n")).toContain("Usage: ukp list");
     expect(registerOutput.join("\n")).toContain("Usage: ukp register");
     expect(unregisterOutput.join("\n")).toContain("Usage: ukp unregister");
-    expect(unregisterOutput.join("\n")).toContain("[name]");
+    expect(unregisterOutput.join("\n")).toContain("--endpoint <name>");
+    expect(unregisterOutput.join("\n")).toContain("-c, --endpoint <name>");
+    expect(unregisterOutput.join("\n")).toContain("legacy registered endpoint name");
   });
 
   test("search usage errors include recovery guidance", () => {
@@ -680,7 +682,35 @@ describe("CLI bootstrap", () => {
 
     expect(runCli(["unregister", "BadName"], undefined, (message) => unregisterErrors.push(message))).toBe(2);
     expect(unregisterErrors.join("\n")).toContain("valid endpoint name");
+    expect(unregisterErrors.join("\n")).toContain("--endpoint <name>");
     expect(unregisterErrors.join("\n")).toContain("Run 'ukp unregister --help' for details.");
+  });
+
+  test("unregister accepts canonical endpoint selector and rejects ambiguous names", () => {
+    const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-unregister-endpoint-")), "registry.toml");
+    const context = {
+      currentDirectory: fixture,
+      registryPath,
+      resolveProvider: () => ({ supported: true }),
+    };
+    const output: string[] = [];
+    const errors: string[] = [];
+    registerAt(registryPath, "fixture-qmd", fixture);
+    expect(runCli(["unregister", "--endpoint", "fixture-qmd"], (message) => output.push(message), undefined, context))
+      .toBe(0);
+    expect(output.join("\n")).toContain("unregistered: fixture-qmd");
+
+    registerAt(registryPath, "fixture-qmd", fixture);
+    expect(runCli(["unregister", "-c", "fixture-qmd"], (message) => output.push(message), undefined, context)).toBe(0);
+
+    registerAt(registryPath, "fixture-qmd", fixture);
+    expect(runCli(
+      ["unregister", "--endpoint", "fixture-qmd", "other"],
+      undefined,
+      (message) => errors.push(message),
+      context,
+    )).toBe(2);
+    expect(errors.join("\n")).toContain("either --endpoint <name> or legacy positional <name>, not both");
   });
 
   test("unknown command is a usage error", () => {
