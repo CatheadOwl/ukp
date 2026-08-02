@@ -50,7 +50,7 @@ UKP adds a small control plane around those folders:
 | `ukp guide service` | Shows the first-use Service setup path. |
 | `ukp init service` | Creates a minimal Service Manifest in the current folder. |
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
-| `ukp register` / `ukp unregister` / `ukp list` | Manage Host Registry endpoint bindings. |
+| `ukp register` / `ukp unregister --endpoint <name>` / `ukp list` | Manage Host Registry endpoint bindings. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp search` | Runs atomic lexical search against selected endpoints. |
 | `ukp get` | Reads a known endpoint-local resource from any registered local Service. |

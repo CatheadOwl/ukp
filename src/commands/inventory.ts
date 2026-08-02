@@ -2,7 +2,7 @@ import { Command, CommanderError } from "commander";
 import { ENDPOINT_NAME } from "../config/manifest.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
 import { readRegistry, registerAt, unregisterAt } from "../registry.ts";
-import { isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 
 export interface InventoryCommandContext {
   currentDirectory: string;
@@ -116,15 +116,25 @@ export function executeUnregisterCommand(
   context: InventoryCommandContext,
 ): InventoryCommandResult {
   const command = createCommand("unregister", "Remove a registered endpoint.")
-    .argument("[name]", "registered endpoint name");
+    .usage("--endpoint <name>")
+    .argument("[name]", "legacy registered endpoint name")
+    .option("-c, --endpoint <name>", "select the endpoint binding to remove");
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
   }
   try {
     parseCommand(command, args);
-    const [name] = args;
+    const options = command.opts<{ endpoint?: string }>();
+    const positional = command.args[0];
+    if (countFlagOccurrences(args, "--endpoint") + countFlagOccurrences(args, "-c") > 1) {
+      throw new InventoryUsageError("--endpoint may only be specified once");
+    }
+    if (options.endpoint && positional) {
+      throw new InventoryUsageError("unregister accepts either --endpoint <name> or legacy positional <name>, not both");
+    }
+    const name = options.endpoint ?? positional;
     if (!name || !ENDPOINT_NAME.test(name)) {
-      throw new InventoryUsageError("unregister requires a valid endpoint name");
+      throw new InventoryUsageError("unregister requires a valid endpoint name via --endpoint <name>");
     }
     const previous = readRegistry(context.registryPath).find((binding) => binding.name === name);
     unregisterAt(context.registryPath, name);
@@ -135,7 +145,7 @@ export function executeUnregisterCommand(
     };
   } catch (error) {
     if (error instanceof InventoryUsageError) {
-      return { exitCode: 2, stdout: "", stderr: renderUsageError("unregister", error.message, "ukp unregister <name>") };
+      return { exitCode: 2, stdout: "", stderr: renderUsageError("unregister", error.message, "ukp unregister --endpoint <name>") };
     }
     return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
   }
