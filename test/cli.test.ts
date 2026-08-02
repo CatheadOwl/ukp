@@ -126,8 +126,9 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("qmd collection add");
     expect(guide).toContain("provider-owned");
     expect(guide).toContain("qmd --help");
-    expect(guide).toContain("qmd <command> --help");
+    expect(guide).toContain("qmd --help lists the commands");
     expect(guide).not.toContain("ukp register");
+    expect(guide).not.toContain("qmd <command> --help");
     expect(guide).not.toContain("-n 3 --format json");
     expect(guide).not.toContain("short-name");
     expect(guide).not.toContain("<searchable-folder>");
