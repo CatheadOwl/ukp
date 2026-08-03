@@ -3,6 +3,7 @@ import { loadClientConfig, findNearestClientConfig } from "../config/client.ts";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
+import { defaultQmdCommand } from "./qmd.ts";
 
 export interface RefreshOptions {
   explicitEndpoints?: string[];
@@ -31,14 +32,6 @@ export class RefreshUsageError extends Error {
     super(message);
     this.name = "RefreshUsageError";
   }
-}
-
-function defaultQmdCommand(): string[] | undefined {
-  const executable = Bun.which("qmd") ?? Bun.which("qmd.ps1") ?? Bun.which("qmd.cmd");
-  if (!executable) return undefined;
-  return executable.toLowerCase().endsWith(".ps1")
-    ? [Bun.which("powershell.exe") ?? "powershell.exe", "-NoProfile", "-File", executable]
-    : [executable];
 }
 
 type PlannedEndpoint =

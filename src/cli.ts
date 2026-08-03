@@ -104,6 +104,7 @@ export function runCli(
     return writeCommandResult(executeGetCommand(args.slice(1), {
       currentDirectory,
       registryPath,
+      qmdCommand: context.qmdCommand,
     }), stdout, stderr);
   }
 

@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
+import { defaultQmdCommand, stripQmdHeader } from "./qmd.ts";
 
 export interface GetRequest {
   endpoint: string;
@@ -18,6 +20,7 @@ export interface LineRange {
 export interface GetContext {
   currentDirectory: string;
   registryPath: string;
+  qmdCommand?: readonly string[];
 }
 
 export interface GetResult {
@@ -202,6 +205,78 @@ function applyLineRange(content: string, range: LineRange | undefined): string {
   return selected.length > 0 ? `${selected.join("\n")}\n` : "";
 }
 
+function qmdGetReference(reference: string, lines: LineRange | undefined): string {
+  if (!lines) return reference;
+  return lines.count === undefined
+    ? `${reference}:${lines.start}`
+    : `${reference}:${lines.start}:${lines.count}`;
+}
+
+/**
+ * Read an unresolved reference through the QMD-backed get adapter.
+ *
+ * UKP delegates resolution and read to QMD in one provider-owned operation.
+ * The adapter normalizes the provider header so stdout starts at the body, and
+ * keeps UKP's exit/error discipline without leaking QMD internals as traces.
+ */
+function readViaQmd(
+  qmdCommand: readonly string[],
+  serviceFolder: string,
+  request: GetRequest,
+  endpointName: string,
+): GetResult {
+  const command = [
+    ...qmdCommand,
+    "get",
+    qmdGetReference(request.path, request.lines),
+    "--no-line-numbers",
+  ];
+  const result = spawnSync(command[0]!, command.slice(1), {
+    cwd: serviceFolder,
+    encoding: "utf8",
+    windowsHide: true,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+
+  if (result.error) {
+    return { exitCode: 1, stdout: "", stderr: "ukp get: failed to run qmd\n" };
+  }
+  if (result.signal === "SIGINT" || result.status === 130) {
+    return { exitCode: 130, stdout: "", stderr: "ukp get: provider cancelled\n" };
+  }
+  if (result.status !== 0) {
+    const providerError = (result.stderr ?? "").trim();
+    if (
+      providerError.includes("no-line-numbers")
+      || providerError.includes("unknown option")
+      || providerError.includes("unknown flag")
+    ) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "ukp get: qmd build does not support '--no-line-numbers'; provider incompatible\n",
+      };
+    }
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: providerError
+        ? `ukp get: ${providerError}\n`
+        : `ukp get: resource '${request.path}' could not be resolved in endpoint '${endpointName}'\n`,
+    };
+  }
+
+  const body = stripQmdHeader(result.stdout ?? "");
+  if (body.length === 0) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp get: provider returned no content for '${request.path}' in endpoint '${endpointName}'\n`,
+    };
+  }
+  return { exitCode: 0, stdout: body, stderr: "" };
+}
+
 export function executeGet(request: GetRequest, context: GetContext): GetResult {
   const registry = readRegistry(context.registryPath);
   const scope = resolveScope({
@@ -224,6 +299,30 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     };
   }
 
+  // QMD-backed route is derived from the declared search provider; there is no
+  // explicit get capability in the current Manifest. QMD visibility governs only
+  // this unresolved-reference delegation, never the explicit file baseline.
+  const qmdBacked = service.manifest.capabilities.search?.provider === "qmd";
+  const qmdCommand = qmdBacked
+    ? context.qmdCommand ?? defaultQmdCommand()
+    : undefined;
+
+  // qmd:// provider reference: route before endpoint-local path validation, so
+  // the `://` empty segment is never misread as a file-path usage error.
+  if (request.path.startsWith("qmd://")) {
+    if (!qmdBacked) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp get: qmd:// references require a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
+      };
+    }
+    if (!qmdCommand) {
+      return { exitCode: 1, stdout: "", stderr: "ukp get: qmd executable is not available\n" };
+    }
+    return readViaQmd(qmdCommand, service.folder, request, binding.name);
+  }
+
   let targetPath: string;
   try {
     targetPath = resolveEndpointPath(service.folder, request.path);
@@ -233,7 +332,16 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     }
     // realpathSync throws ENOENT if path doesn't exist
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      // Try fuzzy matching
+      // QMD-backed: delegate resolution to the provider; do not fuzzy-scan the
+      // Service folder (that would bypass QMD's collection/ignore visibility).
+      if (qmdBacked) {
+        if (!qmdCommand) {
+          return { exitCode: 1, stdout: "", stderr: "ukp get: qmd executable is not available\n" };
+        }
+        return readViaQmd(qmdCommand, service.folder, request, binding.name);
+      }
+      // Pure file-backed: filesystem fuzzy fallback (visibility root is the
+      // Service folder itself).
       const { serviceReal, suffixMatches, nameFuzzyMatches } = findFilesBySuffix(service.folder, request.path);
 
       // Suffix match (filename exact): single match → return directly, multiple → list candidates

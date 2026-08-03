@@ -3,6 +3,7 @@ import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { Command, CommanderError } from "commander";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { defaultQmdCommand } from "../capabilities/qmd.ts";
 
 export interface ProviderCheck {
   supported: boolean;
@@ -57,8 +58,7 @@ export function defaultProviderResolver(provider: string, capability = "search")
     if (provider !== "qmd") {
       return { supported: false, reason: `provider '${provider}' is not supported for capability 'refresh' by this UKP build` };
     }
-    const executable = Bun.which("qmd") ?? Bun.which("qmd.ps1") ?? Bun.which("qmd.cmd");
-    return executable
+    return defaultQmdCommand()
       ? { supported: true }
       : { supported: false, reason: "qmd executable is not available" };
   }
@@ -68,8 +68,7 @@ export function defaultProviderResolver(provider: string, capability = "search")
   if (provider !== "qmd") {
     return { supported: false, reason: `provider '${provider}' is not supported by this UKP build` };
   }
-  const executable = Bun.which("qmd") ?? Bun.which("qmd.ps1") ?? Bun.which("qmd.cmd");
-  return executable
+  return defaultQmdCommand()
     ? { supported: true }
     : { supported: false, reason: "qmd executable is not available" };
 }
