@@ -183,4 +183,177 @@ describe("get", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("fuzzy suffix match returns single match directly", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-fuzzy-suffix-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    // Create a nested file that matches suffix
+    mkdirSync(join(service, "docs", "sub"), { recursive: true });
+    writeFileSync(join(service, "docs", "sub", "note.md"), "nested\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      // Request "sub/note.md" - exact suffix match, single result
+      const result = executeGetCommand(["--endpoint", "notes", "sub/note.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("nested\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fuzzy suffix match lists multiple candidates", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-fuzzy-multi-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    // Create multiple files with same name in different directories
+    mkdirSync(join(service, "docs", "en"), { recursive: true });
+    mkdirSync(join(service, "docs", "zh"), { recursive: true });
+    writeFileSync(join(service, "docs", "en", "note.md"), "english\n", "utf8");
+    writeFileSync(join(service, "docs", "zh", "note.md"), "chinese\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      // Request "note.md" - multiple matches
+      const result = executeGetCommand(["--endpoint", "notes", "note.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("multiple resources match");
+      expect(result.stderr).toContain("note.md");
+      expect(result.stderr).toContain("Use a more specific path");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fuzzy name match normalizes hyphens and underscores", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-fuzzy-name-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    writeFileSync(join(service, "docs", "my_note.md"), "content\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      // Request "my-note" (hyphen) should match "my_note.md" (underscore)
+      const result = executeGetCommand(["--endpoint", "notes", "my-note"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Did you mean");
+      expect(result.stderr).toContain("my_note.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fuzzy name match ignores extension", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-fuzzy-ext-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    writeFileSync(join(service, "docs", "readme.md"), "readme\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      // Request "readme" (no extension) should match "readme.md"
+      const result = executeGetCommand(["--endpoint", "notes", "readme"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Did you mean");
+      expect(result.stderr).toContain("readme.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fuzzy name match respects path prefix", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-fuzzy-prefix-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    mkdirSync(join(service, "docs", "api"), { recursive: true });
+    mkdirSync(join(service, "docs", "cli"), { recursive: true });
+    writeFileSync(join(service, "docs", "api", "guide.md"), "api guide\n", "utf8");
+    writeFileSync(join(service, "docs", "cli", "guide.md"), "cli guide\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      // Request "api/guide" should only match docs/api/guide.md
+      const result = executeGetCommand(["--endpoint", "notes", "api/guide"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Did you mean");
+      expect(result.stderr).toContain("guide.md");
+      expect(result.stderr).toContain("api");
+      // Should not contain "cli" in the path
+      const lines = result.stderr.split("\n");
+      const matchLine = lines.find((l) => l.includes("guide.md"));
+      expect(matchLine).toBeDefined();
+      expect(matchLine).not.toContain("cli");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fuzzy match scans through symlink directories", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-fuzzy-symlink-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    const realDir = join(service, "real-docs");
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, "linked.md"), "linked\n", "utf8");
+    try {
+      symlinkSync(realDir, join(service, "docs", "linked"), "dir");
+    } catch {
+      rmSync(root, { recursive: true, force: true });
+      return; // Skip if symlinks not supported
+    }
+    registerAt(registryPath, "notes", service);
+    try {
+      // Request "linked" should find docs/linked/linked.md through symlink
+      const result = executeGetCommand(["--endpoint", "notes", "linked"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Did you mean");
+      expect(result.stderr).toContain("linked.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fuzzy match handles dotfiles correctly", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-fuzzy-dotfile-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    writeFileSync(join(service, "docs", ".env"), "SECRET=value\n", "utf8");
+    writeFileSync(join(service, "docs", ".my_config"), "config\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      // Request ".env" should match .env exactly (suffix match)
+      const exact = executeGetCommand(["--endpoint", "notes", ".env"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(exact.exitCode).toBe(0);
+      expect(exact.stdout).toBe("SECRET=value\n");
+
+      // Request ".my-config" (hyphen) should fuzzy match ".my_config" (underscore)
+      // This verifies dotfiles are normalized correctly (not stripped to empty string)
+      const fuzzy = executeGetCommand(["--endpoint", "notes", ".my-config"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(fuzzy.exitCode).toBe(1);
+      expect(fuzzy.stderr).toContain("Did you mean");
+      expect(fuzzy.stderr).toContain(".my_config");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
