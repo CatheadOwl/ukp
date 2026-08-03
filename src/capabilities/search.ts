@@ -14,6 +14,7 @@ import { createArtifactRun } from "../artifacts.ts";
 import { loadManifest, ManifestError } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
+import { defaultQmdCommand } from "./qmd.ts";
 
 export interface SearchRequest {
   query: string;
@@ -59,14 +60,6 @@ export interface HumanSearchResult {
   exitCode: number;
   stdout: string;
   stderr: string;
-}
-
-function defaultQmdCommand(): string[] | undefined {
-  const executable = Bun.which("qmd") ?? Bun.which("qmd.ps1") ?? Bun.which("qmd.cmd");
-  if (!executable) return undefined;
-  return executable.toLowerCase().endsWith(".ps1")
-    ? [Bun.which("powershell.exe") ?? "powershell.exe", "-NoProfile", "-File", executable]
-    : [executable];
 }
 
 interface PlannedEndpoint {

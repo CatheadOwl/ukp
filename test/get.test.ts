@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { executeGetCommand, parseGetArgs } from "../src/commands/get.ts";
 import { registerAt } from "../src/registry.ts";
+import { stripQmdHeader } from "../src/capabilities/qmd.ts";
+
+const qmdFixture = join(import.meta.dir, "fixtures", "qmd-provider");
+const qmdFixtureExecutable = join(qmdFixture, "qmd-fixture.mjs");
+const nodeExecutable = Bun.which("node") ?? process.execPath;
 
 function createService(root: string, endpointName: string, provider = "file", capability = "get"): string {
   const service = join(root, endpointName);
@@ -355,5 +360,305 @@ describe("get", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// A QMD-backed Service simulates the ISSUE-007 repro: docs/ja and docs/zh hold
+// translations QMD ignores, docs/english.md is exact-path readable, and the QMD
+// fixture is the provider-owned resolver for weak references.
+function createQmdBackedService(root: string, endpointName: string): string {
+  const service = join(root, endpointName);
+  mkdirSync(join(service, ".ukp"), { recursive: true });
+  mkdirSync(join(service, "docs", "ja"), { recursive: true });
+  mkdirSync(join(service, "docs", "zh"), { recursive: true });
+  writeFileSync(
+    join(service, ".ukp", "service.toml"),
+    `name = "${endpointName}"\n\n[capabilities.search]\nprovider = "qmd"\n`,
+    "utf8",
+  );
+  writeFileSync(join(service, "docs", "ja", "running_agents.md"), "日本語\n", "utf8");
+  writeFileSync(join(service, "docs", "zh", "running_agents.md"), "中文\n", "utf8");
+  writeFileSync(join(service, "docs", "english.md"), "english\n", "utf8");
+  return service;
+}
+
+function readQmdInvocation(service: string): { reference?: string; noLineNumbers?: boolean } {
+  return JSON.parse(readFileSync(join(service, "qmd-fixture-invocation.json"), "utf8"));
+}
+
+describe("get/qmd adapter", () => {
+  test("delegates an unresolved reference to qmd get and strips the provider header", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-weak-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "running_agents.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("# Running agents\n\nOperating the OpenAI Agents SDK service.\n");
+      expect(result.stderr).toBe("");
+      const invocation = readQmdInvocation(service);
+      expect(invocation.reference).toBe("running_agents.md");
+      expect(invocation.noLineNumbers).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("routes a qmd:// provider reference to the adapter before path validation", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-uri-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/running-agents.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("# Running agents\n\nOperating the OpenAI Agents SDK service.\n");
+      const invocation = readQmdInvocation(service);
+      expect(invocation.reference).toBe("qmd://fixture-qmd/running-agents.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps exact file hits on the get/file baseline even for a QMD-backed endpoint", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-exact-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "docs/english.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("english\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("forwards a line range as reference:start:count", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-range-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand([
+        "--endpoint",
+        "fixture-qmd",
+        "running_agents.md",
+        "--lines",
+        "1:2",
+      ], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      const invocation = readQmdInvocation(service);
+      expect(invocation.reference).toBe("running_agents.md:1:2");
+      expect(invocation.noLineNumbers).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("surfaces a provider miss as a recovery message without fuzzy candidates", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-miss-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "missing-thing"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("resource not found");
+      expect(result.stderr).not.toContain("Did you mean");
+      expect(result.stdout).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reports an unavailable qmd executable without falling back to fuzzy scan", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-unavailable-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "running_agents.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: ["/definitely/not-a-real-qmd"],
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("failed to run qmd");
+      expect(result.stderr).not.toContain("Did you mean");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reports an incompatible qmd build that lacks --no-line-numbers", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-no-lines-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "no-lines-qmd");
+    registerAt(registryPath, "no-lines-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "no-lines-qmd", "running_agents.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("does not support '--no-line-numbers'");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects qmd:// references on a non-QMD-backed endpoint", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-nonqmd-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "file-notes");
+    registerAt(registryPath, "file-notes", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "file-notes", "qmd://fixture-qmd/running-agents.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("require a QMD-backed endpoint");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reports provider cancellation when the provider exits 130", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-cancel-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "provider-sigint-qmd");
+    registerAt(registryPath, "provider-sigint-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "provider-sigint-qmd", "running_agents.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(130);
+      expect(result.stderr).toContain("provider cancelled");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("forwards a bare line start as reference:start", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-range-start-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand([
+        "--endpoint",
+        "fixture-qmd",
+        "running_agents.md",
+        "--lines",
+        "2",
+      ], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(readQmdInvocation(service).reference).toBe("running_agents.md:2");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("surfaces an empty provider body as a no-content recovery message", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-empty-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "emptybody-ref"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("provider returned no content");
+      expect(result.stdout).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reports a qmd:// reference with an unavailable qmd without fuzzy fallback", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-uri-unavailable-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/running-agents.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: ["/definitely/not-a-real-qmd"],
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("failed to run qmd");
+      expect(result.stderr).not.toContain("Did you mean");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a traversal reference on a QMD-backed endpoint before delegation", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-traversal-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    writeFileSync(join(root, "secret.md"), "secret\n", "utf8");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "../secret.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("must not contain '.' or '..'");
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("stripQmdHeader", () => {
+  test("leaves a body-only output containing a --- divider intact", () => {
+    expect(stripQmdHeader("First line of body\n---\nrest after hr\n")).toBe(
+      "First line of body\n---\nrest after hr\n",
+    );
+  });
+
+  test("normalizes CRLF line endings", () => {
+    expect(stripQmdHeader("qmd://coll/doc.md  #ab\r\nFolder Context: x\r\n---\r\n\r\n# Body\r\n\r\nText.\r\n")).toBe(
+      "# Body\n\nText.\n",
+    );
   });
 });

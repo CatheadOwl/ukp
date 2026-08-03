@@ -12,6 +12,9 @@ const limitIndex = args.indexOf("-n");
 const nativeLimit = limitIndex >= 0 ? Number(args[limitIndex + 1]) : undefined;
 const formatIndex = args.indexOf("--format");
 const outputFormat = formatIndex >= 0 ? args[formatIndex + 1] : "text";
+const isGet = commandName === "get";
+const reference = isGet ? args[1] ?? "" : undefined;
+const noLineNumbers = args.includes("--no-line-numbers");
 
 const invocation = {
   cwd: process.cwd(),
@@ -20,6 +23,7 @@ const invocation = {
   query,
   nativeLimit,
   outputFormat,
+  ...(isGet ? { reference, noLineNumbers } : {}),
 };
 
 await writeFile("qmd-fixture-invocation.json", `${JSON.stringify(invocation, null, 2)}\n`, "utf8");
@@ -34,6 +38,33 @@ const shouldCancel = serviceFolder.includes("provider-sigint");
 if (shouldCancel) {
   process.stderr.write("fixture provider cancelled\n");
   process.exit(130);
+}
+
+if (isGet) {
+  if (serviceFolder.includes("no-lines")) {
+    process.stderr.write("qmd: unknown option '--no-line-numbers'\n");
+    process.exit(2);
+  }
+  if (serviceFolder.includes("provider-fail")) {
+    process.stderr.write("fixture provider failure\n");
+    process.exit(7);
+  }
+  if (reference.includes("missing")) {
+    process.stderr.write(`fixture: resource not found: ${reference}\n`);
+    process.exit(1);
+  }
+  if (reference.includes("emptybody")) {
+    process.stdout.write("qmd://fixture-qmd/emptybody  #a1b2c3\nFolder Context: fixtures\n---\n\n");
+    process.exit(0);
+  }
+  let body = "# Default fixture note\n\nBody for an accepted weak reference.";
+  if (reference.includes("running")) {
+    body = "# Running agents\n\nOperating the OpenAI Agents SDK service.";
+  } else if (reference.includes("cad")) {
+    body = "# CAD notes\n\nCAD fixture note content.";
+  }
+  process.stdout.write(`qmd://fixture-qmd/${reference}  #a1b2c3\nFolder Context: fixtures\n---\n\n${body}\n`);
+  process.exit(0);
 }
 
 if (isRefresh) {
