@@ -366,19 +366,52 @@ describe("get", () => {
 // A QMD-backed Service simulates the ISSUE-007 repro: docs/ja and docs/zh hold
 // translations QMD ignores, docs/english.md is exact-path readable, and the QMD
 // fixture is the provider-owned resolver for weak references.
-function createQmdBackedService(root: string, endpointName: string): string {
-  const service = join(root, endpointName);
-  mkdirSync(join(service, ".ukp"), { recursive: true });
-  mkdirSync(join(service, "docs", "ja"), { recursive: true });
-  mkdirSync(join(service, "docs", "zh"), { recursive: true });
+function writeQmdServiceToml(service: string, endpointName: string): void {
   writeFileSync(
     join(service, ".ukp", "service.toml"),
     `name = "${endpointName}"\n\n[capabilities.search]\nprovider = "qmd"\n`,
     "utf8",
   );
+}
+
+function createQmdBackedService(root: string, endpointName: string): string {
+  const service = join(root, endpointName);
+  mkdirSync(join(service, ".ukp"), { recursive: true });
+  mkdirSync(join(service, "docs", "ja"), { recursive: true });
+  mkdirSync(join(service, "docs", "zh"), { recursive: true });
+  writeQmdServiceToml(service, endpointName);
   writeFileSync(join(service, "docs", "ja", "running_agents.md"), "日本語\n", "utf8");
   writeFileSync(join(service, "docs", "zh", "running_agents.md"), "中文\n", "utf8");
   writeFileSync(join(service, "docs", "english.md"), "english\n", "utf8");
+  return service;
+}
+
+// Mirrors the real-world E2E cases behind the get/qmd adapter:
+// - deepeval-docs: an exact endpoint-local `.mdx` path read through get/file.
+// - openai-agents: a weak `config.md` reference that also exists in translated
+//   folders (ja/zh) — previously tripped the fuzzy scan into a multi-match error.
+function createMdxService(root: string, endpointName: string): string {
+  const service = join(root, endpointName);
+  mkdirSync(join(service, ".ukp"), { recursive: true });
+  mkdirSync(join(service, "integrations", "frameworks"), { recursive: true });
+  writeQmdServiceToml(service, endpointName);
+  writeFileSync(
+    join(service, "integrations", "frameworks", "openai-agents.mdx"),
+    "# OpenAI Agents integration\n\nTracing via DeepEvalTracingProcessor.\n",
+    "utf8",
+  );
+  return service;
+}
+
+function createConfigService(root: string, endpointName: string): string {
+  const service = join(root, endpointName);
+  mkdirSync(join(service, ".ukp"), { recursive: true });
+  mkdirSync(join(service, "docs", "ja"), { recursive: true });
+  mkdirSync(join(service, "docs", "zh"), { recursive: true });
+  writeQmdServiceToml(service, endpointName);
+  writeFileSync(join(service, "docs", "config.md"), "english config\n", "utf8");
+  writeFileSync(join(service, "docs", "ja", "config.md"), "日本語 config\n", "utf8");
+  writeFileSync(join(service, "docs", "zh", "config.md"), "中文 config\n", "utf8");
   return service;
 }
 
@@ -643,6 +676,54 @@ describe("get/qmd adapter", () => {
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("must not contain '.' or '..'");
       expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reads an exact .mdx endpoint-local path through get/file on a QMD-backed endpoint", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-mdx-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createMdxService(root, "deepeval-docs");
+    registerAt(registryPath, "deepeval-docs", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "deepeval-docs", "integrations/frameworks/openai-agents.mdx"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe("# OpenAI Agents integration\n\nTracing via DeepEvalTracingProcessor.\n");
+      // Exact hit stays on the get/file baseline: qmd is never invoked.
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("delegates a config.md weak reference with a line range instead of a fuzzy multi-match", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-config-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createConfigService(root, "openai-agents");
+    registerAt(registryPath, "openai-agents", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "openai-agents", "config.md", "--lines", "1:80"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      // The translated docs/ja + docs/zh copies exist, but the adapter must
+      // return the QMD-visible English body, never a candidate list.
+      expect(result.stdout).not.toContain("multiple resources match");
+      // Exact body of the fixture's `config` branch after header stripping —
+      // a fuzzy multi-match or a get/file read of docs/config.md would fail this.
+      expect(result.stdout).toBe("# Configuration\n\nSDK-wide defaults configured at startup.\n");
+      const invocation = readQmdInvocation(service);
+      expect(invocation.reference).toBe("config.md:1:80");
+      expect(invocation.noLineNumbers).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -60,6 +60,8 @@ if (isGet) {
   let body = "# Default fixture note\n\nBody for an accepted weak reference.";
   if (reference.includes("running")) {
     body = "# Running agents\n\nOperating the OpenAI Agents SDK service.";
+  } else if (reference.includes("config")) {
+    body = "# Configuration\n\nSDK-wide defaults configured at startup.";
   } else if (reference.includes("cad")) {
     body = "# CAD notes\n\nCAD fixture note content.";
   }
