@@ -15,9 +15,12 @@ qmd-provider/
 ```
 
 The Service folder is the working directory for the provider invocation. The
-fixture executable records that directory and the received arguments, then
-returns a small QMD-like JSON result. It does not emulate QMD ranking or
-collection behavior.
+fixture executable records that directory and the received arguments into
+`qmd-fixture-invocation.json` (latest call) and `qmd-fixture-invocations.jsonl`
+(appended stream), then returns a small QMD-like result: JSON for `search`, a
+provider header + `---` + body text stream for `get`, and a short
+acknowledgement for `update`. It does not emulate QMD ranking or collection
+behavior.
 
 ## Provider contract covered
 
@@ -25,6 +28,10 @@ collection behavior.
 - UKP's semantic `limit` is translated by the adapter to QMD's native `-n`.
 - The provider receives output-mode selection; UKP does not reinterpret the
   provider's result ordering or score fields.
+- `get` receives the reference with `:start[:count]` range appended and
+  `--no-line-numbers`; it returns a provider location header, a `Folder
+  Context:` metadata line, a `---` separator, then the body — which the adapter
+  strips down to body-only stdout.
 - The invocation cwd is the canonical Service folder containing
   `.ukp/service.toml`.
 
