@@ -76,6 +76,8 @@ if (isRefresh) {
   if (hasMatch) {
     if (serviceFolder.includes("path-shaped")) {
       result = [{ file: `qmd://${join(process.cwd(), "docs", "path-note.md")}`, line: 7, title: "Path-shaped fixture note", score: 1 }];
+    } else if (serviceFolder.includes("same-authority-external")) {
+      result = [{ uri: "qmd://same-authority-external/docs/external-note.md:4", title: "Same-authority external fixture note", score: 1 }];
     } else if (serviceFolder.includes("collection-shaped")) {
       result = [{ uri: "qmd://collection-shaped/docs/collection-note.md:3", title: "Collection-shaped fixture note", score: 1 }];
     } else if (serviceFolder.includes("outside-result")) {

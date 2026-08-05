@@ -364,7 +364,10 @@ describe("search", () => {
       expect(successReferences.results[0]).toMatchObject({
         index: 0,
         endpoint: "success",
-        status: "provider_only",
+        reference: "qmd://fixture-qmd/documents/cad-notes.md",
+        line: 1,
+        status: "get_ready",
+        get_adapter: "qmd",
       });
       expect(JSON.parse(readFileSync(envelope.endpoints[1].artifact, "utf8"))).toEqual([]);
       const noMatchReferencesArtifact = envelope.endpoints[1].references_artifact;
@@ -384,6 +387,7 @@ describe("search", () => {
     const collectionShaped = createService(root, "collection-shaped", "collection-shaped");
     const pathShaped = createService(root, "path-shaped", "path-shaped");
     const outsideResult = createService(root, "outside-result", "outside-result");
+    const sameAuthorityExternal = createService(root, "same-authority-external", "same-authority-external");
     mkdirSync(join(collectionShaped, "docs"), { recursive: true });
     mkdirSync(join(pathShaped, "docs"), { recursive: true });
     writeFileSync(join(collectionShaped, "docs", "collection-note.md"), "alpha\nbeta\ngamma\n", "utf8");
@@ -392,6 +396,7 @@ describe("search", () => {
     registerAt(registryPath, "collection-shaped", collectionShaped);
     registerAt(registryPath, "path-shaped", pathShaped);
     registerAt(registryPath, "outside-result", outsideResult);
+    registerAt(registryPath, "same-authority-external", sameAuthorityExternal);
     try {
       const result = executeHumanSearch(parseSearchArgs([
         "fixture-cad-search-token",
@@ -402,6 +407,8 @@ describe("search", () => {
         "path-shaped",
         "-c",
         "outside-result",
+        "-c",
+        "same-authority-external",
       ]), {
         currentDirectory: root,
         registryPath,
@@ -419,24 +426,37 @@ describe("search", () => {
         reference: "docs/collection-note.md",
         line: 3,
         status: "get_ready",
+        get_adapter: "file",
       });
       expect(references[1]).toMatchObject({
         endpoint: "path-shaped",
         reference: "docs/path-note.md",
         line: 7,
         status: "get_ready",
+        get_adapter: "file",
       });
       expect(references[2]).toMatchObject({
         endpoint: "outside-result",
-        status: "provider_only",
+        reference: `qmd://${join(root, "outside.md")}`,
+        line: 2,
+        status: "get_ready",
+        get_adapter: "qmd",
       });
-      expect(references[2].reference).toBeUndefined();
+      expect(references[2]).not.toHaveProperty("reason");
+      expect(references[3]).toMatchObject({
+        endpoint: "same-authority-external",
+        reference: "qmd://same-authority-external/docs/external-note.md",
+        line: 4,
+        status: "get_ready",
+        get_adapter: "qmd",
+      });
+      expect(references[3]).not.toHaveProperty("reason");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }, 15_000);
 
-  test("prints provider-only QMD locations in human output without trailing punctuation", () => {
+  test("prints get-ready QMD provider references in human output without trailing punctuation", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-human-provider-only-"));
     const registryPath = join(root, "registry.toml");
     const embedded = createService(root, "embedded-uri", "embedded-uri");
@@ -453,7 +473,9 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Embedded provider location (qmd://external-collection/docs/provider-note.md:5).");
-      expect(result.stdout).toContain("Provider-only location: qmd://external-collection/docs/provider-note.md:5");
+      expect(result.stdout).toContain(
+        "UKP reference: ukp get --endpoint embedded-uri qmd://external-collection/docs/provider-note.md --lines 5",
+      );
       expect(result.stdout).not.toContain("Provider-only location: qmd://external-collection/docs/provider-note.md:5).");
     } finally {
       rmSync(root, { recursive: true, force: true });
