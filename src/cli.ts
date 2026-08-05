@@ -22,7 +22,7 @@ export { renderRefreshHelp } from "./commands/refresh.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
-  ["get", "read an endpoint-relative resource"],
+  ["get", "read an endpoint-scoped resource reference"],
   ["guide", "show short operational guides"],
   ["init", "initialize UKP-owned files"],
   ["inspect", "explain current scope and endpoint routing"],

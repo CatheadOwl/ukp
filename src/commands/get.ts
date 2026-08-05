@@ -16,9 +16,9 @@ function createGetCommand(): Command {
     .allowUnknownOption(false)
     .allowExcessArguments(true)
     .helpOption("-h, --help", "show this help")
-    .usage("--endpoint <name> <path> [--lines <start[:count]>]")
-    .description("Read an endpoint-relative resource from one Service endpoint.")
-    .argument("[path]", "endpoint-relative resource path")
+    .usage("--endpoint <name> <reference> [--lines <start[:count]>]")
+    .description("Read an endpoint-scoped resource reference from one Service endpoint.")
+    .argument("[reference]", "endpoint-local path or provider-owned reference")
     .option("-c, --endpoint <name>", "select the endpoint that owns the resource")
     .option("-g", "not supported by get; use --endpoint <name>")
     .option("--lines <start[:count]>", "read a 1-based text line window");
@@ -82,11 +82,11 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
     throw new GetUsageError("get requires --endpoint <name>");
   }
   if (path === undefined || path.length === 0) {
-    throw new GetUsageError("get path must be a non-empty endpoint-relative path");
+    throw new GetUsageError("get reference must be a non-empty endpoint-scoped reference");
   }
   if (unexpected !== undefined) {
     throw new GetUsageError(
-      `unexpected argument '${unexpected}'; get accepts exactly one path. Use '--endpoint <name>' to select an endpoint.`,
+      `unexpected argument '${unexpected}'; get accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
     );
   }
 
@@ -126,7 +126,7 @@ export function renderGetHelp(): string {
 export function renderGetUsageError(message: string): string {
   return [
     `ukp get: ${message}`,
-    "Usage: ukp get --endpoint <name> <path> [--lines <start[:count]>]",
+    "Usage: ukp get --endpoint <name> <reference> [--lines <start[:count]>]",
     "Run 'ukp get --help' for details.",
   ].join("\n");
 }
