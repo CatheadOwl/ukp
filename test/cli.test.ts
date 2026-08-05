@@ -18,6 +18,7 @@ import {
   renderClientGuide,
   runCli,
 } from "../src/cli.ts";
+import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
 
 const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
@@ -158,6 +159,7 @@ describe("CLI bootstrap", () => {
     const serviceHelp = serviceOutput.join("\n");
     expect(serviceHelp).toContain("--name <name>");
     expect(serviceHelp).toContain("--description <text>");
+    expect(serviceHelp).toContain("--dependency <name>");
     expect(serviceHelp).toContain("[capabilities.search]");
     expect(serviceHelp).toContain("provider = \"qmd\"");
     expect(serviceHelp).toContain("ukp guide service");
@@ -210,6 +212,70 @@ describe("CLI bootstrap", () => {
       expect(manifest).toContain("name = \"named-service\"");
       expect(manifest).toContain("description = \"A test knowledge service.\"");
       expect(output.join("\n")).toContain("name_source: option");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("init service writes declared dependencies", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-service-deps-"));
+    const output: string[] = [];
+    try {
+      expect(runCli([
+        "init",
+        "service",
+        "--name",
+        "agent-dev",
+        "--dependency",
+        "anthropic-agent-patterns",
+        "--dependency",
+        "ukp-product",
+      ], (message) => output.push(message), undefined, {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(0);
+      const loaded = loadManifest(root);
+      expect(loaded.manifest.dependencies).toEqual(["anthropic-agent-patterns", "ukp-product"]);
+      expect(output.join("\n")).toContain("initialized Service: agent-dev");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("init service rejects invalid or duplicate dependencies", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-service-invalid-deps-"));
+    const invalidErrors: string[] = [];
+    const duplicateErrors: string[] = [];
+    try {
+      expect(runCli([
+        "init",
+        "service",
+        "--name",
+        "agent-dev",
+        "--dependency",
+        "Bad Name",
+      ], undefined, (message) => invalidErrors.push(message), {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(2);
+      expect(invalidErrors.join("\n")).toContain("invalid dependency name");
+      expect(existsSync(join(root, ".ukp", "service.toml"))).toBe(false);
+
+      expect(runCli([
+        "init",
+        "service",
+        "--name",
+        "agent-dev",
+        "--dependency",
+        "anthropic-agent-patterns",
+        "--dependency",
+        "anthropic-agent-patterns",
+      ], undefined, (message) => duplicateErrors.push(message), {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(2);
+      expect(duplicateErrors.join("\n")).toContain("duplicate dependency");
+      expect(existsSync(join(root, ".ukp", "service.toml"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -556,6 +622,7 @@ describe("CLI bootstrap", () => {
       expect(output.join("\n")).toContain("== fixture-qmd ==");
       expect(output.join("\n")).toContain("endpoint: fixture-qmd");
       expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
+      expect(output.join("\n")).not.toContain("dependency:");
       expect(output.join("\n")).toContain(`location: ${fixture}`);
       expect(output.join("\n")).toContain("hint: diagnose checks wiring, not indexed content");
 
@@ -589,6 +656,33 @@ describe("CLI bootstrap", () => {
       expect(rendered).toContain("provider: qmd");
       expect(rendered).toContain("status: ok");
       expect(rendered).not.toContain("indexed content");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("inspect renders declared dependencies from the Service Manifest", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-inspect-deps-"));
+    const registryPath = join(root, "registry.toml");
+    const service = join(root, "agent-dev");
+    const output: string[] = [];
+    mkdirSync(join(service, ".ukp"), { recursive: true });
+    writeFileSync(join(service, ".ukp", "service.toml"), [
+      'name = "agent-dev"',
+      'dependencies = ["anthropic-agent-patterns"]',
+      "",
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
+    registerAt(registryPath, "agent-dev", service);
+    try {
+      expect(runCli(["inspect", "--endpoint", "agent-dev"], (message) => output.push(message), undefined, {
+        currentDirectory: root,
+        registryPath,
+        resolveProvider: () => ({ supported: true }),
+      })).toBe(0);
+      expect(output.join("\n")).toContain("dependency: anthropic-agent-patterns");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
