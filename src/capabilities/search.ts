@@ -255,6 +255,7 @@ interface QmdReferenceMapping {
   reference?: string;
   line?: number;
   status: "get_ready" | "provider_only";
+  get_adapter?: "file" | "qmd";
   reason?: string;
 }
 
@@ -295,6 +296,7 @@ function mapExistingEndpointRelativePath(
   providerLocation: string,
   reference: string,
   line?: number,
+  qmdFallbackReference?: string,
 ): QmdReferenceMapping {
   const normalized = normalizeReferencePath(reference);
   if (!normalized) {
@@ -323,8 +325,19 @@ function mapExistingEndpointRelativePath(
       reference: rel.split(/[\\/]/).join("/"),
       ...maybeLine(line),
       status: "get_ready",
+      get_adapter: "file",
     };
   } catch {
+    if (qmdFallbackReference) {
+      return {
+        provider_location: providerLocation,
+        endpoint: endpointName,
+        reference: qmdFallbackReference,
+        ...maybeLine(line),
+        status: "get_ready",
+        get_adapter: "qmd",
+      };
+    }
     return {
       provider_location: providerLocation,
       endpoint: endpointName,
@@ -351,6 +364,15 @@ function mapQmdUri(
 
   const { target, line } = splitQmdLocation(uri.slice("qmd://".length));
   const resultLine = line ?? explicitLine;
+  const providerReference = `qmd://${target}`;
+  if (target.length === 0) {
+    return {
+      provider_location: uri,
+      endpoint: endpointName,
+      status: "provider_only",
+      reason: "provider qmd URI is empty",
+    };
+  }
   if (win32.isAbsolute(target) || isAbsolute(target) || /^[A-Za-z]:[\\/]/.test(target)) {
     try {
       const serviceReal = realpathSync(serviceFolder);
@@ -360,8 +382,10 @@ function mapQmdUri(
         return {
           provider_location: uri,
           endpoint: endpointName,
-          status: "provider_only",
-          reason: "provider absolute path is outside the endpoint folder",
+          reference: providerReference,
+          ...maybeLine(resultLine),
+          status: "get_ready",
+          get_adapter: "qmd",
         };
       }
       return {
@@ -370,13 +394,16 @@ function mapQmdUri(
         reference: rel.split(/[\\/]/).join("/"),
         ...maybeLine(resultLine),
         status: "get_ready",
+        get_adapter: "file",
       };
     } catch {
       return {
         provider_location: uri,
         endpoint: endpointName,
-        status: "provider_only",
-        reason: "provider absolute path cannot be resolved",
+        reference: providerReference,
+        ...maybeLine(resultLine),
+        status: "get_ready",
+        get_adapter: "qmd",
       };
     }
   }
@@ -386,11 +413,20 @@ function mapQmdUri(
     return {
       provider_location: uri,
       endpoint: endpointName,
-      status: "provider_only",
-      reason: "provider collection does not match the endpoint name",
+      reference: providerReference,
+      ...maybeLine(resultLine),
+      status: "get_ready",
+      get_adapter: "qmd",
     };
   }
-  return mapExistingEndpointRelativePath(endpointName, serviceFolder, uri, referenceParts.join("/"), resultLine);
+  return mapExistingEndpointRelativePath(
+    endpointName,
+    serviceFolder,
+    uri,
+    referenceParts.join("/"),
+    resultLine,
+    providerReference,
+  );
 }
 
 function extractQmdUrisFromText(output: string): string[] {
