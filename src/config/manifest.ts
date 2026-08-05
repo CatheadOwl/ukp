@@ -9,9 +9,27 @@ const capabilitySchema = z.object({
   provider: z.string().min(1),
 }).strict();
 
+const endpointNameSchema = z.string().regex(ENDPOINT_NAME);
+
+const dependenciesSchema = z.array(endpointNameSchema).min(1).superRefine((value, context) => {
+  const seen = new Set<string>();
+  for (const [index, dependency] of value.entries()) {
+    if (seen.has(dependency)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `duplicate dependency '${dependency}'`,
+        path: [index],
+      });
+      continue;
+    }
+    seen.add(dependency);
+  }
+});
+
 const manifestSchema = z.object({
   name: z.string().optional(),
   description: z.string().min(1).optional(),
+  dependencies: dependenciesSchema.optional(),
   capabilities: z.record(z.string(), capabilitySchema),
 }).strict();
 

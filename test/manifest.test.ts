@@ -13,6 +13,7 @@ describe("Service Manifest and diagnose", () => {
     expect(loaded.effectiveName).toBe("fixture-qmd");
     expect(loaded.nameSource).toBe("manifest");
     expect(loaded.manifest.description).toBe("Deterministic QMD-compatible search fixture for UKP tests.");
+    expect(loaded.manifest.dependencies).toBeUndefined();
     expect(loaded.manifest.capabilities.search.provider).toBe("qmd");
     expect(loaded.manifest.capabilities.refresh.provider).toBe("qmd");
     expect(loaded.manifest.capabilities.get).toBeUndefined();
@@ -131,6 +132,87 @@ describe("Service Manifest and diagnose", () => {
       join(folder, ".ukp", "service.toml"),
       "description = \"\"\n[capabilities.search]\nprovider = \"qmd\"\n",
     );
+    try {
+      expect(() => loadManifest(folder)).toThrow("Service Manifest schema is invalid");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("loads declared endpoint dependencies with unique endpoint-name grammar", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "dependency-service");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      'name = "agent-dev"',
+      'dependencies = ["anthropic-agent-patterns", "ukp-product"]',
+      "",
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
+    try {
+      const loaded = loadManifest(folder);
+      expect(loaded.manifest.dependencies).toEqual(["anthropic-agent-patterns", "ukp-product"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects empty declared dependencies", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "empty-dependencies");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      'name = "agent-dev"',
+      "dependencies = []",
+      "",
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
+    try {
+      expect(() => loadManifest(folder)).toThrow("Service Manifest schema is invalid");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects duplicate declared dependencies", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "duplicate-dependencies");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      'name = "agent-dev"',
+      'dependencies = ["anthropic-agent-patterns", "anthropic-agent-patterns"]',
+      "",
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
+    try {
+      expect(() => loadManifest(folder)).toThrow("duplicate dependency");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects invalid declared dependency names", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "invalid-dependency");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      'name = "agent-dev"',
+      'dependencies = ["Bad Name"]',
+      "",
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
     try {
       expect(() => loadManifest(folder)).toThrow("Service Manifest schema is invalid");
     } finally {

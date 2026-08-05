@@ -41,7 +41,8 @@ function createInitServiceCommand(): Command {
     .helpOption("-h, --help", "show this help")
     .description("Create a Service Manifest in the current folder.")
     .option("--name <name>", "explicit Service endpoint name")
-    .option("--description <text>", "human-readable Service description");
+    .option("--description <text>", "human-readable Service description")
+    .option("--dependency <name>", "declare a dependency on another endpoint", (value, previous: string[] = []) => [...previous, value]);
 }
 
 function parseCommand(command: Command, args: readonly string[]): void {
@@ -96,19 +97,35 @@ function resolveServiceName(folder: string, explicitName?: string): { name: stri
 
 function validateInitServiceOptions(
   folder: string,
-  options: { name?: string; description?: string },
-): { name: string; nameSource: "option" | "folder-name" } {
+  options: { name?: string; description?: string; dependency?: string[] },
+): { name: string; nameSource: "option" | "folder-name"; dependencies?: string[] } {
   const { name, source } = resolveServiceName(folder, options.name);
   if (options.description === "") {
     throw new InitUsageError("description must be a non-empty string");
   }
-  return { name, nameSource: source };
+  let dependencies: string[] | undefined;
+  if (options.dependency) {
+    dependencies = [];
+    const seen = new Set<string>();
+    for (const dependency of options.dependency) {
+      if (!ENDPOINT_NAME.test(dependency)) {
+        throw new InitUsageError(`invalid dependency name '${dependency}'. Dependencies must use the endpoint slug grammar.`);
+      }
+      if (seen.has(dependency)) {
+        throw new InitUsageError(`duplicate dependency '${dependency}'`);
+      }
+      seen.add(dependency);
+      dependencies.push(dependency);
+    }
+  }
+  return { name, nameSource: source, dependencies };
 }
 
-function renderServiceManifest(options: { name?: string; description?: string }): string {
+function renderServiceManifest(options: { name?: string; description?: string; dependencies?: string[] }): string {
   const encoded = stringify({
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(options.description === undefined ? {} : { description: options.description }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
     capabilities: {
       search: {
         provider: "qmd",
@@ -120,10 +137,10 @@ function renderServiceManifest(options: { name?: string; description?: string })
 
 function createServiceManifest(
   currentDirectory: string,
-  options: { name?: string; description?: string },
+  options: { name?: string; description?: string; dependency?: string[] },
 ): { folder: string; manifestPath: string; name: string; nameSource: "option" | "folder-name" } {
   const folder = resolveServiceFolder(currentDirectory);
-  const { name, nameSource } = validateInitServiceOptions(folder, options);
+  const { name, nameSource, dependencies } = validateInitServiceOptions(folder, options);
 
   const ukpDirectory = join(folder, ".ukp");
   const manifestPath = join(ukpDirectory, "service.toml");
@@ -135,7 +152,7 @@ function createServiceManifest(
   const descriptor = openSync(manifestPath, "wx", 0o600);
   let committed = false;
   try {
-    writeFileSync(descriptor, renderServiceManifest(options), "utf8");
+    writeFileSync(descriptor, renderServiceManifest({ ...options, dependencies }), "utf8");
     committed = true;
   } finally {
     closeSync(descriptor);
@@ -160,7 +177,7 @@ function executeInitServiceCommand(args: readonly string[], context: InitCommand
   try {
     const command = createInitServiceCommand();
     parseCommand(command, args);
-    const options = command.opts<{ name?: string; description?: string }>();
+    const options = command.opts<{ name?: string; description?: string; dependency?: string[] }>();
     const result = createServiceManifest(context.currentDirectory, options);
     return {
       exitCode: 0,
@@ -218,6 +235,8 @@ export function renderInitServiceHelp(): string {
     "Creates .ukp/service.toml with the current minimal search provider:",
     "  [capabilities.search]",
     "  provider = \"qmd\"",
+    "Optional:",
+    "  --dependency <name>   declare another endpoint as a declared knowledge dependency",
     "",
     "Next:",
     "  ukp guide service",
