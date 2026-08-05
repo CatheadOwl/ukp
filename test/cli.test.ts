@@ -65,7 +65,7 @@ describe("CLI bootstrap", () => {
 
   test("get help documents endpoint selector and line ranges", () => {
     const output: string[] = [];
-    expect(renderGetHelp()).toContain("Usage: ukp get --endpoint <name> <path>");
+    expect(renderGetHelp()).toContain("Usage: ukp get --endpoint <name> <reference>");
     expect(runCli(["get", "--help"], (message) => output.push(message))).toBe(0);
     const help = output.join("\n");
     expect(help).toContain("--endpoint <name>");

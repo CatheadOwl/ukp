@@ -37,7 +37,7 @@ export class GetUsageError extends Error {
 }
 
 function validateEndpointRelativePath(reference: string): string[] {
-  if (reference.length === 0) throw new GetUsageError("path must be a non-empty endpoint-relative path");
+  if (reference.length === 0) throw new GetUsageError("reference must be a non-empty endpoint-scoped reference");
   if (
     isAbsolute(reference)
     || win32.isAbsolute(reference)
@@ -45,15 +45,15 @@ function validateEndpointRelativePath(reference: string): string[] {
     || reference.startsWith("//")
     || reference.startsWith("\\\\")
   ) {
-    throw new GetUsageError("path must be endpoint-relative, not absolute");
+    throw new GetUsageError("reference must be endpoint-scoped, not absolute");
   }
 
   const segments = reference.split(/[\\/]/);
   if (segments.some((segment) => segment.length === 0)) {
-    throw new GetUsageError("path must not contain empty segments");
+    throw new GetUsageError("reference must not contain empty path segments");
   }
   if (segments.some((segment) => segment === "." || segment === "..")) {
-    throw new GetUsageError("path must not contain '.' or '..' segments");
+    throw new GetUsageError("reference must not contain '.' or '..' path segments");
   }
   return segments;
 }
@@ -72,7 +72,7 @@ function resolveEndpointPath(serviceFolder: string, reference: string): string {
   const serviceReal = realpathSync(serviceFolder);
   const targetReal = realpathSync(targetPath);
   if (!isInsideService(serviceReal, targetReal)) {
-    throw new GetUsageError("path must stay inside the selected Service folder");
+    throw new GetUsageError("reference must stay inside the selected Service folder when resolved as a file");
   }
   return targetReal;
 }

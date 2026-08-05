@@ -50,7 +50,7 @@ describe("get", () => {
       "other",
       "docs/note.md",
     ])).toThrow("--endpoint may only be specified once");
-    expect(() => parseGetArgs(["-c", "cad", "docs/note.md", "extra"])).toThrow("exactly one path");
+    expect(() => parseGetArgs(["-c", "cad", "docs/note.md", "extra"])).toThrow("exactly one reference");
   });
 
   test("reads a file-backed endpoint resource and line range", () => {
@@ -95,21 +95,21 @@ describe("get", () => {
         registryPath,
       });
       expect(absolute.exitCode).toBe(2);
-      expect(absolute.stderr).toContain("endpoint-relative");
+      expect(absolute.stderr).toContain("endpoint-scoped");
 
       const driveQualified = executeGetCommand(["--endpoint", "notes", "C:\\secret.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(driveQualified.exitCode).toBe(2);
-      expect(driveQualified.stderr).toContain("endpoint-relative");
+      expect(driveQualified.stderr).toContain("endpoint-scoped");
 
       const unc = executeGetCommand(["--endpoint", "notes", "\\\\server\\share\\secret.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(unc.exitCode).toBe(2);
-      expect(unc.stderr).toContain("endpoint-relative");
+      expect(unc.stderr).toContain("endpoint-scoped");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -17,8 +17,8 @@ UKP separates three journeys. They do not replace each other:
 - **Provider path**: `ukp init service` + `ukp register` make a folder an
   addressable Service — a named endpoint that can be inspected, called, and
   maintained.
-- **Content-searchable**: provider setup decides what content inside the Service
-  is indexed. This is provider-owned. Registered as a Service does not mean its
+- **Content-searchable**: provider setup decides what content is indexed. This
+  is provider-owned. Registered as a Service does not mean its
   content is searchable; both steps are needed.
 - **Client path**: a workspace `.ukp/client.toml` default scope lets you use
   Services by default instead of naming one each call.
@@ -40,7 +40,7 @@ UKP adds a small control plane around those folders:
 - declare what capabilities it supports;
 - inspect what a command will touch before running it;
 - search through one CLI surface;
-- read known endpoint-local files through the derived local `get/file` baseline;
+- read endpoint-scoped references through `get/file` or provider delegation;
 - refresh provider-owned indexes through a stable UKP command.
 
 ## Commands
@@ -54,7 +54,7 @@ UKP adds a small control plane around those folders:
 | `ukp register` / `ukp unregister --endpoint <name>` / `ukp list` | Manage Host Registry endpoint bindings. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp search` | Runs atomic lexical search against selected endpoints. |
-| `ukp get` | Reads a known endpoint-local resource from any registered local Service. |
+| `ukp get` | Reads an endpoint-scoped resource reference from one registered local Service. |
 | `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
 
 `--endpoint <name>` is the canonical endpoint selector. `-c <name>` remains a
