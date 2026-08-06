@@ -50,6 +50,7 @@ UKP adds a small control plane around those folders:
 
 | Command | What it does |
 |---|---|
+| `ukp version` / `ukp --version` / `ukp -V` | Shows the current UKP CLI package version. `ukp version -v` adds debug identity details. |
 | `ukp guide service` | Shows the provider-agnostic Service setup path. |
 | `ukp guide service qmd` | Shows provider-owned setup for the default QMD provider. |
 | `ukp init service` | Creates a minimal Service Manifest in the current folder. |

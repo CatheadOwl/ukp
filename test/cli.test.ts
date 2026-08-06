@@ -13,6 +13,8 @@ import {
   renderInspectHelp,
   renderRefreshHelp,
   renderSearchHelp,
+  renderVersion,
+  renderVersionHelp,
   renderServiceGuide,
   renderServiceQmdGuide,
   renderClientGuide,
@@ -24,6 +26,10 @@ import { registerAt } from "../src/registry.ts";
 const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
 const fixtureExecutable = join(fixture, "qmd-fixture.mjs");
 const nodeExecutable = Bun.which("node") ?? process.execPath;
+const packageJson = JSON.parse(
+  readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"),
+) as { version: string };
+const expectedVersionOutput = `ukp ${packageJson.version}`;
 
 describe("CLI bootstrap", () => {
   test("renders every P0 command in help", () => {
@@ -39,6 +45,46 @@ describe("CLI bootstrap", () => {
     const help = output.join("\n");
     expect(help).toContain("Usage: ukp");
     expect(help).toContain("ukp guide service");
+    expect(help).toContain("-V, --version");
+  });
+
+  test("version exits successfully through command and standard root aliases", () => {
+    const commandOutput: string[] = [];
+    const longOutput: string[] = [];
+    const shortOutput: string[] = [];
+    expect(renderVersion()).toBe(`${expectedVersionOutput}\n`);
+    expect(runCli(["version"], (message) => commandOutput.push(message))).toBe(0);
+    expect(runCli(["--version"], (message) => longOutput.push(message))).toBe(0);
+    expect(runCli(["-V"], (message) => shortOutput.push(message))).toBe(0);
+    expect(commandOutput.join("\n")).toBe(expectedVersionOutput);
+    expect(longOutput.join("\n")).toBe(expectedVersionOutput);
+    expect(shortOutput.join("\n")).toBe(expectedVersionOutput);
+  });
+
+  test("version help and verbose mode expose debug build identity", () => {
+    const helpOutput: string[] = [];
+    const verboseOutput: string[] = [];
+    expect(renderVersionHelp()).toContain("Usage: ukp version [options]");
+    expect(runCli(["version", "--help"], (message) => helpOutput.push(message))).toBe(0);
+    expect(runCli(["version", "-v"], (message) => verboseOutput.push(message))).toBe(0);
+
+    const help = helpOutput.join("\n");
+    expect(help).toContain("-v, --verbose");
+
+    const verbose = verboseOutput.join("\n");
+    expect(verbose).toContain(expectedVersionOutput);
+    expect(verbose).toMatch(/source_updated_at: \d{4}-\d{2}-\d{2}T/);
+    expect(verbose).toMatch(/package_updated_at: \d{4}-\d{2}-\d{2}T/);
+    expect(verbose).toContain(`runtime: bun ${Bun.version}`);
+    expect(verbose).toContain("source:");
+    expect(verbose).toContain("package:");
+  });
+
+  test("version rejects unexpected arguments with command help guidance", () => {
+    const errors: string[] = [];
+    expect(runCli(["version", "--bad"], undefined, (message) => errors.push(message))).toBe(2);
+    expect(errors.join("\n")).toContain("ukp version: unexpected argument '--bad'");
+    expect(errors.join("\n")).toContain("Run 'ukp version --help' for details.");
   });
 
   test("search help documents selectors and exits successfully", () => {
