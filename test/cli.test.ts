@@ -73,8 +73,10 @@ describe("CLI bootstrap", () => {
 
     const verbose = verboseOutput.join("\n");
     expect(verbose).toContain(expectedVersionOutput);
-    expect(verbose).toMatch(/source_updated_at: \d{4}-\d{2}-\d{2}T/);
-    expect(verbose).toMatch(/package_updated_at: \d{4}-\d{2}-\d{2}T/);
+    expect(verbose).toContain("source_updated_local:");
+    expect(verbose).toMatch(/source_updated_utc: \d{4}-\d{2}-\d{2}T/);
+    expect(verbose).toContain("package_updated_local:");
+    expect(verbose).toMatch(/package_updated_utc: \d{4}-\d{2}-\d{2}T/);
     expect(verbose).toContain(`runtime: bun ${Bun.version}`);
     expect(verbose).toContain("source:");
     expect(verbose).toContain("package:");
