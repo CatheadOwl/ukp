@@ -87,16 +87,30 @@ function formatMtime(ms: number): string {
   return new Date(ms).toISOString();
 }
 
+function formatLocalMtime(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  });
+}
+
 export function renderVersion(options: { verbose?: boolean } = {}): string {
   const version = readPackageVersion();
   if (!options.verbose) return `ukp ${version}\n`;
 
-  const packageUpdatedAt = formatMtime(statSync(PACKAGE_JSON_URL).mtimeMs);
-  const sourceUpdatedAt = formatMtime(findLatestMtimeMs(SOURCE_ROOT_URL));
+  const packageMtimeMs = statSync(PACKAGE_JSON_URL).mtimeMs;
+  const sourceMtimeMs = findLatestMtimeMs(SOURCE_ROOT_URL);
   const lines = [
     `ukp ${version}`,
-    `source_updated_at: ${sourceUpdatedAt}`,
-    `package_updated_at: ${packageUpdatedAt}`,
+    `source_updated_local: ${formatLocalMtime(sourceMtimeMs)}`,
+    `source_updated_utc: ${formatMtime(sourceMtimeMs)}`,
+    `package_updated_local: ${formatLocalMtime(packageMtimeMs)}`,
+    `package_updated_utc: ${formatMtime(packageMtimeMs)}`,
     `runtime: bun ${Bun.version}`,
     `source: ${SOURCE_ROOT_PATH}`,
     `package: ${PACKAGE_JSON_PATH}`,
