@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { defaultQmdCommand, normalizeQmdReferenceForGet, stripQmdHeader } from "./qmd.ts";
+import { defaultQmdCommand, isBareDocidReference, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
 
 export interface GetRequest {
   endpoint: string;
@@ -205,19 +205,14 @@ function applyLineRange(content: string, range: LineRange | undefined): string {
   return selected.length > 0 ? `${selected.join("\n")}\n` : "";
 }
 
-function qmdGetReference(reference: string, lines: LineRange | undefined): string {
-  if (!lines) return reference;
-  return lines.count === undefined
-    ? `${reference}:${lines.start}`
-    : `${reference}:${lines.start}:${lines.count}`;
-}
-
 /**
  * Read an unresolved reference through the QMD-backed get adapter.
  *
  * UKP delegates resolution and read to QMD in one provider-owned operation.
- * The adapter normalizes the provider header so stdout starts at the body, and
- * keeps UKP's exit/error discipline without leaking QMD internals as traces.
+ * The adapter re-adds the `#` to a bare docid handoff key (ADR 0011) so QMD
+ * resolves it by content fingerprint, strips the provider header so stdout
+ * starts at the body, and keeps UKP's exit/error discipline without leaking
+ * QMD internals as traces.
  */
 function readViaQmd(
   qmdCommand: readonly string[],
@@ -228,11 +223,7 @@ function readViaQmd(
   const command = [
     ...qmdCommand,
     "get",
-    // The shared producer/consumer contract: normalize path-shaped qmd:// URIs
-    // to the bare relative form QMD can weak-match, leaving named-collection
-    // URIs unchanged. This keeps search's emitted hint and get's forwarded
-    // reference in agreement even when a raw path-shaped URI is pasted.
-    qmdGetReference(normalizeQmdReferenceForGet(request.path), request.lines),
+    toQmdGetArgument(request.path, request.lines),
     "--no-line-numbers",
   ];
   const result = spawnSync(command[0]!, command.slice(1), {
@@ -282,6 +273,17 @@ function readViaQmd(
 }
 
 export function executeGet(request: GetRequest, context: GetContext): GetResult {
+  // A docid[:line] handoff key already carries an embedded line; a separate
+  // --lines range would double-specify (ADR 0011 / get-qmd-adapter). Strip any
+  // leading `#` first so a hash-prefixed `#docid:line` is caught too, even
+  // though `#` never appears on the UKP surface.
+  const barePath = stripDocidHash(request.path);
+  if (request.lines && isBareDocidReference(barePath) && barePath.includes(":")) {
+    throw new GetUsageError(
+      "a docid[:line] reference already carries a line; do not also pass --lines",
+    );
+  }
+
   const registry = readRegistry(context.registryPath);
   const scope = resolveScope({
     currentDirectory: context.currentDirectory,

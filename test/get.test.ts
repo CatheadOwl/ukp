@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { executeGetCommand, parseGetArgs } from "../src/commands/get.ts";
 import { registerAt } from "../src/registry.ts";
-import { normalizeQmdReferenceForGet, stripQmdHeader } from "../src/capabilities/qmd.ts";
+import { stripQmdHeader } from "../src/capabilities/qmd.ts";
 
 const qmdFixture = join(import.meta.dir, "fixtures", "qmd-provider");
 const qmdFixtureExecutable = join(qmdFixture, "qmd-fixture.mjs");
@@ -744,29 +744,81 @@ describe("stripQmdHeader", () => {
   });
 });
 
-describe("normalizeQmdReferenceForGet", () => {
-  test("leaves a named-collection qmd:// URI verbatim", () => {
-    expect(normalizeQmdReferenceForGet("qmd://openai-agents/running-agents.md")).toBe(
-      "qmd://openai-agents/running-agents.md",
-    );
+describe("docid handoff (ADR 0011)", () => {
+  test("re-adds # and resolves a bare docid reference via qmd get", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-docid-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "d4e5f6"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe("# Outside note\n\nBody from a path-shaped collection.\n");
+      expect(readQmdInvocation(service).reference).toBe("#d4e5f6");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  test("leaves a bare relative reference verbatim", () => {
-    expect(normalizeQmdReferenceForGet("running_agents.md")).toBe("running_agents.md");
-    expect(normalizeQmdReferenceForGet("docs/sub/note.md")).toBe("docs/sub/note.md");
+  test("forwards a docid line suffix as reference:start", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-docid-line-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "d4e5f6:2"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(readQmdInvocation(service).reference).toBe("#d4e5f6:2");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  test("strips scheme, drive, and anchor from a path-shaped Windows qmd:// URI", () => {
-    expect(normalizeQmdReferenceForGet("qmd://D:\\Document\\KB\\sources\\memory.md")).toBe(
-      "Document/KB/sources/memory.md",
-    );
+  test("rejects --lines when a docid reference already carries a line", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-docid-lines-clash-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "d4e5f6:2", "--lines", "2"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("already carries a line");
+      // The usage error is raised before any provider invocation.
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  test("strips scheme and leading slash from a path-shaped POSIX qmd:// URI", () => {
-    expect(normalizeQmdReferenceForGet("qmd:///abs/sources/memory.md")).toBe("abs/sources/memory.md");
-  });
-
-  test("preserves a trailing line suffix on a path-shaped URI", () => {
-    expect(normalizeQmdReferenceForGet("qmd://D:\\KB\\docs\\memory.md:342")).toBe("KB/docs/memory.md:342");
+  test("rejects --lines for a hash-prefixed docid reference carrying a line", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-docid-hash-lines-clash-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "#d4e5f6:2", "--lines", "2"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("already carries a line");
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

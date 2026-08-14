@@ -6,35 +6,46 @@
  * output discipline. These helpers are the single place for that plumbing.
  */
 
-import { isAbsolute, win32 } from "node:path";
-
 /**
- * Normalize a `qmd://` reference to the exact form `ukp get` forwards to QMD.
- *
- * This is the shared producer/consumer resolvability contract between `search`
- * (which emits a `UKP reference:` get hint) and `get` (which reads it). QMD
- * resolves a `qmd://<collection-name>/<rel>` URI verbatim (named collection)
- * and a bare relative reference / path suffix via weak reference matching. It
- * does NOT resolve a path-shaped `qmd://<absolute-path>/<rel>` URI — that shape
- * returns "Document not found". `ukp get` also rejects absolute references
- * before they reach QMD. So the contract normalizes path-shaped URIs to the
- * bare relative form QMD can weak-match (scheme stripped, drive/anchor
- * stripped, forward slashes) and leaves named-collection URIs unchanged. Both
- * sides applying the same function guarantees the emitted hint and the executed
- * read always agree.
+ * A bare docid handoff key is a 6-hex content fingerprint — the first 6 chars of
+ * QMD's content SHA-256 — optionally carrying a `:line` suffix (ADR 0011). QMD
+ * emits the fingerprint with a leading `#` (`#abc123`); `search` strips it on
+ * the surface so the token is verbatim-copyable, and `get` re-adds it before
+ * constructing `qmd get #docid[:line]`. A leading `#` is a shell comment and
+ * would silently truncate the reference (ISSUE-008), so it never appears on the
+ * UKP surface.
  */
-export function normalizeQmdReferenceForGet(reference: string): string {
-  if (!reference.startsWith("qmd://")) return reference;
-  const target = reference.slice("qmd://".length);
-  if (!isQmdPathShapedTarget(target)) return reference;
-  return target
-    .replace(/^[A-Za-z]:/, "")
-    .replace(/^[/\\]+/, "")
-    .replace(/\\/g, "/");
+export function isBareDocidReference(reference: string): boolean {
+  return /^[a-f0-9]{6}(:\d+)?$/.test(reference);
 }
 
-function isQmdPathShapedTarget(target: string): boolean {
-  return win32.isAbsolute(target) || isAbsolute(target) || /^[A-Za-z]:[\\/]/.test(target);
+/** Strip QMD's leading `#` from a docid token (`#abc123` → `abc123`). */
+export function stripDocidHash(docid: string): string {
+  return docid.startsWith("#") ? docid.slice(1) : docid;
+}
+
+/** Test whether a token is a bare 6-hex QMD docid body (`[a-f0-9]{6}`, ADR 0011). */
+export function isDocidBody(token: string): boolean {
+  return /^[a-f0-9]{6}$/.test(token);
+}
+
+/**
+ * Build the `qmd get` argument for a reference.
+ *
+ * A bare docid handoff key has its `#` re-added so QMD resolves it by content
+ * fingerprint exactly. Any other reference — a weak name/path suffix or a
+ * `qmd://` provider reference — is forwarded verbatim. An optional line range is
+ * appended as `:start[:count]`, matching QMD's `path:from:count` suffix.
+ */
+export function toQmdGetArgument(
+  reference: string,
+  lines?: { start: number; count?: number },
+): string {
+  const base = isBareDocidReference(reference) ? `#${reference}` : reference;
+  if (!lines) return base;
+  return lines.count === undefined
+    ? `${base}:${lines.start}`
+    : `${base}:${lines.start}:${lines.count}`;
 }
 
 export function defaultQmdCommand(): string[] | undefined {
