@@ -324,6 +324,9 @@ function mapQmdResultToReference(endpointName: string, result: unknown): QmdRefe
 function extractQmdDocidsFromText(output: string): Array<{ docid: string; line?: number }> {
   const found: Array<{ docid: string; line?: number }> = [];
   for (const line of output.split(/\r?\n/)) {
+    // A docid only appears on the QMD location header line (`qmd://...:line #docid`);
+    // body lines may contain a 6-hex `#xxxxxx` (e.g. a color code) that is not a docid.
+    if (!line.startsWith("qmd://")) continue;
     const docid = /#([a-f0-9]{6})/.exec(line);
     if (!docid) continue;
     const lineHit = /:(\d+)\s+#[a-f0-9]{6}/.exec(line);

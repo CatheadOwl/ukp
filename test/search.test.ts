@@ -475,6 +475,9 @@ describe("search", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("qmd://external-collection/docs/provider-note.md:5  #f6a7b8");
       expect(result.stdout).toContain("UKP reference: ukp get --endpoint embedded-uri f6a7b8 --lines 5");
+      // A body line with a 6-hex token (e.g. a color code) is not a docid.
+      expect(result.stdout).toContain("Accent color #ff0000.");
+      expect(result.stdout).not.toContain("UKP reference: ukp get --endpoint embedded-uri ff0000");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
