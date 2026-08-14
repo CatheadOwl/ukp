@@ -35,6 +35,18 @@ const hasMatch = query === "fixture-cad-search-token" && !serviceFolder.includes
 const shouldFail = serviceFolder.includes("provider-fail");
 const shouldCancel = serviceFolder.includes("provider-sigint");
 
+// docid → body map so a search→get round-trip resolves the same content by
+// fingerprint (ADR 0011). The docid is QMD's content-hash prefix; the fixture
+// hardcodes stable values for its known documents.
+const docidBodies = {
+  a1b2c3: "# CAD notes\n\nCAD fixture note content.",
+  b2c3d4: "# Collection note\n\nalpha\nbeta\ngamma\n",
+  c3d4e5: "# Path note\n\none\ntwo\n",
+  d4e5f6: "# Outside note\n\nBody from a path-shaped collection.\n",
+  e5f6a7: "# External note\n\nExternal fixture note content.",
+  f6a7b8: "# Provider note\n\nProvider note content.",
+};
+
 if (shouldCancel) {
   process.stderr.write("fixture provider cancelled\n");
   process.exit(130);
@@ -57,15 +69,23 @@ if (isGet) {
     process.stdout.write("qmd://fixture-qmd/emptybody  #a1b2c3\nFolder Context: fixtures\n---\n\n");
     process.exit(0);
   }
-  let body = "# Default fixture note\n\nBody for an accepted weak reference.";
-  if (reference.includes("running")) {
-    body = "# Running agents\n\nOperating the OpenAI Agents SDK service.";
-  } else if (reference.includes("config")) {
-    body = "# Configuration\n\nSDK-wide defaults configured at startup.";
-  } else if (reference.includes("cad")) {
-    body = "# CAD notes\n\nCAD fixture note content.";
+  // Resolve a bare or hash-prefixed docid (`a1b2c3`, `#a1b2c3`, `#a1b2c3:2`, ...)
+  // by content fingerprint; otherwise fall back to weak-reference token matching.
+  const docidMatch = /^#?([a-f0-9]{6})(?::\d+(?::\d+)?)?$/.exec(reference);
+  const docid = docidMatch ? docidMatch[1] : undefined;
+  let body = docid ? docidBodies[docid] : undefined;
+  if (!body) {
+    body = "# Default fixture note\n\nBody for an accepted weak reference.";
+    if (reference.includes("running")) {
+      body = "# Running agents\n\nOperating the OpenAI Agents SDK service.";
+    } else if (reference.includes("config")) {
+      body = "# Configuration\n\nSDK-wide defaults configured at startup.";
+    } else if (reference.includes("cad")) {
+      body = "# CAD notes\n\nCAD fixture note content.";
+    }
   }
-  process.stdout.write(`qmd://fixture-qmd/${reference}  #a1b2c3\nFolder Context: fixtures\n---\n\n${body}\n`);
+  const headerDocid = docid ? `#${docid}` : "#a1b2c3";
+  process.stdout.write(`qmd://fixture-qmd/${reference}  ${headerDocid}\nFolder Context: fixtures\n---\n\n${body}\n`);
   process.exit(0);
 }
 
@@ -75,23 +95,23 @@ if (isRefresh) {
   let result = [];
   if (hasMatch) {
     if (serviceFolder.includes("path-shaped")) {
-      result = [{ file: `qmd://${join(process.cwd(), "docs", "path-note.md")}`, line: 7, title: "Path-shaped fixture note", score: 1 }];
+      result = [{ docid: "#c3d4e5", file: `qmd://${join(process.cwd(), "docs", "path-note.md")}`, line: 7, title: "Path-shaped fixture note", score: 1 }];
     } else if (serviceFolder.includes("same-authority-external")) {
-      result = [{ uri: "qmd://same-authority-external/docs/external-note.md:4", title: "Same-authority external fixture note", score: 1 }];
+      result = [{ docid: "#e5f6a7", file: "qmd://same-authority-external/docs/external-note.md", line: 4, title: "Same-authority external fixture note", score: 1 }];
     } else if (serviceFolder.includes("collection-shaped")) {
-      result = [{ uri: "qmd://collection-shaped/docs/collection-note.md:3", title: "Collection-shaped fixture note", score: 1 }];
+      result = [{ docid: "#b2c3d4", file: "qmd://collection-shaped/docs/collection-note.md", line: 3, title: "Collection-shaped fixture note", score: 1 }];
     } else if (serviceFolder.includes("outside-result")) {
-      result = [{ uri: `qmd://${join(dirname(process.cwd()), "outside.md")}:2`, title: "Outside fixture note", score: 1 }];
+      result = [{ docid: "#d4e5f6", file: `qmd://${join(dirname(process.cwd()), "outside.md")}`, line: 2, title: "Outside fixture note", score: 1 }];
     } else {
-      result = [{ uri: "qmd://fixture-qmd/documents/cad-notes.md:1", title: "CAD fixture note", score: 1 }];
+      result = [{ docid: "#a1b2c3", file: "qmd://fixture-qmd/documents/cad-notes.md", line: 1, title: "CAD fixture note", score: 1 }];
     }
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } else {
   if (hasMatch && serviceFolder.includes("embedded-uri")) {
-    process.stdout.write("Embedded provider location (qmd://external-collection/docs/provider-note.md:5).\n");
+    process.stdout.write("qmd://external-collection/docs/provider-note.md:5  #f6a7b8\nEmbedded provider location note.\n");
   } else {
-    process.stdout.write(hasMatch ? "CAD fixture note\nqmd://fixture-qmd/documents/cad-notes.md:1\n" : "");
+    process.stdout.write(hasMatch ? "qmd://fixture-qmd/documents/cad-notes.md:1  #a1b2c3\nCAD fixture note\n" : "");
   }
 }
 

@@ -4,17 +4,16 @@ import {
   existsSync,
   openSync,
   readFileSync,
-  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { isAbsolute, join, relative, resolve, win32 } from "node:path";
+import { join, resolve } from "node:path";
 import { createArtifactRun } from "../artifacts.ts";
 import { loadManifest, ManifestError } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { defaultQmdCommand, normalizeQmdReferenceForGet } from "./qmd.ts";
+import { defaultQmdCommand, isDocidBody, stripDocidHash } from "./qmd.ts";
 
 export interface SearchRequest {
   query: string;
@@ -255,7 +254,7 @@ interface QmdReferenceMapping {
   reference?: string;
   line?: number;
   status: "get_ready" | "provider_only";
-  get_adapter?: "file" | "qmd";
+  get_adapter?: "qmd";
   reason?: string;
 }
 
@@ -266,195 +265,89 @@ interface QmdReferenceSidecar {
   results: Array<QmdReferenceMapping & { index: number }>;
 }
 
-function splitQmdLocation(location: string): { target: string; line?: number } {
-  const match = /:(\d+)$/.exec(location);
-  if (!match) return { target: location };
-  return {
-    target: location.slice(0, -match[0].length),
-    line: Number(match[1]),
-  };
-}
-
-function normalizeReferencePath(path: string): string | undefined {
-  const segments = path.split(/[\\/]/);
-  if (
-    segments.length === 0
-    || segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
-  ) {
-    return undefined;
-  }
-  return segments.join("/");
-}
-
 function maybeLine(line: number | undefined): { line?: number } {
   return line ? { line } : {};
 }
 
-function mapExistingEndpointRelativePath(
-  endpointName: string,
-  serviceFolder: string,
-  providerLocation: string,
-  reference: string,
-  line?: number,
-  qmdFallbackReference?: string,
-): QmdReferenceMapping {
-  const normalized = normalizeReferencePath(reference);
-  if (!normalized) {
-    return {
-      provider_location: providerLocation,
-      endpoint: endpointName,
-      status: "provider_only",
-      reason: "provider location is not a valid endpoint-relative path",
-    };
-  }
-  try {
-    const serviceReal = realpathSync(serviceFolder);
-    const targetReal = realpathSync(resolve(join(serviceFolder, ...normalized.split("/"))));
-    const rel = relative(serviceReal, targetReal);
-    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-      return {
-        provider_location: providerLocation,
-        endpoint: endpointName,
-        status: "provider_only",
-        reason: "provider location resolves outside the endpoint folder",
-      };
-    }
-    return {
-      provider_location: providerLocation,
-      endpoint: endpointName,
-      reference: rel.split(/[\\/]/).join("/"),
-      ...maybeLine(line),
-      status: "get_ready",
-      get_adapter: "file",
-    };
-  } catch {
-    if (qmdFallbackReference) {
-      return {
-        provider_location: providerLocation,
-        endpoint: endpointName,
-        reference: normalizeQmdReferenceForGet(qmdFallbackReference),
-        ...maybeLine(line),
-        status: "get_ready",
-        get_adapter: "qmd",
-      };
-    }
-    return {
-      provider_location: providerLocation,
-      endpoint: endpointName,
-      status: "provider_only",
-      reason: "provider location cannot be resolved inside the endpoint folder",
-    };
-  }
+function docidOf(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null || !("docid" in result)) return undefined;
+  const docid = (result as { docid?: unknown }).docid;
+  if (typeof docid !== "string") return undefined;
+  const bare = stripDocidHash(docid);
+  return isDocidBody(bare) ? bare : undefined;
 }
 
-function mapQmdUri(
-  endpointName: string,
-  serviceFolder: string,
-  uri: string,
-  explicitLine?: number,
-): QmdReferenceMapping {
-  if (!uri.startsWith("qmd://")) {
-    return {
-      provider_location: uri,
-      endpoint: endpointName,
-      status: "provider_only",
-      reason: "provider location is not a qmd URI",
-    };
-  }
-
-  const { target, line } = splitQmdLocation(uri.slice("qmd://".length));
-  const resultLine = line ?? explicitLine;
-  const providerReference = `qmd://${target}`;
-  if (target.length === 0) {
-    return {
-      provider_location: uri,
-      endpoint: endpointName,
-      status: "provider_only",
-      reason: "provider qmd URI is empty",
-    };
-  }
-  if (win32.isAbsolute(target) || isAbsolute(target) || /^[A-Za-z]:[\\/]/.test(target)) {
-    try {
-      const serviceReal = realpathSync(serviceFolder);
-      const targetReal = realpathSync(target);
-      const rel = relative(serviceReal, targetReal);
-      if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-        return {
-          provider_location: uri,
-          endpoint: endpointName,
-          reference: normalizeQmdReferenceForGet(providerReference),
-          ...maybeLine(resultLine),
-          status: "get_ready",
-          get_adapter: "qmd",
-        };
-      }
-      return {
-        provider_location: uri,
-        endpoint: endpointName,
-        reference: rel.split(/[\\/]/).join("/"),
-        ...maybeLine(resultLine),
-        status: "get_ready",
-        get_adapter: "file",
-      };
-    } catch {
-      return {
-        provider_location: uri,
-        endpoint: endpointName,
-        reference: normalizeQmdReferenceForGet(providerReference),
-        ...maybeLine(resultLine),
-        status: "get_ready",
-        get_adapter: "qmd",
-      };
-    }
-  }
-
-  const [authority, ...referenceParts] = target.split(/[\\/]/);
-  if (authority !== endpointName) {
-    return {
-      provider_location: uri,
-      endpoint: endpointName,
-      reference: normalizeQmdReferenceForGet(providerReference),
-      ...maybeLine(resultLine),
-      status: "get_ready",
-      get_adapter: "qmd",
-    };
-  }
-  return mapExistingEndpointRelativePath(
-    endpointName,
-    serviceFolder,
-    uri,
-    referenceParts.join("/"),
-    resultLine,
-    providerReference,
-  );
+function lineOf(result: unknown): number | undefined {
+  if (typeof result !== "object" || result === null || !("line" in result)) return undefined;
+  const line = (result as { line?: unknown }).line;
+  return Number.isSafeInteger(line) && (line as number) > 0 ? (line as number) : undefined;
 }
 
-function extractQmdUrisFromText(output: string): string[] {
-  return (output.match(/qmd:\/\/\S+/g) ?? []).map((uri) => uri.replace(/[),.;!?]+$/, ""));
+function providerLocationOf(result: unknown): string {
+  if (typeof result !== "object" || result === null) return "";
+  const record = result as { uri?: unknown; file?: unknown };
+  if (typeof record.uri === "string") return record.uri;
+  if (typeof record.file === "string") return record.file;
+  return "";
+}
+
+/**
+ * Map one QMD search result to a UKP get-ready reference (ADR 0011).
+ *
+ * QMD-indexed results carry a stable `docid` content fingerprint. `search`
+ * emits it as a bare handoff key (`#` stripped), not the weak `qmd://`/path
+ * name; `get` re-adds the `#` and resolves by fingerprint exactly. Name, title,
+ * and path become display-only provenance (`provider_location`). A result with
+ * no usable docid has no UKP get route and is `provider_only`.
+ */
+function mapQmdResultToReference(endpointName: string, result: unknown): QmdReferenceMapping {
+  const providerLocation = providerLocationOf(result);
+  const docid = docidOf(result);
+  if (!docid) {
+    return {
+      provider_location: providerLocation,
+      endpoint: endpointName,
+      status: "provider_only",
+      reason: "qmd result has no usable docid",
+    };
+  }
+  return {
+    provider_location: providerLocation,
+    endpoint: endpointName,
+    reference: docid,
+    ...maybeLine(lineOf(result)),
+    status: "get_ready",
+    get_adapter: "qmd",
+  };
+}
+
+function extractQmdDocidsFromText(output: string): Array<{ docid: string; line?: number }> {
+  const found: Array<{ docid: string; line?: number }> = [];
+  for (const line of output.split(/\r?\n/)) {
+    const docid = /#([a-f0-9]{6})/.exec(line);
+    if (!docid) continue;
+    const lineHit = /:(\d+)\s+#[a-f0-9]{6}/.exec(line);
+    found.push({
+      docid: docid[1],
+      line: lineHit ? Number(lineHit[1]) : undefined,
+    });
+  }
+  return found;
 }
 
 function renderHumanProviderOutput(providerOutput: string, endpoint: PlannedEndpoint): string {
   const lines = [providerOutput];
   const seen = new Set<string>();
-  for (const uri of extractQmdUrisFromText(providerOutput)) {
-    if (seen.has(uri)) continue;
-    seen.add(uri);
-    const mapping = mapQmdUri(endpoint.name, endpoint.folder!, uri);
-    if (mapping.status === "get_ready") {
-      const lineHint = mapping.line ? ` --lines ${mapping.line}` : "";
-      lines.push(`UKP reference: ukp get --endpoint ${endpoint.name} ${mapping.reference}${lineHint}`);
-    } else {
-      lines.push(`Provider-only location: ${uri}`);
-    }
+  for (const { docid, line } of extractQmdDocidsFromText(providerOutput)) {
+    if (seen.has(docid)) continue;
+    seen.add(docid);
+    const lineHint = line ? ` --lines ${line}` : "";
+    lines.push(`UKP reference: ukp get --endpoint ${endpoint.name} ${docid}${lineHint}`);
   }
   return lines.join("\n");
 }
 
-function buildQmdReferenceSidecar(
-  endpointName: string,
-  serviceFolder: string,
-  sourceArtifact: string,
-): QmdReferenceSidecar {
+function buildQmdReferenceSidecar(endpointName: string, sourceArtifact: string): QmdReferenceSidecar {
   if (statSync(sourceArtifact).size > 1024 * 1024) {
     return {
       schema: "ukp.search.references.v1",
@@ -471,33 +364,19 @@ function buildQmdReferenceSidecar(
     schema: "ukp.search.references.v1",
     endpoint: endpointName,
     source_artifact: sourceArtifact,
-    results: nativeResults
-      .map((result, index) => {
-        const uri = result && typeof result === "object" && "uri" in result ? result.uri : undefined;
-        const file = result && typeof result === "object" && "file" in result ? result.file : undefined;
-        const line = result && typeof result === "object" && "line" in result ? result.line : undefined;
-        const providerLocation = typeof uri === "string" ? uri : typeof file === "string" ? file : undefined;
-        const explicitLine = Number.isSafeInteger(line) && line > 0 ? line : undefined;
-        const mapping = typeof providerLocation === "string"
-          ? mapQmdUri(endpointName, serviceFolder, providerLocation, explicitLine)
-          : {
-            provider_location: "",
-            endpoint: endpointName,
-            status: "provider_only" as const,
-            reason: "qmd result does not contain a string uri or file",
-          };
-        return { index, ...mapping };
-      }),
+    results: nativeResults.map((result, index) => ({
+      index,
+      ...mapQmdResultToReference(endpointName, result),
+    })),
   };
 }
 
 function writeQmdReferenceSidecar(
   endpointName: string,
-  serviceFolder: string,
   sourceArtifact: string,
   sidecarPath: string,
 ): void {
-  const sidecar = buildQmdReferenceSidecar(endpointName, serviceFolder, sourceArtifact);
+  const sidecar = buildQmdReferenceSidecar(endpointName, sourceArtifact);
   writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
@@ -611,7 +490,7 @@ function executeJsonMode(
       succeeded = true;
       let hasReferenceSidecar = false;
       try {
-        writeQmdReferenceSidecar(endpoint.name, endpoint.folder!, artifact, referencesArtifact);
+        writeQmdReferenceSidecar(endpoint.name, artifact, referencesArtifact);
         hasReferenceSidecar = true;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);

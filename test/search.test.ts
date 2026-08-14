@@ -10,7 +10,6 @@ import {
 import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import { executeHumanSearch } from "../src/capabilities/search.ts";
-import { normalizeQmdReferenceForGet } from "../src/capabilities/qmd.ts";
 import { executeGetCommand } from "../src/commands/get.ts";
 import { parseSearchArgs } from "../src/commands/search.ts";
 import { registerAt } from "../src/registry.ts";
@@ -96,7 +95,7 @@ describe("search", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("== fixture-qmd (search/qmd) ==");
       expect(result.stdout).toContain("CAD fixture note");
-      expect(result.stdout).toContain("UKP reference: ukp get --endpoint fixture-qmd documents/cad-notes.md --lines 1");
+      expect(result.stdout).toContain("UKP reference: ukp get --endpoint fixture-qmd a1b2c3 --lines 1");
       const invocation = JSON.parse(readFileSync(invocationPath, "utf8"));
       expect(invocation.cwd).toBe(fixture);
       expect(invocation.query).toBe("fixture-cad-search-token");
@@ -366,7 +365,7 @@ describe("search", () => {
       expect(successReferences.results[0]).toMatchObject({
         index: 0,
         endpoint: "success",
-        reference: "qmd://fixture-qmd/documents/cad-notes.md",
+        reference: "a1b2c3",
         line: 1,
         status: "get_ready",
         get_adapter: "qmd",
@@ -425,21 +424,21 @@ describe("search", () => {
       );
       expect(references[0]).toMatchObject({
         endpoint: "collection-shaped",
-        reference: "docs/collection-note.md",
+        reference: "b2c3d4",
         line: 3,
         status: "get_ready",
-        get_adapter: "file",
+        get_adapter: "qmd",
       });
       expect(references[1]).toMatchObject({
         endpoint: "path-shaped",
-        reference: "docs/path-note.md",
+        reference: "c3d4e5",
         line: 7,
         status: "get_ready",
-        get_adapter: "file",
+        get_adapter: "qmd",
       });
       expect(references[2]).toMatchObject({
         endpoint: "outside-result",
-        reference: normalizeQmdReferenceForGet(`qmd://${join(root, "outside.md")}`),
+        reference: "d4e5f6",
         line: 2,
         status: "get_ready",
         get_adapter: "qmd",
@@ -447,7 +446,7 @@ describe("search", () => {
       expect(references[2]).not.toHaveProperty("reason");
       expect(references[3]).toMatchObject({
         endpoint: "same-authority-external",
-        reference: "qmd://same-authority-external/docs/external-note.md",
+        reference: "e5f6a7",
         line: 4,
         status: "get_ready",
         get_adapter: "qmd",
@@ -458,8 +457,8 @@ describe("search", () => {
     }
   }, 15_000);
 
-  test("prints get-ready QMD provider references in human output without trailing punctuation", () => {
-    const root = mkdtempSync(join(tmpdir(), "ukp-search-human-provider-only-"));
+  test("prints get-ready docid handoff in human output", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-human-docid-"));
     const registryPath = join(root, "registry.toml");
     const embedded = createService(root, "embedded-uri", "embedded-uri");
     registerAt(registryPath, "embedded-uri", embedded);
@@ -474,22 +473,19 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Embedded provider location (qmd://external-collection/docs/provider-note.md:5).");
-      expect(result.stdout).toContain(
-        "UKP reference: ukp get --endpoint embedded-uri qmd://external-collection/docs/provider-note.md --lines 5",
-      );
-      expect(result.stdout).not.toContain("Provider-only location: qmd://external-collection/docs/provider-note.md:5).");
+      expect(result.stdout).toContain("qmd://external-collection/docs/provider-note.md:5  #f6a7b8");
+      expect(result.stdout).toContain("UKP reference: ukp get --endpoint embedded-uri f6a7b8 --lines 5");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }, 15_000);
 
-  test("path-shaped qmd:// search reference round-trips through ukp get", () => {
+  test("qmd search reference round-trips through ukp get by docid", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-roundtrip-"));
     const registryPath = join(root, "registry.toml");
     const artifactRoot = join(root, "artifacts");
-    // "outside-result" makes the fixture emit a path-shaped qmd:// URI pointing
-    // outside the Service folder (the ISSUE-008 scenario).
+    // "outside-result" makes the fixture emit a path-shaped qmd:// provenance URI
+    // pointing outside the Service folder; the handoff key is the docid (ADR 0011).
     const service = createService(root, "outside-result", "outside-result");
     writeFileSync(join(root, "outside.md"), "# Outside note\n\nBody from a path-shaped collection.\n", "utf8");
     registerAt(registryPath, "outside-result", service);
@@ -512,14 +508,14 @@ describe("search", () => {
       const mapping = sidecar.results[0];
       expect(mapping.status).toBe("get_ready");
       expect(mapping.get_adapter).toBe("qmd");
-      // The emitted reference must be a bare relative reference (not a verbatim
-      // path-shaped qmd:// URI): scheme stripped, no drive/anchor, forward slashes.
-      expect(mapping.reference.startsWith("qmd://")).toBe(false);
-      expect(isAbsolute(mapping.reference)).toBe(false);
-      expect(mapping.reference).not.toMatch(/^[A-Za-z]:/);
-      expect(mapping.reference).toContain("outside.md");
+      // The handoff key is a bare 6-hex docid, not a verbatim path-shaped qmd://
+      // URI: no scheme, no drive/anchor, no leading `#`.
+      expect(mapping.reference).toBe("d4e5f6");
+      expect(mapping.reference).toMatch(/^[a-f0-9]{6}$/);
+      // The path-shaped URI survives as display-only provenance.
+      expect(mapping.provider_location.startsWith("qmd://")).toBe(true);
 
-      // The self-contained hint — `ukp get --endpoint <name> <reference> --lines <line>`
+      // The self-contained hint — `ukp get --endpoint <name> <docid> --lines <line>`
       // copied verbatim from search — must execute successfully.
       const getResult = executeGetCommand([
         "--endpoint",
