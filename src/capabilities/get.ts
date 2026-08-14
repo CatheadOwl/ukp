@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { defaultQmdCommand, stripQmdHeader } from "./qmd.ts";
+import { defaultQmdCommand, normalizeQmdReferenceForGet, stripQmdHeader } from "./qmd.ts";
 
 export interface GetRequest {
   endpoint: string;
@@ -228,7 +228,11 @@ function readViaQmd(
   const command = [
     ...qmdCommand,
     "get",
-    qmdGetReference(request.path, request.lines),
+    // The shared producer/consumer contract: normalize path-shaped qmd:// URIs
+    // to the bare relative form QMD can weak-match, leaving named-collection
+    // URIs unchanged. This keeps search's emitted hint and get's forwarded
+    // reference in agreement even when a raw path-shaped URI is pasted.
+    qmdGetReference(normalizeQmdReferenceForGet(request.path), request.lines),
     "--no-line-numbers",
   ];
   const result = spawnSync(command[0]!, command.slice(1), {

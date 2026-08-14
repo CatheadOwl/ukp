@@ -6,6 +6,37 @@
  * output discipline. These helpers are the single place for that plumbing.
  */
 
+import { isAbsolute, win32 } from "node:path";
+
+/**
+ * Normalize a `qmd://` reference to the exact form `ukp get` forwards to QMD.
+ *
+ * This is the shared producer/consumer resolvability contract between `search`
+ * (which emits a `UKP reference:` get hint) and `get` (which reads it). QMD
+ * resolves a `qmd://<collection-name>/<rel>` URI verbatim (named collection)
+ * and a bare relative reference / path suffix via weak reference matching. It
+ * does NOT resolve a path-shaped `qmd://<absolute-path>/<rel>` URI — that shape
+ * returns "Document not found". `ukp get` also rejects absolute references
+ * before they reach QMD. So the contract normalizes path-shaped URIs to the
+ * bare relative form QMD can weak-match (scheme stripped, drive/anchor
+ * stripped, forward slashes) and leaves named-collection URIs unchanged. Both
+ * sides applying the same function guarantees the emitted hint and the executed
+ * read always agree.
+ */
+export function normalizeQmdReferenceForGet(reference: string): string {
+  if (!reference.startsWith("qmd://")) return reference;
+  const target = reference.slice("qmd://".length);
+  if (!isQmdPathShapedTarget(target)) return reference;
+  return target
+    .replace(/^[A-Za-z]:/, "")
+    .replace(/^[/\\]+/, "")
+    .replace(/\\/g, "/");
+}
+
+function isQmdPathShapedTarget(target: string): boolean {
+  return win32.isAbsolute(target) || isAbsolute(target) || /^[A-Za-z]:[\\/]/.test(target);
+}
+
 export function defaultQmdCommand(): string[] | undefined {
   const executable = Bun.which("qmd") ?? Bun.which("qmd.ps1") ?? Bun.which("qmd.cmd");
   if (!executable) return undefined;
