@@ -109,7 +109,7 @@ if (isRefresh) {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } else {
   if (hasMatch && serviceFolder.includes("embedded-uri")) {
-    process.stdout.write("qmd://external-collection/docs/provider-note.md:5  #f6a7b8\nEmbedded provider location note.\n");
+    process.stdout.write("qmd://external-collection/docs/provider-note.md:5  #f6a7b8\nEmbedded provider location note.\nAccent color #ff0000.\n");
   } else {
     process.stdout.write(hasMatch ? "qmd://fixture-qmd/documents/cad-notes.md:1  #a1b2c3\nCAD fixture note\n" : "");
   }
