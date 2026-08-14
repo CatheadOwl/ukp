@@ -10,6 +10,8 @@ import {
 import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import { executeHumanSearch } from "../src/capabilities/search.ts";
+import { normalizeQmdReferenceForGet } from "../src/capabilities/qmd.ts";
+import { executeGetCommand } from "../src/commands/get.ts";
 import { parseSearchArgs } from "../src/commands/search.ts";
 import { registerAt } from "../src/registry.ts";
 
@@ -437,7 +439,7 @@ describe("search", () => {
       });
       expect(references[2]).toMatchObject({
         endpoint: "outside-result",
-        reference: `qmd://${join(root, "outside.md")}`,
+        reference: normalizeQmdReferenceForGet(`qmd://${join(root, "outside.md")}`),
         line: 2,
         status: "get_ready",
         get_adapter: "qmd",
@@ -477,6 +479,62 @@ describe("search", () => {
         "UKP reference: ukp get --endpoint embedded-uri qmd://external-collection/docs/provider-note.md --lines 5",
       );
       expect(result.stdout).not.toContain("Provider-only location: qmd://external-collection/docs/provider-note.md:5).");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("path-shaped qmd:// search reference round-trips through ukp get", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-roundtrip-"));
+    const registryPath = join(root, "registry.toml");
+    const artifactRoot = join(root, "artifacts");
+    // "outside-result" makes the fixture emit a path-shaped qmd:// URI pointing
+    // outside the Service folder (the ISSUE-008 scenario).
+    const service = createService(root, "outside-result", "outside-result");
+    writeFileSync(join(root, "outside.md"), "# Outside note\n\nBody from a path-shaped collection.\n", "utf8");
+    registerAt(registryPath, "outside-result", service);
+    try {
+      const searchResult = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--json",
+        "--endpoint",
+        "outside-result",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+        artifactRoot,
+        artifactRunId: "roundtrip-run",
+      });
+      expect(searchResult.exitCode).toBe(0);
+      const envelope = JSON.parse(searchResult.stdout);
+      const sidecar = JSON.parse(readFileSync(envelope.endpoints[0].references_artifact, "utf8"));
+      const mapping = sidecar.results[0];
+      expect(mapping.status).toBe("get_ready");
+      expect(mapping.get_adapter).toBe("qmd");
+      // The emitted reference must be a bare relative reference (not a verbatim
+      // path-shaped qmd:// URI): scheme stripped, no drive/anchor, forward slashes.
+      expect(mapping.reference.startsWith("qmd://")).toBe(false);
+      expect(isAbsolute(mapping.reference)).toBe(false);
+      expect(mapping.reference).not.toMatch(/^[A-Za-z]:/);
+      expect(mapping.reference).toContain("outside.md");
+
+      // The self-contained hint — `ukp get --endpoint <name> <reference> --lines <line>`
+      // copied verbatim from search — must execute successfully.
+      const getResult = executeGetCommand([
+        "--endpoint",
+        "outside-result",
+        mapping.reference,
+        "--lines",
+        String(mapping.line),
+      ], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(getResult.exitCode).toBe(0);
+      expect(getResult.stdout.length).toBeGreaterThan(0);
+      expect(getResult.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

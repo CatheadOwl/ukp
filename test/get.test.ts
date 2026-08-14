@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { executeGetCommand, parseGetArgs } from "../src/commands/get.ts";
 import { registerAt } from "../src/registry.ts";
-import { stripQmdHeader } from "../src/capabilities/qmd.ts";
+import { normalizeQmdReferenceForGet, stripQmdHeader } from "../src/capabilities/qmd.ts";
 
 const qmdFixture = join(import.meta.dir, "fixtures", "qmd-provider");
 const qmdFixtureExecutable = join(qmdFixture, "qmd-fixture.mjs");
@@ -741,5 +741,32 @@ describe("stripQmdHeader", () => {
     expect(stripQmdHeader("qmd://coll/doc.md  #ab\r\nFolder Context: x\r\n---\r\n\r\n# Body\r\n\r\nText.\r\n")).toBe(
       "# Body\n\nText.\n",
     );
+  });
+});
+
+describe("normalizeQmdReferenceForGet", () => {
+  test("leaves a named-collection qmd:// URI verbatim", () => {
+    expect(normalizeQmdReferenceForGet("qmd://openai-agents/running-agents.md")).toBe(
+      "qmd://openai-agents/running-agents.md",
+    );
+  });
+
+  test("leaves a bare relative reference verbatim", () => {
+    expect(normalizeQmdReferenceForGet("running_agents.md")).toBe("running_agents.md");
+    expect(normalizeQmdReferenceForGet("docs/sub/note.md")).toBe("docs/sub/note.md");
+  });
+
+  test("strips scheme, drive, and anchor from a path-shaped Windows qmd:// URI", () => {
+    expect(normalizeQmdReferenceForGet("qmd://D:\\Document\\KB\\sources\\memory.md")).toBe(
+      "Document/KB/sources/memory.md",
+    );
+  });
+
+  test("strips scheme and leading slash from a path-shaped POSIX qmd:// URI", () => {
+    expect(normalizeQmdReferenceForGet("qmd:///abs/sources/memory.md")).toBe("abs/sources/memory.md");
+  });
+
+  test("preserves a trailing line suffix on a path-shaped URI", () => {
+    expect(normalizeQmdReferenceForGet("qmd://D:\\KB\\docs\\memory.md:342")).toBe("KB/docs/memory.md:342");
   });
 });

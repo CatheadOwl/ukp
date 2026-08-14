@@ -14,7 +14,7 @@ import { createArtifactRun } from "../artifacts.ts";
 import { loadManifest, ManifestError } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { defaultQmdCommand } from "./qmd.ts";
+import { defaultQmdCommand, normalizeQmdReferenceForGet } from "./qmd.ts";
 
 export interface SearchRequest {
   query: string;
@@ -332,7 +332,7 @@ function mapExistingEndpointRelativePath(
       return {
         provider_location: providerLocation,
         endpoint: endpointName,
-        reference: qmdFallbackReference,
+        reference: normalizeQmdReferenceForGet(qmdFallbackReference),
         ...maybeLine(line),
         status: "get_ready",
         get_adapter: "qmd",
@@ -382,7 +382,7 @@ function mapQmdUri(
         return {
           provider_location: uri,
           endpoint: endpointName,
-          reference: providerReference,
+          reference: normalizeQmdReferenceForGet(providerReference),
           ...maybeLine(resultLine),
           status: "get_ready",
           get_adapter: "qmd",
@@ -400,7 +400,7 @@ function mapQmdUri(
       return {
         provider_location: uri,
         endpoint: endpointName,
-        reference: providerReference,
+        reference: normalizeQmdReferenceForGet(providerReference),
         ...maybeLine(resultLine),
         status: "get_ready",
         get_adapter: "qmd",
@@ -413,7 +413,7 @@ function mapQmdUri(
     return {
       provider_location: uri,
       endpoint: endpointName,
-      reference: providerReference,
+      reference: normalizeQmdReferenceForGet(providerReference),
       ...maybeLine(resultLine),
       status: "get_ready",
       get_adapter: "qmd",
