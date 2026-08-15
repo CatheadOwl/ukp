@@ -93,11 +93,14 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("== fixture-qmd (search/qmd) ==");
-      expect(result.stdout).toContain("1. CAD fixture note   qmd://fixture-qmd/documents/cad-notes.md:1   a1b2c3");
+      expect(result.stdout).toContain("== fixture-qmd ==");
+      expect(result.stdout).toContain("1. CAD fixture note — cad-notes.md:1");
       expect(result.stdout).toContain("   CAD fixture note content.");
-      expect(result.stdout).toContain("   get: ukp get --endpoint fixture-qmd a1b2c3 --lines 1");
+      expect(result.stdout).toContain("   get: ukp get --endpoint fixture-qmd a1b2c3:1");
       expect(result.stdout).not.toContain("UKP reference:");
+      expect(result.stdout).not.toContain("qmd://");
+      expect(result.stdout).not.toContain("(search/qmd)");
+      expect(result.stdout).not.toContain("--lines");
       const invocation = JSON.parse(readFileSync(invocationPath, "utf8"));
       expect(invocation.cwd).toBe(fixture);
       expect(invocation.query).toBe("fixture-cad-search-token");
@@ -212,7 +215,7 @@ describe("search", () => {
       expect(result.stderr).toContain("endpoint 'stale' is not accessible");
       expect(result.stderr).toContain("Service folder is not accessible");
       expect(result.stderr).toContain("ukp inspect --endpoint stale");
-      expect(result.stdout).toContain("== valid (search/qmd) ==");
+      expect(result.stdout).toContain("== valid ==");
       expect(invocationCount(valid)).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -287,7 +290,7 @@ describe("search", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toContain("Service Manifest is not readable");
       expect(result.stderr).toContain("ukp inspect --endpoint stale");
-      expect(result.stdout).toContain("== valid (search/qmd) ==");
+      expect(result.stdout).toContain("== valid ==");
       expect(invocationCount(valid)).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -315,7 +318,7 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("fixture provider failure");
-      expect(result.stdout).toContain("== later (search/qmd) ==");
+      expect(result.stdout).toContain("== later ==");
       expect(invocationCount(failing)).toBe(1);
       expect(invocationCount(valid)).toBe(1);
     } finally {
@@ -522,8 +525,8 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("1. Embedded provider location note   qmd://external-collection/docs/provider-note.md:5   f6a7b8");
-      expect(result.stdout).toContain("   get: ukp get --endpoint embedded-uri f6a7b8 --lines 5");
+      expect(result.stdout).toContain("1. Embedded provider location note — provider-note.md:5");
+      expect(result.stdout).toContain("   get: ukp get --endpoint embedded-uri f6a7b8:5");
       // A 6-hex token in body content (e.g. a color code) is not a docid and
       // must not become the handoff key or a get hint.
       expect(result.stdout).toContain("Accent color #ff0000.");
@@ -549,12 +552,12 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("== multi-result (search/qmd) ==");
-      expect(result.stdout).toContain("1. CAD fixture note   qmd://fixture-qmd/documents/cad-notes.md:1   a1b2c3");
+      expect(result.stdout).toContain("== multi-result ==");
+      expect(result.stdout).toContain("1. CAD fixture note — cad-notes.md:1");
       expect(result.stdout).toContain("   CAD fixture note content.");
-      expect(result.stdout).toContain("   get: ukp get --endpoint multi-result a1b2c3 --lines 1");
-      expect(result.stdout).toContain("2. Collection-shaped fixture note   qmd://collection-shaped/docs/collection-note.md:3   b2c3d4");
-      expect(result.stdout).toContain("   get: ukp get --endpoint multi-result b2c3d4 --lines 3");
+      expect(result.stdout).toContain("   get: ukp get --endpoint multi-result a1b2c3:1");
+      expect(result.stdout).toContain("2. Collection-shaped fixture note — collection-note.md:3");
+      expect(result.stdout).toContain("   get: ukp get --endpoint multi-result b2c3d4:3");
       expect(result.stdout).not.toContain("UKP reference:");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -577,9 +580,35 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("1. No-line fixture note   qmd://fixture-qmd/documents/no-line.md   c1d2e3");
+      expect(result.stdout).toContain("1. No-line fixture note — no-line.md");
       expect(result.stdout).toContain("   get: ukp get --endpoint no-line c1d2e3");
       expect(result.stdout).not.toContain("--lines");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("renders basename:line as the identity when a result has no title", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-no-title-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "no-title-service", "no-title");
+    registerAt(registryPath, "no-title", service);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "no-title",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("1. no-title.md:2");
+      expect(result.stdout).toContain("   No-title fixture content.");
+      expect(result.stdout).toContain("   get: ukp get --endpoint no-title e6f7a8:2");
+      // No title means no ` — ` separator — the identity is just `basename:line`.
+      expect(result.stdout).not.toContain(" — ");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -601,7 +630,9 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("1. No-docid fixture note   qmd://fixture-qmd/documents/no-docid.md:3   (provider_only: qmd result has no usable docid)");
+      expect(result.stdout).toContain("1. No-docid fixture note — no-docid.md:3");
+      expect(result.stdout).toContain("   No-docid fixture content cannot form a get route.");
+      expect(result.stdout).toContain("   (no direct read — provider-managed result)");
       expect(result.stdout).not.toContain("get: ukp get");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -624,8 +655,8 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("1. Banner fixture note   qmd://fixture-qmd/documents/banner.md:1   d2e3f4");
-      expect(result.stdout).toContain("   get: ukp get --endpoint banner d2e3f4 --lines 1");
+      expect(result.stdout).toContain("1. Banner fixture note — banner.md:1");
+      expect(result.stdout).toContain("   get: ukp get --endpoint banner d2e3f4:1");
       expect(result.stdout).not.toContain("---");
       expect(result.stdout).not.toContain("Banner body text.");
     } finally {
@@ -649,7 +680,7 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("== no-json (search/qmd) ==");
+      expect(result.stdout).toContain("== no-json ==");
       expect(result.stdout).toContain("qmd://fixture-qmd/documents/cad-notes.md:1  #a1b2c3");
       expect(result.stdout).toContain("CAD fixture note");
       expect(result.stdout).toContain("UKP reference: ukp get --endpoint no-json a1b2c3 --lines 1");
@@ -678,11 +709,11 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout.indexOf("== path-shaped (search/qmd) ==")).toBeLessThan(
-        result.stdout.indexOf("== collection-shaped (search/qmd) =="),
+      expect(result.stdout.indexOf("== path-shaped ==")).toBeLessThan(
+        result.stdout.indexOf("== collection-shaped =="),
       );
-      expect(result.stdout).toContain("   get: ukp get --endpoint path-shaped c3d4e5 --lines 7");
-      expect(result.stdout).toContain("   get: ukp get --endpoint collection-shaped b2c3d4 --lines 3");
+      expect(result.stdout).toContain("   get: ukp get --endpoint path-shaped c3d4e5:7");
+      expect(result.stdout).toContain("   get: ukp get --endpoint collection-shaped b2c3d4:3");
       expect(result.stdout).not.toContain("UKP reference:");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -724,14 +755,12 @@ describe("search", () => {
       // The path-shaped URI survives as display-only provenance.
       expect(mapping.provider_location.startsWith("qmd://")).toBe(true);
 
-      // The self-contained hint — `ukp get --endpoint <name> <docid> --lines <line>`
+      // The self-contained hint — `ukp get --endpoint <name> <docid>:<line>`
       // copied verbatim from search — must execute successfully.
       const getResult = executeGetCommand([
         "--endpoint",
         "outside-result",
-        mapping.reference,
-        "--lines",
-        String(mapping.line),
+        `${mapping.reference}:${mapping.line}`,
       ], {
         currentDirectory: root,
         registryPath,

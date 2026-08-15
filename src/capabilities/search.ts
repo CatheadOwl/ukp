@@ -212,7 +212,7 @@ function executeHumanMode(
   const output: string[] = [];
   let failed = false;
   for (const endpoint of executable) {
-    output.push(`== ${endpoint.name} (search/qmd) ==`);
+    output.push(`== ${endpoint.name} ==`);
     const command = commandFor(endpoint, parsed, true);
     const result = spawnSync(command[0]!, command.slice(1), {
       cwd: endpoint.folder!,
@@ -336,14 +336,15 @@ function mapQmdResultToReference(endpointName: string, result: unknown): QmdRefe
   };
 }
 
-function titleOf(result: unknown): string {
+function rawTitleOf(result: unknown): string {
   if (typeof result !== "object" || result === null) return "";
   const title = (result as { title?: unknown }).title;
-  if (typeof title === "string" && title.trim() !== "") return title;
-  const providerLocation = providerLocationOf(result);
-  if (!providerLocation) return "";
-  const base = providerLocation.split(/[\\/]/).filter(Boolean).pop();
-  return base ?? providerLocation;
+  return typeof title === "string" && title.trim() !== "" ? title : "";
+}
+
+function basenameOf(location: string): string {
+  if (!location) return "";
+  return location.split(/[\\/]/).filter(Boolean).pop() ?? location;
 }
 
 function snippetOf(result: unknown): string | undefined {
@@ -368,32 +369,36 @@ function isFileHeadBanner(snippet: string, line: number | undefined): boolean {
 /**
  * Render one structured QMD result as a result unit (spec "Result Unit 字段映射").
  *
- * The identity is the `title` (falling back to the provider-location basename).
- * The bare docid is the ADR 0011 handoff key; `file`/`line` are display-only
- * provenance and the copyable `get` line always addresses the bare docid. A
- * result with no usable docid is marked `provider_only` with a reason and emits
- * no get hint.
+ * A result unit answers three reader questions: what it is (`title — basename:line`),
+ * why it matches (excerpt), and how to read it (a copyable `get` line addressing
+ * the ADR 0011 handoff key `docid[:line]`). Provider vocabulary never reaches the
+ * default Human surface: the docid appears only inside the `get` command, and
+ * location provenance is reduced to a human-readable basename (the raw `qmd://`
+ * stays in the `--json` reference sidecar). A result with no usable docid has no
+ * get route and says so in plain words.
  */
 function renderResultUnit(unitIndex: number, endpointName: string, result: unknown): string {
   const providerLocation = providerLocationOf(result);
   const docid = docidOf(result);
   const line = lineOf(result);
-  const title = titleOf(result);
-  const location = providerLocation
-    ? (line ? `${providerLocation}:${line}` : providerLocation)
-    : (line ? `line ${line}` : "");
-  const identity = title || providerLocation;
+  const title = rawTitleOf(result);
+  const base = basenameOf(providerLocation);
+  const location = base ? (line ? `${base}:${line}` : base) : "";
+  const identity = title
+    ? (location ? `${title} — ${location}` : title)
+    : (location || "");
 
   const snippet = snippetOf(result);
-  const excerpt = snippet && !isFileHeadBanner(snippet, line) ? snippet : title || "";
+  const fallback = title || base;
+  const excerpt = snippet && !isFileHeadBanner(snippet, line) ? snippet : fallback;
 
-  const lines = docid
-    ? [`${unitIndex}. ${identity}   ${location}   ${docid}`]
-    : [`${unitIndex}. ${identity}   ${location}   (provider_only: qmd result has no usable docid)`];
-  if (excerpt && excerpt !== identity) lines.push(`   ${excerpt.replace(/\n/g, "\n   ")}`);
+  const lines = [`${unitIndex}. ${identity}`];
+  if (excerpt && excerpt !== fallback) lines.push(`   ${excerpt.replace(/\n/g, "\n   ")}`);
   if (docid) {
-    const lineHint = line ? ` --lines ${line}` : "";
-    lines.push(`   get: ukp get --endpoint ${endpointName} ${docid}${lineHint}`);
+    const key = line ? `${docid}:${line}` : docid;
+    lines.push(`   get: ukp get --endpoint ${endpointName} ${key}`);
+  } else {
+    lines.push(`   (no direct read — provider-managed result)`);
   }
   return lines.join("\n");
 }
