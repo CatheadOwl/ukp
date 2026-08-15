@@ -556,6 +556,9 @@ describe("search", () => {
       expect(result.stdout).toContain("1. CAD fixture note — cad-notes.md:1");
       expect(result.stdout).toContain("   CAD fixture note content.");
       expect(result.stdout).toContain("   get: ukp get --endpoint multi-result a1b2c3:1");
+      // Result units within one endpoint are separated by a blank line: the get
+      // line of unit 1 is directly followed by an empty line before the `2.` unit.
+      expect(result.stdout).toContain("a1b2c3:1\n\n2. Collection-shaped fixture note — collection-note.md:3");
       expect(result.stdout).toContain("2. Collection-shaped fixture note — collection-note.md:3");
       expect(result.stdout).toContain("   get: ukp get --endpoint multi-result b2c3d4:3");
       expect(result.stdout).not.toContain("UKP reference:");
@@ -712,6 +715,10 @@ describe("search", () => {
       expect(result.stdout.indexOf("== path-shaped ==")).toBeLessThan(
         result.stdout.indexOf("== collection-shaped =="),
       );
+      // Endpoint blocks are separated by a blank line: the last unit of the
+      // first block is directly followed by an empty line before the second
+      // `== <name> ==` header.
+      expect(result.stdout).toContain("c3d4e5:7\n\n== collection-shaped ==");
       expect(result.stdout).toContain("   get: ukp get --endpoint path-shaped c3d4e5:7");
       expect(result.stdout).toContain("   get: ukp get --endpoint collection-shaped b2c3d4:3");
       expect(result.stdout).not.toContain("UKP reference:");
