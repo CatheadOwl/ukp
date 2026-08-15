@@ -144,8 +144,8 @@ export function renderSearchHelp(): string {
     "  --endpoint <name> requests that Service's search capability. The result",
     "  range is decided by the Service's provider configuration and may include",
     "  shared collections; results are not guaranteed to be the endpoint's own",
-    "  content. '== <name> (provider) ==' reports which Service was asked and",
-    "  which provider answered, not content ownership.",
+    "  content. '== <name> ==' reports which Service was asked, not content",
+    "  ownership.",
     "",
   ].join("\n");
 }
