@@ -212,6 +212,7 @@ function executeHumanMode(
   const output: string[] = [];
   let failed = false;
   for (const endpoint of executable) {
+    if (output.length > 0) output.push("");
     output.push(`== ${endpoint.name} ==`);
     const command = commandFor(endpoint, parsed, true);
     const result = spawnSync(command[0]!, command.slice(1), {
@@ -408,7 +409,8 @@ function renderResultUnit(unitIndex: number, endpointName: string, result: unkno
  *
  * Returns `null` when the provider stdout is not a JSON array (or cannot be
  * parsed), so the caller falls back to the appended raw-provider format. An
- * empty array renders `(no matches)`.
+ * empty array renders `(no matches)`. Units are separated by a blank line so
+ * each `N.` block reads as one self-contained chunk even with multi-line excerpts.
  */
 function renderResultUnits(providerOutput: string, endpointName: string): string | null {
   let nativeResults: unknown;
@@ -421,7 +423,7 @@ function renderResultUnits(providerOutput: string, endpointName: string): string
   if (nativeResults.length === 0) return "(no matches)";
   return nativeResults
     .map((result, index) => renderResultUnit(index + 1, endpointName, result))
-    .join("\n");
+    .join("\n\n");
 }
 
 /**
