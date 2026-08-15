@@ -108,6 +108,8 @@ if (isRefresh) {
       result = [{ docid: "#c1d2e3", file: "qmd://fixture-qmd/documents/no-line.md", title: "No-line fixture note", score: 1, snippet: "No-line fixture content without a line hint." }];
     } else if (serviceFolder.includes("no-docid")) {
       result = [{ file: "qmd://fixture-qmd/documents/no-docid.md", line: 3, title: "No-docid fixture note", score: 1, snippet: "No-docid fixture content cannot form a get route." }];
+    } else if (serviceFolder.includes("no-title")) {
+      result = [{ docid: "#e6f7a8", file: "qmd://fixture-qmd/documents/no-title.md", line: 2, score: 1, snippet: "No-title fixture content." }];
     } else if (serviceFolder.includes("banner")) {
       result = [{ docid: "#d2e3f4", file: "qmd://fixture-qmd/documents/banner.md", line: 1, title: "Banner fixture note", score: 1, snippet: "---\ntitle: Banner fixture\n---\nBanner body text." }];
     } else if (serviceFolder.includes("multi-result")) {
