@@ -216,6 +216,52 @@ describe("search", () => {
     }
   }, 15_000);
 
+  test("surfaces a dangling default endpoint as a skipped entry in the JSON envelope", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-json-dangling-"));
+    const registryPath = join(root, "registry.toml");
+    const artifactRoot = join(root, "artifacts");
+    const workspace = join(root, "workspace");
+    const valid = createService(root, "json-dangling-valid", "valid");
+    mkdirSync(join(workspace, ".ukp"), { recursive: true });
+    writeFileSync(join(workspace, ".ukp", "client.toml"), 'default_endpoints = ["ghost", "valid"]\n', "utf8");
+    registerAt(registryPath, "valid", valid);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--json",
+      ]), {
+        currentDirectory: workspace,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+        artifactRoot,
+        artifactRunId: "dangling-run",
+      });
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(result.stdout);
+      // The dangling endpoint is listed as a structured skipped endpoint at its
+      // `default_endpoints` declaration position (index 0), before the valid one.
+      expect(envelope.endpoints.map((endpoint: { name: string; status: string }) => ({
+        name: endpoint.name,
+        status: endpoint.status,
+      }))).toEqual([
+        { name: "ghost", status: "skipped" },
+        { name: "valid", status: "succeeded" },
+      ]);
+      expect(envelope.endpoints[0]).toMatchObject({
+        name: "ghost",
+        provider: null,
+        status: "skipped",
+      });
+      expect(envelope.endpoints[0].message).toContain("dangling endpoint 'ghost'");
+      expect(envelope.endpoints[0].message).toContain("client.toml");
+      // The warning string is still present for Human/other consumers.
+      expect(envelope.warnings.some((warning: string) => warning.includes("dangling endpoint 'ghost'"))).toBe(true);
+      expect(invocationCount(valid)).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("skips default endpoint bindings when the Service Manifest is missing", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-missing-manifest-"));
     const registryPath = join(root, "registry.toml");

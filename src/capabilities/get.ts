@@ -196,13 +196,35 @@ function findFilesBySuffix(serviceFolder: string, suffix: string): {
   };
 }
 
-function applyLineRange(content: string, range: LineRange | undefined): string {
-  if (!range) return content;
+type LineRangeResult =
+  | { kind: "ok"; content: string }
+  | { kind: "start-beyond-eof"; start: number; lineCount: number };
+
+/**
+ * Slice `content` to the requested 1-based `--lines` window.
+ *
+ * Two out-of-range shapes are distinguished so the caller can enforce the
+ * get/file exit contract, which must match get/qmd (where an empty provider
+ * body already fails with exit 1):
+ * - `start` past the last line → `start-beyond-eof`; the caller errors (exit 1)
+ *   and never surfaces a silently-empty success read.
+ * - `start` valid but the window runs past the end → content is truncated to
+ *   the available lines and remains `ok` (exit 0). `--lines` is a best-effort
+ *   reading hint and never selects another resource.
+ */
+function applyLineRange(content: string, range: LineRange | undefined): LineRangeResult {
+  if (!range) return { kind: "ok", content };
+  // An empty file has zero lines, so any start is beyond the end.
+  if (content.length === 0) return { kind: "start-beyond-eof", start: range.start, lineCount: 0 };
   const lines = content.split(/\r?\n/);
   if (content.endsWith("\n") || content.endsWith("\r\n")) lines.pop();
+  const lineCount = lines.length;
   const startIndex = range.start - 1;
+  if (startIndex >= lineCount) {
+    return { kind: "start-beyond-eof", start: range.start, lineCount };
+  }
   const selected = lines.slice(startIndex, range.count === undefined ? undefined : startIndex + range.count);
-  return selected.length > 0 ? `${selected.join("\n")}\n` : "";
+  return { kind: "ok", content: `${selected.join("\n")}\n` };
 }
 
 /**
@@ -393,5 +415,14 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     }
     throw error;
   }
-  return { exitCode: 0, stdout: applyLineRange(content, request.lines), stderr: "" };
+  const rangeResult = applyLineRange(content, request.lines);
+  if (rangeResult.kind === "start-beyond-eof") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr:
+        `ukp get: --lines start ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)\n`,
+    };
+  }
+  return { exitCode: 0, stdout: rangeResult.content, stderr: "" };
 }

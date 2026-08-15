@@ -5,6 +5,14 @@ export interface RegistryBinding {
   path: string;
 }
 
+export interface DanglingEndpoint {
+  name: string;
+  configPath: string;
+  /** Position in `default_endpoints` declaration order, so consumers can interleave
+   *  dangling entries with resolved bindings at their declared position. */
+  index: number;
+}
+
 export interface ScopeInput {
   currentDirectory: string;
   registry: readonly RegistryBinding[];
@@ -15,6 +23,8 @@ export interface ScopeInput {
 export interface ResolvedScope {
   source: "explicit" | "global" | "client-config" | "registry-fallback";
   bindings: RegistryBinding[];
+  /** Unresolved `default_endpoints` references, in declaration order (client-config source only). */
+  dangling: DanglingEndpoint[];
   warnings: string[];
   configPath?: string;
 }
@@ -39,28 +49,32 @@ export function resolveScope(input: ScopeInput): ResolvedScope {
       if (!binding) throw new ScopeError(`unknown endpoint '${name}'`);
       return binding;
     });
-    return { source: "explicit", bindings, warnings: [] };
+    return { source: "explicit", bindings, dangling: [], warnings: [] };
   }
 
   if (input.global) {
-    return { source: "global", bindings: [...input.registry], warnings: [] };
+    return { source: "global", bindings: [...input.registry], dangling: [], warnings: [] };
   }
 
   const configPath = findNearestClientConfig(input.currentDirectory);
   if (!configPath) {
-    return { source: "registry-fallback", bindings: [...input.registry], warnings: [] };
+    return { source: "registry-fallback", bindings: [...input.registry], dangling: [], warnings: [] };
   }
 
   const config = loadClientConfig(configPath);
   const warnings: string[] = [];
+  const dangling: DanglingEndpoint[] = [];
   const bindings: RegistryBinding[] = [];
-  for (const name of config.default_endpoints) {
+  config.default_endpoints.forEach((name, index) => {
     const binding = byName.get(name);
     if (binding) bindings.push(binding);
-    else warnings.push(`dangling endpoint '${name}' from ${configPath}`);
-  }
+    else {
+      dangling.push({ name, configPath, index });
+      warnings.push(`dangling endpoint '${name}' from ${configPath}`);
+    }
+  });
   if (bindings.length === 0) {
     throw new ScopeError("Client Config does not resolve to any registered endpoint");
   }
-  return { source: "client-config", bindings, warnings, configPath };
+  return { source: "client-config", bindings, dangling, warnings, configPath };
 }
