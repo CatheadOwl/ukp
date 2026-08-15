@@ -213,7 +213,7 @@ function executeHumanMode(
   let failed = false;
   for (const endpoint of executable) {
     output.push(`== ${endpoint.name} (search/qmd) ==`);
-    const command = commandFor(endpoint, parsed, false);
+    const command = commandFor(endpoint, parsed, true);
     const result = spawnSync(command[0]!, command.slice(1), {
       cwd: endpoint.folder!,
       encoding: "utf8",
@@ -221,8 +221,6 @@ function executeHumanMode(
       maxBuffer: 64 * 1024 * 1024,
     });
     const providerOutput = (result.stdout ?? "").trimEnd();
-    if (providerOutput) output.push(renderHumanProviderOutput(providerOutput, endpoint));
-    else if (result.status === 0) output.push("(no matches)");
     if (result.signal === "SIGINT") {
       warnings.push(`endpoint '${endpoint.name}' provider cancelled`);
       return {
@@ -230,6 +228,12 @@ function executeHumanMode(
         stdout: `${output.join("\n")}\n`,
         stderr: `${warnings.join("\n")}\n`,
       };
+    }
+    if (providerOutput) {
+      output.push(renderResultUnits(providerOutput, endpoint.name)
+        ?? renderFallbackProviderBlock(providerOutput, endpoint));
+    } else if (result.status === 0) {
+      output.push("(no matches)");
     }
     if (result.status !== 0 || result.error) {
       failed = true;
@@ -332,31 +336,109 @@ function mapQmdResultToReference(endpointName: string, result: unknown): QmdRefe
   };
 }
 
-function extractQmdDocidsFromText(output: string): Array<{ docid: string; line?: number }> {
-  const found: Array<{ docid: string; line?: number }> = [];
-  for (const line of output.split(/\r?\n/)) {
-    // A docid only appears on the QMD location header line (`qmd://...:line #docid`);
-    // body lines may contain a 6-hex `#xxxxxx` (e.g. a color code) that is not a docid.
-    if (!line.startsWith("qmd://")) continue;
-    const docid = /#([a-f0-9]{6})/.exec(line);
-    if (!docid) continue;
-    const lineHit = /:(\d+)\s+#[a-f0-9]{6}/.exec(line);
-    found.push({
-      docid: docid[1],
-      line: lineHit ? Number(lineHit[1]) : undefined,
-    });
-  }
-  return found;
+function titleOf(result: unknown): string {
+  if (typeof result !== "object" || result === null) return "";
+  const title = (result as { title?: unknown }).title;
+  if (typeof title === "string" && title.trim() !== "") return title;
+  const providerLocation = providerLocationOf(result);
+  if (!providerLocation) return "";
+  const base = providerLocation.split(/[\\/]/).filter(Boolean).pop();
+  return base ?? providerLocation;
 }
 
-function renderHumanProviderOutput(providerOutput: string, endpoint: PlannedEndpoint): string {
+function snippetOf(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const snippet = (result as { snippet?: unknown }).snippet;
+  if (typeof snippet !== "string") return undefined;
+  const trimmed = snippet.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/**
+ * A snippet anchored at file line 1 that starts with a `---` frontmatter banner
+ * or a heading is file-head boilerplate, not a hit-location excerpt (spec
+ * "snippet 语义"). It is not shown as the excerpt; the title stands in for it.
+ */
+function isFileHeadBanner(snippet: string, line: number | undefined): boolean {
+  if (line !== 1) return false;
+  const head = snippet.trimStart();
+  return head.startsWith("---") || head.startsWith("#");
+}
+
+/**
+ * Render one structured QMD result as a result unit (spec "Result Unit 字段映射").
+ *
+ * The identity is the `title` (falling back to the provider-location basename).
+ * The bare docid is the ADR 0011 handoff key; `file`/`line` are display-only
+ * provenance and the copyable `get` line always addresses the bare docid. A
+ * result with no usable docid is marked `provider_only` with a reason and emits
+ * no get hint.
+ */
+function renderResultUnit(unitIndex: number, endpointName: string, result: unknown): string {
+  const providerLocation = providerLocationOf(result);
+  const docid = docidOf(result);
+  const line = lineOf(result);
+  const title = titleOf(result);
+  const location = providerLocation
+    ? (line ? `${providerLocation}:${line}` : providerLocation)
+    : (line ? `line ${line}` : "");
+  const identity = title || providerLocation;
+
+  const snippet = snippetOf(result);
+  const excerpt = snippet && !isFileHeadBanner(snippet, line) ? snippet : title || "";
+
+  const lines = docid
+    ? [`${unitIndex}. ${identity}   ${location}   ${docid}`]
+    : [`${unitIndex}. ${identity}   ${location}   (provider_only: qmd result has no usable docid)`];
+  if (excerpt && excerpt !== identity) lines.push(`   ${excerpt.replace(/\n/g, "\n   ")}`);
+  if (docid) {
+    const lineHint = line ? ` --lines ${line}` : "";
+    lines.push(`   get: ukp get --endpoint ${endpointName} ${docid}${lineHint}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Render an endpoint's structured QMD results as numbered result units.
+ *
+ * Returns `null` when the provider stdout is not a JSON array (or cannot be
+ * parsed), so the caller falls back to the appended raw-provider format. An
+ * empty array renders `(no matches)`.
+ */
+function renderResultUnits(providerOutput: string, endpointName: string): string | null {
+  let nativeResults: unknown;
+  try {
+    nativeResults = JSON.parse(providerOutput);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(nativeResults)) return null;
+  if (nativeResults.length === 0) return "(no matches)";
+  return nativeResults
+    .map((result, index) => renderResultUnit(index + 1, endpointName, result))
+    .join("\n");
+}
+
+/**
+ * Fallback (spec "Fallback"): a provider that did not return a parseable JSON
+ * array renders as its raw output block plus a trailing `UKP reference:` list
+ * (docid form). Docids are read from the provider's QMD location header lines
+ * (`qmd://...:line #docid`); body lines with a 6-hex token (e.g. a color code)
+ * are never treated as docids.
+ */
+function renderFallbackProviderBlock(providerOutput: string, endpoint: PlannedEndpoint): string {
   const lines = [providerOutput];
   const seen = new Set<string>();
-  for (const { docid, line } of extractQmdDocidsFromText(providerOutput)) {
-    if (seen.has(docid)) continue;
-    seen.add(docid);
-    const lineHint = line ? ` --lines ${line}` : "";
-    lines.push(`UKP reference: ukp get --endpoint ${endpoint.name} ${docid}${lineHint}`);
+  for (const textLine of providerOutput.split(/\r?\n/)) {
+    if (!textLine.startsWith("qmd://")) continue;
+    const docid = /#([a-f0-9]{6})/.exec(textLine);
+    if (!docid) continue;
+    const bare = docid[1];
+    if (!isDocidBody(bare) || seen.has(bare)) continue;
+    seen.add(bare);
+    const lineHit = /:(\d+)\s+#[a-f0-9]{6}/.exec(textLine);
+    const lineHint = lineHit ? ` --lines ${Number(lineHit[1])}` : "";
+    lines.push(`UKP reference: ukp get --endpoint ${endpoint.name} ${bare}${lineHint}`);
   }
   return lines.join("\n");
 }

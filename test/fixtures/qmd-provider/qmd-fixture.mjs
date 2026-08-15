@@ -91,28 +91,39 @@ if (isGet) {
 
 if (isRefresh) {
   process.stdout.write("fixture update complete\n");
-} else if (outputFormat === "json") {
+} else if (outputFormat === "json" && !serviceFolder.includes("no-json")) {
   let result = [];
   if (hasMatch) {
     if (serviceFolder.includes("path-shaped")) {
-      result = [{ docid: "#c3d4e5", file: `qmd://${join(process.cwd(), "docs", "path-note.md")}`, line: 7, title: "Path-shaped fixture note", score: 1 }];
+      result = [{ docid: "#c3d4e5", file: `qmd://${join(process.cwd(), "docs", "path-note.md")}`, line: 7, title: "Path-shaped fixture note", score: 1, snippet: "one\ntwo\n" }];
     } else if (serviceFolder.includes("same-authority-external")) {
-      result = [{ docid: "#e5f6a7", file: "qmd://same-authority-external/docs/external-note.md", line: 4, title: "Same-authority external fixture note", score: 1 }];
+      result = [{ docid: "#e5f6a7", file: "qmd://same-authority-external/docs/external-note.md", line: 4, title: "Same-authority external fixture note", score: 1, snippet: "External fixture note content." }];
     } else if (serviceFolder.includes("collection-shaped")) {
-      result = [{ docid: "#b2c3d4", file: "qmd://collection-shaped/docs/collection-note.md", line: 3, title: "Collection-shaped fixture note", score: 1 }];
+      result = [{ docid: "#b2c3d4", file: "qmd://collection-shaped/docs/collection-note.md", line: 3, title: "Collection-shaped fixture note", score: 1, snippet: "alpha\nbeta\ngamma\n" }];
     } else if (serviceFolder.includes("outside-result")) {
-      result = [{ docid: "#d4e5f6", file: `qmd://${join(dirname(process.cwd()), "outside.md")}`, line: 2, title: "Outside fixture note", score: 1 }];
+      result = [{ docid: "#d4e5f6", file: `qmd://${join(dirname(process.cwd()), "outside.md")}`, line: 2, title: "Outside fixture note", score: 1, snippet: "Body from a path-shaped collection." }];
+    } else if (serviceFolder.includes("embedded-uri")) {
+      result = [{ docid: "#f6a7b8", file: "qmd://external-collection/docs/provider-note.md", line: 5, title: "Embedded provider location note", score: 1, snippet: "Embedded provider location note. Accent color #ff0000." }];
+    } else if (serviceFolder.includes("no-line")) {
+      result = [{ docid: "#c1d2e3", file: "qmd://fixture-qmd/documents/no-line.md", title: "No-line fixture note", score: 1, snippet: "No-line fixture content without a line hint." }];
+    } else if (serviceFolder.includes("no-docid")) {
+      result = [{ file: "qmd://fixture-qmd/documents/no-docid.md", line: 3, title: "No-docid fixture note", score: 1, snippet: "No-docid fixture content cannot form a get route." }];
+    } else if (serviceFolder.includes("banner")) {
+      result = [{ docid: "#d2e3f4", file: "qmd://fixture-qmd/documents/banner.md", line: 1, title: "Banner fixture note", score: 1, snippet: "---\ntitle: Banner fixture\n---\nBanner body text." }];
+    } else if (serviceFolder.includes("multi-result")) {
+      result = [
+        { docid: "#a1b2c3", file: "qmd://fixture-qmd/documents/cad-notes.md", line: 1, title: "CAD fixture note", score: 1, snippet: "CAD fixture note content." },
+        { docid: "#b2c3d4", file: "qmd://collection-shaped/docs/collection-note.md", line: 3, title: "Collection-shaped fixture note", score: 1, snippet: "alpha beta gamma" },
+      ];
     } else {
-      result = [{ docid: "#a1b2c3", file: "qmd://fixture-qmd/documents/cad-notes.md", line: 1, title: "CAD fixture note", score: 1 }];
+      result = [{ docid: "#a1b2c3", file: "qmd://fixture-qmd/documents/cad-notes.md", line: 1, title: "CAD fixture note", score: 1, snippet: "CAD fixture note content." }];
     }
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } else {
-  if (hasMatch && serviceFolder.includes("embedded-uri")) {
-    process.stdout.write("qmd://external-collection/docs/provider-note.md:5  #f6a7b8\nEmbedded provider location note.\nAccent color #ff0000.\n");
-  } else {
-    process.stdout.write(hasMatch ? "qmd://fixture-qmd/documents/cad-notes.md:1  #a1b2c3\nCAD fixture note\n" : "");
-  }
+  // Native text shape. A provider that ignores `--format json` (folder name
+  // contains `no-json`) lands here and exercises the Human renderer's fallback.
+  process.stdout.write(hasMatch ? "qmd://fixture-qmd/documents/cad-notes.md:1  #a1b2c3\nCAD fixture note\n" : "");
 }
 
 if (shouldFail) {
