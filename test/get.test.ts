@@ -75,6 +75,42 @@ describe("get", () => {
     }
   });
 
+  test("errors when a file-backed --lines start is beyond the end of the resource", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-file-start-beyond-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "notes", "docs/note.md", "--lines", "5"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("--lines start 5 is beyond the end of 'docs/note.md' (4 lines)");
+      expect(result.stdout).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("truncates a file-backed --lines window that extends past the end of the resource", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-file-window-past-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "notes", "docs/note.md", "--lines", "3:5"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("three\nfour\n");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects traversal before reading outside the Service folder", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-traversal-"));
     const registryPath = join(root, "registry.toml");

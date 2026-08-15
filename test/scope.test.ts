@@ -35,6 +35,9 @@ describe("Client scope resolution", () => {
       expect(result.source).toBe("client-config");
       expect(result.configPath).toBe(join(root, "workspace", ".ukp", "client.toml"));
       expect(result.bindings.map((binding) => binding.name)).toEqual(["cad"]);
+      expect(result.dangling).toEqual([
+        { name: "gone", configPath: join(root, "workspace", ".ukp", "client.toml"), index: 1 },
+      ]);
       expect(result.warnings).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });

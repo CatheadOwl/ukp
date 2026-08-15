@@ -168,6 +168,17 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
     });
   }
 
+  // Dangling `default_endpoints` references never resolve to a binding, so they
+  // produce a skipped plan entry at their declared position (not only a warning
+  // string) — a JSON consumer must be able to count every skipped endpoint.
+  for (const { name, configPath, index } of scope.dangling) {
+    const warning = `dangling endpoint '${name}' from ${configPath}`;
+    // `scope.bindings` and `scope.dangling` each preserve declaration order, and
+    // each binding produced exactly one plan entry above, so the plan has
+    // `index` entries before this dangling reference's declared position.
+    plan.splice(index, 0, { name, provider: null, status: "skipped", warning });
+  }
+
   if (!plan.some((endpoint) => endpoint.status === "executable")) {
     warnings.push(registry.length === 0
       ? "no executable search endpoints: the Host Registry is empty; run 'ukp register' from a Service folder, then retry"
