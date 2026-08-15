@@ -94,12 +94,15 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("== fixture-qmd (search/qmd) ==");
-      expect(result.stdout).toContain("CAD fixture note");
-      expect(result.stdout).toContain("UKP reference: ukp get --endpoint fixture-qmd a1b2c3 --lines 1");
+      expect(result.stdout).toContain("1. CAD fixture note   qmd://fixture-qmd/documents/cad-notes.md:1   a1b2c3");
+      expect(result.stdout).toContain("   CAD fixture note content.");
+      expect(result.stdout).toContain("   get: ukp get --endpoint fixture-qmd a1b2c3 --lines 1");
+      expect(result.stdout).not.toContain("UKP reference:");
       const invocation = JSON.parse(readFileSync(invocationPath, "utf8"));
       expect(invocation.cwd).toBe(fixture);
       expect(invocation.query).toBe("fixture-cad-search-token");
       expect(invocation.nativeLimit).toBe(20);
+      expect(invocation.outputFormat).toBe("json");
     } finally {
       if (existsSync(invocationPath)) rmSync(invocationPath);
       if (existsSync(invocationLogPath)) rmSync(invocationLogPath);
@@ -519,11 +522,168 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("qmd://external-collection/docs/provider-note.md:5  #f6a7b8");
-      expect(result.stdout).toContain("UKP reference: ukp get --endpoint embedded-uri f6a7b8 --lines 5");
-      // A body line with a 6-hex token (e.g. a color code) is not a docid.
+      expect(result.stdout).toContain("1. Embedded provider location note   qmd://external-collection/docs/provider-note.md:5   f6a7b8");
+      expect(result.stdout).toContain("   get: ukp get --endpoint embedded-uri f6a7b8 --lines 5");
+      // A 6-hex token in body content (e.g. a color code) is not a docid and
+      // must not become the handoff key or a get hint.
       expect(result.stdout).toContain("Accent color #ff0000.");
-      expect(result.stdout).not.toContain("UKP reference: ukp get --endpoint embedded-uri ff0000");
+      expect(result.stdout).not.toContain("ukp get --endpoint embedded-uri ff0000");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("renders each result as a numbered result unit with title, excerpt, docid, and copyable get", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-units-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "multi-result-service", "multi-result");
+    registerAt(registryPath, "multi-result", service);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "multi-result",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("== multi-result (search/qmd) ==");
+      expect(result.stdout).toContain("1. CAD fixture note   qmd://fixture-qmd/documents/cad-notes.md:1   a1b2c3");
+      expect(result.stdout).toContain("   CAD fixture note content.");
+      expect(result.stdout).toContain("   get: ukp get --endpoint multi-result a1b2c3 --lines 1");
+      expect(result.stdout).toContain("2. Collection-shaped fixture note   qmd://collection-shaped/docs/collection-note.md:3   b2c3d4");
+      expect(result.stdout).toContain("   get: ukp get --endpoint multi-result b2c3d4 --lines 3");
+      expect(result.stdout).not.toContain("UKP reference:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("omits --lines when a result has no line", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-no-line-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "no-line-service", "no-line");
+    registerAt(registryPath, "no-line", service);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "no-line",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("1. No-line fixture note   qmd://fixture-qmd/documents/no-line.md   c1d2e3");
+      expect(result.stdout).toContain("   get: ukp get --endpoint no-line c1d2e3");
+      expect(result.stdout).not.toContain("--lines");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("marks a no-docid result provider_only and emits no get hint", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-no-docid-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "no-docid-service", "no-docid");
+    registerAt(registryPath, "no-docid", service);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "no-docid",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("1. No-docid fixture note   qmd://fixture-qmd/documents/no-docid.md:3   (provider_only: qmd result has no usable docid)");
+      expect(result.stdout).not.toContain("get: ukp get");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("does not show a file-head banner snippet as the excerpt", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-banner-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "banner-service", "banner");
+    registerAt(registryPath, "banner", service);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "banner",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("1. Banner fixture note   qmd://fixture-qmd/documents/banner.md:1   d2e3f4");
+      expect(result.stdout).toContain("   get: ukp get --endpoint banner d2e3f4 --lines 1");
+      expect(result.stdout).not.toContain("---");
+      expect(result.stdout).not.toContain("Banner body text.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("falls back to raw provider output plus a reference list when the provider ignores --format json", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-fallback-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "no-json-service", "no-json");
+    registerAt(registryPath, "no-json", service);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "no-json",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("== no-json (search/qmd) ==");
+      expect(result.stdout).toContain("qmd://fixture-qmd/documents/cad-notes.md:1  #a1b2c3");
+      expect(result.stdout).toContain("CAD fixture note");
+      expect(result.stdout).toContain("UKP reference: ukp get --endpoint no-json a1b2c3 --lines 1");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("renders per-endpoint result-unit blocks in scope order without merging", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-unit-multi-"));
+    const registryPath = join(root, "registry.toml");
+    const collection = createService(root, "collection-shaped-service", "collection-shaped");
+    const pathShaped = createService(root, "path-shaped-service", "path-shaped");
+    registerAt(registryPath, "collection-shaped", collection);
+    registerAt(registryPath, "path-shaped", pathShaped);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "-c",
+        "path-shaped",
+        "-c",
+        "collection-shaped",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.indexOf("== path-shaped (search/qmd) ==")).toBeLessThan(
+        result.stdout.indexOf("== collection-shaped (search/qmd) =="),
+      );
+      expect(result.stdout).toContain("   get: ukp get --endpoint path-shaped c3d4e5 --lines 7");
+      expect(result.stdout).toContain("   get: ukp get --endpoint collection-shaped b2c3d4 --lines 3");
+      expect(result.stdout).not.toContain("UKP reference:");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
