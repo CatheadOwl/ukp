@@ -757,7 +757,7 @@ describe("CLI bootstrap", () => {
       expect(rendered).toContain("scope: client-config");
       expect(rendered).toContain(`source: Client Config (${join(workspace, ".ukp", "client.toml")})`);
       expect(rendered).toContain("selected_endpoints: 1");
-      expect(errors.join("\n")).toContain("dangling endpoint 'gone'");
+      expect(errors.join("\n")).toContain("'gone' is not registered");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

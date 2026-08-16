@@ -90,7 +90,7 @@ function resolveRefreshBindings(
   for (const name of config.default_endpoints) {
     const binding = byName.get(name);
     if (binding) bindings.push(binding);
-    else warnings.push(`dangling endpoint '${name}' from ${configPath}`);
+    else warnings.push(`'${name}' is not registered (from ${configPath})`);
   }
   if (bindings.length === 0) {
     throw new ScopeError("Client Config does not resolve to any registered endpoint");
