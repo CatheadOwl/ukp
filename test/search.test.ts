@@ -272,6 +272,44 @@ describe("search", () => {
     }
   }, 15_000);
 
+  test("Human mode renders no-results stdout plus dangling warning and recovery hint on stderr", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-human-dangling-"));
+    const registryPath = join(root, "registry.toml");
+    const workspace = join(root, "workspace");
+    // Folder name contains "no-match" so the fixture returns an empty result array,
+    // exercising `(no matches)` in the default Human surface.
+    const valid = createService(root, "no-match-service", "valid");
+    mkdirSync(join(workspace, ".ukp"), { recursive: true });
+    writeFileSync(join(workspace, ".ukp", "client.toml"), 'default_endpoints = ["ghost", "valid"]\n', "utf8");
+    registerAt(registryPath, "valid", valid);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+      ]), {
+        currentDirectory: workspace,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      // The searched endpoint reports an empty result on stdout.
+      expect(result.stdout).toContain("== valid ==");
+      expect(result.stdout).toContain("(no matches)");
+      // The dangling default endpoint renders the productized wording + the
+      // selected-scope recovery hint on stderr (the Human-mode counterpart of
+      // the JSON envelope test above; the envelope test never exercises the
+      // stderr assembly in `executeHumanMode`).
+      expect(result.stderr).toContain(
+        `'ghost' is not registered (from ${join(workspace, ".ukp", "client.toml")})`,
+      );
+      expect(result.stderr).toContain(
+        `Hint: run 'ukp list' or 'ukp diagnose' to check the selected scope, or edit ${join(workspace, ".ukp", "client.toml")}, then retry.`,
+      );
+      expect(invocationCount(valid)).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("skips default endpoint bindings when the Service Manifest is missing", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-missing-manifest-"));
     const registryPath = join(root, "registry.toml");
