@@ -258,10 +258,14 @@ describe("search", () => {
         provider: null,
         status: "skipped",
       });
-      expect(envelope.endpoints[0].message).toContain("dangling endpoint 'ghost'");
+      expect(envelope.endpoints[0].message).toContain("'ghost' is not registered");
       expect(envelope.endpoints[0].message).toContain("client.toml");
       // The warning string is still present for Human/other consumers.
-      expect(envelope.warnings.some((warning: string) => warning.includes("dangling endpoint 'ghost'"))).toBe(true);
+      expect(envelope.warnings.some((warning: string) => warning.includes("'ghost' is not registered"))).toBe(true);
+      // The selected-scope recovery hint follows the dangling warning (D-051).
+      expect(envelope.warnings.some((warning: string) =>
+        warning === `Hint: run 'ukp list' or 'ukp diagnose' to check the selected scope, or edit ${join(workspace, ".ukp", "client.toml")}, then retry.`
+      )).toBe(true);
       expect(invocationCount(valid)).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });

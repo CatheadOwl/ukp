@@ -172,11 +172,15 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
   // produce a skipped plan entry at their declared position (not only a warning
   // string) — a JSON consumer must be able to count every skipped endpoint.
   for (const { name, configPath, index } of scope.dangling) {
-    const warning = `dangling endpoint '${name}' from ${configPath}`;
+    const warning = `'${name}' is not registered (from ${configPath})`;
     // `scope.bindings` and `scope.dangling` each preserve declaration order, and
     // each binding produced exactly one plan entry above, so the plan has
     // `index` entries before this dangling reference's declared position.
     plan.splice(index, 0, { name, provider: null, status: "skipped", warning });
+  }
+
+  if (scope.dangling.length > 0 && scope.configPath) {
+    warnings.push(`Hint: run 'ukp list' or 'ukp diagnose' to check the selected scope, or edit ${scope.configPath}, then retry.`);
   }
 
   if (!plan.some((endpoint) => endpoint.status === "executable")) {

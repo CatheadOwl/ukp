@@ -70,7 +70,7 @@ export function resolveScope(input: ScopeInput): ResolvedScope {
     if (binding) bindings.push(binding);
     else {
       dangling.push({ name, configPath, index });
-      warnings.push(`dangling endpoint '${name}' from ${configPath}`);
+      warnings.push(`'${name}' is not registered (from ${configPath})`);
     }
   });
   if (bindings.length === 0) {
