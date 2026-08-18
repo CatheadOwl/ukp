@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, openSync, closeSync, writeFileSync, unlinkSync, 
 import { basename, join } from "node:path";
 import { stringify } from "smol-toml";
 import { Command, CommanderError } from "commander";
-import { ENDPOINT_NAME, loadManifest } from "../config/manifest.ts";
+import { ENDPOINT_NAME, loadManifest, type ManifestDependency } from "../config/manifest.ts";
 import { isHelpRequest } from "./flags.ts";
 
 export interface InitCommandContext {
@@ -42,7 +42,7 @@ function createInitServiceCommand(): Command {
     .description("Create a Service Manifest in the current folder.")
     .option("--name <name>", "explicit Service endpoint name")
     .option("--description <text>", "human-readable Service description")
-    .option("--dependency <name>", "declare a dependency on another endpoint", (value, previous: string[] = []) => [...previous, value]);
+    .option("--dependency <name>", "declare a contextual dependency endpoint", (value, previous: string[] = []) => [...previous, value]);
 }
 
 function parseCommand(command: Command, args: readonly string[]): void {
@@ -68,7 +68,7 @@ function renderUsageError(message: string): string {
 function renderServiceUsageError(message: string): string {
   return [
     `ukp init service: ${message}`,
-    "Usage: ukp init service [--name <name>] [--description <text>]",
+    "Usage: ukp init service [--name <name>] [--description <text>] [--dependency <name>]",
     "Run 'ukp init service --help' for details.",
   ].join("\n");
 }
@@ -98,12 +98,12 @@ function resolveServiceName(folder: string, explicitName?: string): { name: stri
 function validateInitServiceOptions(
   folder: string,
   options: { name?: string; description?: string; dependency?: string[] },
-): { name: string; nameSource: "option" | "folder-name"; dependencies?: string[] } {
+): { name: string; nameSource: "option" | "folder-name"; dependencies?: ManifestDependency[] } {
   const { name, source } = resolveServiceName(folder, options.name);
   if (options.description === "") {
     throw new InitUsageError("description must be a non-empty string");
   }
-  let dependencies: string[] | undefined;
+  let dependencies: ManifestDependency[] | undefined;
   if (options.dependency) {
     dependencies = [];
     const seen = new Set<string>();
@@ -111,17 +111,23 @@ function validateInitServiceOptions(
       if (!ENDPOINT_NAME.test(dependency)) {
         throw new InitUsageError(`invalid dependency name '${dependency}'. Dependencies must use the endpoint slug grammar.`);
       }
+      if (dependency === name) {
+        throw new InitUsageError(`dependency '${dependency}' cannot target the Service itself`);
+      }
       if (seen.has(dependency)) {
         throw new InitUsageError(`duplicate dependency '${dependency}'`);
       }
       seen.add(dependency);
-      dependencies.push(dependency);
+      dependencies.push({
+        endpoint: dependency,
+        kind: "context",
+      });
     }
   }
   return { name, nameSource: source, dependencies };
 }
 
-function renderServiceManifest(options: { name?: string; description?: string; dependencies?: string[] }): string {
+function renderServiceManifest(options: { name?: string; description?: string; dependencies?: ManifestDependency[] }): string {
   const encoded = stringify({
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(options.description === undefined ? {} : { description: options.description }),
@@ -236,7 +242,8 @@ export function renderInitServiceHelp(): string {
     "  [capabilities.search]",
     "  provider = \"qmd\"",
     "Optional:",
-    "  --dependency <name>   declare another endpoint as a declared knowledge dependency",
+    "  --dependency <name>   declare another endpoint as a contextual dependency entry",
+    "  each --dependency emits [[dependencies]] with endpoint + kind = \"context\"",
     "",
     "Next:",
     "  ukp guide service",

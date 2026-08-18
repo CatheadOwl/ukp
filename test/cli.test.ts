@@ -283,7 +283,10 @@ describe("CLI bootstrap", () => {
         registryPath: join(root, "registry.toml"),
       })).toBe(0);
       const loaded = loadManifest(root);
-      expect(loaded.manifest.dependencies).toEqual(["anthropic-agent-patterns", "ukp-product"]);
+      expect(loaded.manifest.dependencies).toEqual([
+        { endpoint: "anthropic-agent-patterns", kind: "context" },
+        { endpoint: "ukp-product", kind: "context" },
+      ]);
       expect(output.join("\n")).toContain("initialized Service: agent-dev");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -717,7 +720,11 @@ describe("CLI bootstrap", () => {
     mkdirSync(join(service, ".ukp"), { recursive: true });
     writeFileSync(join(service, ".ukp", "service.toml"), [
       'name = "agent-dev"',
-      'dependencies = ["anthropic-agent-patterns"]',
+      "",
+      "[[dependencies]]",
+      'endpoint = "anthropic-agent-patterns"',
+      'kind = "context"',
+      'reason = "Agent development uses these patterns as context."',
       "",
       "[capabilities.search]",
       'provider = "qmd"',
@@ -730,7 +737,9 @@ describe("CLI bootstrap", () => {
         registryPath,
         resolveProvider: () => ({ supported: true }),
       })).toBe(0);
-      expect(output.join("\n")).toContain("dependency: anthropic-agent-patterns");
+      const rendered = output.join("\n");
+      expect(rendered).toContain("dependency: depends_on -> anthropic-agent-patterns (kind: context)");
+      expect(rendered).toContain("dependency_reason: Agent development uses these patterns as context.");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
