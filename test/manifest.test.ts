@@ -146,7 +146,15 @@ describe("Service Manifest and diagnose", () => {
     mkdirSync(join(folder, ".ukp"));
     writeFileSync(join(folder, ".ukp", "service.toml"), [
       'name = "agent-dev"',
-      'dependencies = ["anthropic-agent-patterns", "ukp-product"]',
+      "",
+      "[[dependencies]]",
+      'endpoint = "anthropic-agent-patterns"',
+      'kind = "context"',
+      "",
+      "[[dependencies]]",
+      'endpoint = "ukp-product"',
+      'kind = "authority"',
+      'reason = "Current product specs constrain this development endpoint."',
       "",
       "[capabilities.search]",
       'provider = "qmd"',
@@ -154,7 +162,23 @@ describe("Service Manifest and diagnose", () => {
     ].join("\n"));
     try {
       const loaded = loadManifest(folder);
-      expect(loaded.manifest.dependencies).toEqual(["anthropic-agent-patterns", "ukp-product"]);
+      expect(loaded.manifest.dependencies).toEqual([
+        { endpoint: "anthropic-agent-patterns", kind: "context" },
+        {
+          endpoint: "ukp-product",
+          kind: "authority",
+          reason: "Current product specs constrain this development endpoint.",
+        },
+      ]);
+      const rendered = renderDiagnose({
+        service: loaded,
+        capabilities: [
+          { name: "search", provider: "qmd", source: "manifest", status: "ok" },
+          { name: "get", provider: "file", source: "derived-local", status: "ok" },
+        ],
+      });
+      expect(rendered).toContain("dependency: depends_on -> ukp-product (kind: authority)");
+      expect(rendered).toContain("dependency_reason: Current product specs constrain this development endpoint.");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -187,7 +211,14 @@ describe("Service Manifest and diagnose", () => {
     mkdirSync(join(folder, ".ukp"));
     writeFileSync(join(folder, ".ukp", "service.toml"), [
       'name = "agent-dev"',
-      'dependencies = ["anthropic-agent-patterns", "anthropic-agent-patterns"]',
+      "",
+      "[[dependencies]]",
+      'endpoint = "anthropic-agent-patterns"',
+      'kind = "context"',
+      "",
+      "[[dependencies]]",
+      'endpoint = "anthropic-agent-patterns"',
+      'kind = "authority"',
       "",
       "[capabilities.search]",
       'provider = "qmd"',
@@ -207,7 +238,56 @@ describe("Service Manifest and diagnose", () => {
     mkdirSync(join(folder, ".ukp"));
     writeFileSync(join(folder, ".ukp", "service.toml"), [
       'name = "agent-dev"',
-      'dependencies = ["Bad Name"]',
+      "",
+      "[[dependencies]]",
+      'endpoint = "Bad Name"',
+      'kind = "context"',
+      "",
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
+    try {
+      expect(() => loadManifest(folder)).toThrow("Service Manifest schema is invalid");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects self-targeting declared dependencies", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "self-dependency");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      'name = "agent-dev"',
+      "",
+      "[[dependencies]]",
+      'endpoint = "agent-dev"',
+      'kind = "context"',
+      "",
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
+    try {
+      expect(() => loadManifest(folder)).toThrow("dependency cannot target the Service itself");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects unsupported dependency kinds", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "invalid-dependency-kind");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      'name = "agent-dev"',
+      "",
+      "[[dependencies]]",
+      'endpoint = "ukp-product"',
+      'kind = "related_to"',
       "",
       "[capabilities.search]",
       'provider = "qmd"',

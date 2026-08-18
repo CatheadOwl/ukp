@@ -11,18 +11,26 @@ const capabilitySchema = z.object({
 
 const endpointNameSchema = z.string().regex(ENDPOINT_NAME);
 
-const dependenciesSchema = z.array(endpointNameSchema).min(1).superRefine((value, context) => {
+const dependencyKindSchema = z.enum(["authority", "context", "implementation", "evidence"]);
+
+const dependencySchema = z.object({
+  endpoint: endpointNameSchema,
+  kind: dependencyKindSchema,
+  reason: z.string().min(1).optional(),
+}).strict();
+
+const dependenciesSchema = z.array(dependencySchema).min(1).superRefine((value, context) => {
   const seen = new Set<string>();
   for (const [index, dependency] of value.entries()) {
-    if (seen.has(dependency)) {
+    if (seen.has(dependency.endpoint)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `duplicate dependency '${dependency}'`,
+        message: `duplicate dependency '${dependency.endpoint}'`,
         path: [index],
       });
       continue;
     }
-    seen.add(dependency);
+    seen.add(dependency.endpoint);
   }
 });
 
@@ -34,6 +42,7 @@ const manifestSchema = z.object({
 }).strict();
 
 export type Manifest = z.infer<typeof manifestSchema>;
+export type ManifestDependency = z.infer<typeof dependencySchema>;
 
 export class ManifestError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -140,5 +149,8 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
 
   const nameSource = manifest.name === undefined ? "folder-name" : "manifest";
   const effectiveName = parseName(manifest.name ?? basename(folder), nameSource);
+  if (manifest.dependencies?.some((dependency) => dependency.endpoint === effectiveName)) {
+    throw new ManifestError(`Service Manifest dependency cannot target the Service itself: '${effectiveName}'`);
+  }
   return { folder, manifestPath, manifest, effectiveName, nameSource };
 }

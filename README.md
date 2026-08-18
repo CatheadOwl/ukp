@@ -20,9 +20,9 @@ UKP separates four journeys. They do not replace each other:
 - **Content-searchable**: provider setup decides what content is indexed. This
   is provider-owned. Registered as a Service does not mean its
   content is searchable; both steps are needed.
-- **Declared dependencies**: a Service Manifest can name other knowledge
-  endpoints it depends on. This is declarative only and does not change
-  search/get behavior by itself.
+- **Declared dependencies**: a Service Manifest can declare `[[dependencies]]`
+  entries for other knowledge endpoints it depends on. This is declarative only
+  and does not change search/get behavior by itself.
 - **Client path**: a workspace `.ukp/client.toml` default scope lets you use
   Services by default instead of naming one each call.
 

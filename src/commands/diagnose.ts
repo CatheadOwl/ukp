@@ -304,7 +304,10 @@ export function renderDiagnose(report: DiagnoseReport, options: RenderDiagnoseOp
   }
   if (report.service.manifest.dependencies && report.service.manifest.dependencies.length > 0) {
     for (const dependency of report.service.manifest.dependencies) {
-      lines.push(`dependency: ${dependency}`);
+      lines.push(`dependency: depends_on -> ${dependency.endpoint} (kind: ${dependency.kind})`);
+      if (dependency.reason) {
+        lines.push(`dependency_reason: ${dependency.reason}`);
+      }
     }
   }
   lines.push(`location: ${report.service.folder}`);
