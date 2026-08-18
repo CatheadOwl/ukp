@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { parse } from "smol-toml";
 import { z } from "zod";
@@ -122,6 +122,12 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
   }
 
   const manifestPath = join(folder, ".ukp", "service.toml");
+  const clientConfigPath = join(folder, ".ukp", "client.toml");
+  if (existsSync(manifestPath) && existsSync(clientConfigPath)) {
+    throw new ManifestError(
+      `Folder role conflict: ${folder} cannot contain both .ukp/service.toml and .ukp/client.toml`,
+    );
+  }
   let source: string;
   try {
     source = readFileSync(manifestPath, "utf8");

@@ -57,7 +57,7 @@ UKP adds a small control plane around those folders:
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp register` / `ukp unregister --endpoint <name>` / `ukp list` | Manage Host Registry endpoint bindings. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
-| `ukp search` | Runs atomic lexical search against selected endpoints. |
+| `ukp search` | Runs atomic lexical search against selected endpoints; `--recursive` explicitly expands direct authority/context dependencies. |
 | `ukp get` | Reads an endpoint-scoped resource reference from one registered local Service. |
 | `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
 
@@ -71,6 +71,7 @@ UKP is designed to be called by agents as well as humans:
 
 ```bash
 ukp search "capability boundary" --endpoint your-endpoint-name --limit 5 --json
+ukp search "agent loop detection" --endpoint agent-dev --recursive --json
 ```
 
 JSON output includes per-endpoint status and artifact references, while

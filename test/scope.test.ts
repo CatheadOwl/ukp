@@ -44,6 +44,20 @@ describe("Client scope resolution", () => {
     }
   });
 
+  test("rejects a folder that declares both Client and Service roles", () => {
+    const root = workspace("default_endpoints = [\"cad\"]\n");
+    writeFileSync(
+      join(root, "workspace", ".ukp", "service.toml"),
+      "[capabilities.search]\nprovider = \"qmd\"\n",
+    );
+    try {
+      expect(() => resolveScope({ currentDirectory: join(root, "workspace"), registry }))
+        .toThrow("Folder role conflict");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("no client config falls back to all registry bindings", () => {
     const root = workspace();
     try {

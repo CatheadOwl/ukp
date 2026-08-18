@@ -21,7 +21,7 @@ function createSearchCommand(): Command {
     .allowUnknownOption(false)
     .allowExcessArguments(true)
     .helpOption("-h, --help", "show this help")
-    .usage("<query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--json]")
+    .usage("<query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--recursive] [--json]")
     .description("Run atomic lexical search against the selected Service endpoints.")
     .argument("[query]", "one non-empty search query; quote multi-word queries")
     .option("--limit <1-1000>", "maximum results requested from each endpoint (default: 20)")
@@ -31,6 +31,7 @@ function createSearchCommand(): Command {
       collectValues,
     )
     .option("-g", "search every endpoint in the Host Registry; takes no value")
+    .option("--recursive", "include direct authority and context dependencies")
     .option("--json", "write provider-native results to artifacts and print an envelope");
 }
 
@@ -39,6 +40,7 @@ function parseSearchCommand(args: readonly string[]): {
   limit?: string;
   endpoints: string[];
   global?: boolean;
+  recursive?: boolean;
   json?: boolean;
 } {
   const command = createSearchCommand()
@@ -57,6 +59,7 @@ function parseSearchCommand(args: readonly string[]): {
     limit?: string;
     endpoint?: string[];
     g?: boolean;
+    recursive?: boolean;
     json?: boolean;
   }>();
   return {
@@ -64,6 +67,7 @@ function parseSearchCommand(args: readonly string[]): {
     limit: options.limit,
     endpoints: options.endpoint ?? [],
     global: options.g,
+    recursive: options.recursive,
     json: options.json,
   };
 }
@@ -76,6 +80,9 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
 
   if (countFlagOccurrences(args, "--limit") > 1) throw new SearchUsageError("--limit may only be specified once");
   if (countFlagOccurrences(args, "-g") > 1) throw new SearchUsageError("-g may only be specified once");
+  if (countFlagOccurrences(args, "--recursive") > 1) {
+    throw new SearchUsageError("--recursive may only be specified once");
+  }
   if (countFlagOccurrences(args, "--json") > 1) throw new SearchUsageError("--json may only be specified once");
 
   if (parsed.limit !== undefined) {
@@ -107,6 +114,7 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
     options: {
       explicitEndpoints: explicit.length > 0 ? explicit : undefined,
       global: parsed.global ?? false,
+      recursive: parsed.recursive ?? false,
       json: parsed.json ?? false,
     },
     warnings,
@@ -146,6 +154,8 @@ export function renderSearchHelp(): string {
     "  shared collections; results are not guaranteed to be the endpoint's own",
     "  content. '== <name> ==' reports which Service was asked, not content",
     "  ownership.",
+    "  --recursive keeps selected endpoints as depth-0 seeds and adds their",
+    "  registered authority/context dependencies at depth 1.",
     "",
   ].join("\n");
 }
@@ -153,7 +163,7 @@ export function renderSearchHelp(): string {
 export function renderSearchUsageError(message: string): string {
   return [
     `ukp search: ${message}`,
-    "Usage: ukp search <query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--json]",
+    "Usage: ukp search <query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--recursive] [--json]",
     "Run 'ukp search --help' for details.",
   ].join("\n");
 }

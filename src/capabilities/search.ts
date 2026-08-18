@@ -10,8 +10,13 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { createArtifactRun } from "../artifacts.ts";
-import { loadManifest, ManifestError } from "../config/manifest.ts";
-import { readRegistry } from "../registry.ts";
+import {
+  loadManifest,
+  ManifestError,
+  type LoadedManifest,
+  type ManifestDependency,
+} from "../config/manifest.ts";
+import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { defaultQmdCommand, isDocidBody, stripDocidHash } from "./qmd.ts";
 
@@ -23,6 +28,7 @@ export interface SearchRequest {
 export interface SearchOptions {
   explicitEndpoints?: string[];
   global: boolean;
+  recursive: boolean;
   json: boolean;
 }
 
@@ -68,6 +74,18 @@ interface PlannedEndpoint {
   folder?: string;
   command?: readonly string[];
   warning?: string;
+  traversal?: TraversalProvenance;
+}
+
+interface TraversalVia {
+  kind: ManifestDependency["kind"];
+  reason?: string;
+}
+
+interface TraversalProvenance {
+  depth: 0 | 1;
+  path: string[];
+  via: TraversalVia | null;
 }
 
 function isStaleServiceBinding(error: unknown): boolean {
@@ -86,6 +104,9 @@ export interface SearchEndpointEnvelope {
   references_format?: "ukp-search-references-v1";
   error_artifact?: string;
   message?: string;
+  depth?: 0 | 1;
+  path?: string[];
+  via?: TraversalVia | null;
 }
 
 export interface SearchEnvelope {
@@ -114,8 +135,12 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
   const qmdCommand = context.qmdCommand ?? defaultQmdCommand();
   const warnings = [...parsed.warnings, ...scope.warnings];
   const plan: PlannedEndpoint[] = [];
+  const loadedServices = new Map<string, LoadedManifest>();
 
-  for (const binding of scope.bindings) {
+  const planBinding = (
+    binding: RegistryBinding,
+    traversal?: TraversalProvenance,
+  ): PlannedEndpoint => {
     let service;
     try {
       service = loadManifest(binding.path);
@@ -127,45 +152,50 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
         `Hint: run 'ukp inspect --endpoint ${binding.name}' or re-register/remove the stale endpoint.`,
       ].join("\n");
       warnings.push(warning);
-      plan.push({ name: binding.name, provider: null, status: "skipped", warning });
-      continue;
+      return { name: binding.name, provider: null, status: "skipped", warning, traversal };
     }
     if (service.effectiveName !== binding.name) {
       throw new SearchPlanningError(
         `endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'`,
       );
     }
+    loadedServices.set(binding.name, service);
     const capability = service.manifest.capabilities.search;
     if (!capability) {
       const warning = `endpoint '${binding.name}' does not provide search`;
       warnings.push(warning);
-      plan.push({ name: binding.name, provider: null, status: "skipped", warning });
-      continue;
+      return { name: binding.name, provider: null, status: "skipped", warning, traversal };
     }
     if (capability.provider !== "qmd") {
       const warning = `endpoint '${binding.name}' uses unsupported search provider '${capability.provider}'`;
       warnings.push(warning);
-      plan.push({
+      return {
         name: binding.name,
         provider: capability.provider,
         status: "skipped",
         warning,
-      });
-      continue;
+        traversal,
+      };
     }
     if (!qmdCommand) {
       const warning = `endpoint '${binding.name}' search unavailable: qmd executable is not available`;
       warnings.push(warning);
-      plan.push({ name: binding.name, provider: "qmd", status: "skipped", warning });
-      continue;
+      return { name: binding.name, provider: "qmd", status: "skipped", warning, traversal };
     }
-    plan.push({
+    return {
       name: binding.name,
       provider: "qmd",
       status: "executable",
       folder: service.folder,
       command: qmdCommand,
-    });
+      traversal,
+    };
+  };
+
+  for (const binding of scope.bindings) {
+    plan.push(planBinding(binding, parsed.options.recursive
+      ? { depth: 0, path: [binding.name], via: null }
+      : undefined));
   }
 
   // Dangling `default_endpoints` references never resolve to a binding, so they
@@ -176,11 +206,67 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
     // `scope.bindings` and `scope.dangling` each preserve declaration order, and
     // each binding produced exactly one plan entry above, so the plan has
     // `index` entries before this dangling reference's declared position.
-    plan.splice(index, 0, { name, provider: null, status: "skipped", warning });
+    plan.splice(index, 0, {
+      name,
+      provider: null,
+      status: "skipped",
+      warning,
+      ...(parsed.options.recursive
+        ? { traversal: { depth: 0 as const, path: [name], via: null } }
+        : {}),
+    });
   }
 
   if (scope.dangling.length > 0 && scope.configPath) {
     warnings.push(`Hint: run 'ukp list' or 'ukp diagnose' to check the selected scope, or edit ${scope.configPath}, then retry.`);
+  }
+
+  if (parsed.options.recursive) {
+    const registryByName = new Map(registry.map((binding) => [binding.name, binding]));
+    const visited = new Set(plan.map((endpoint) => endpoint.name));
+    const discovered: PlannedEndpoint[] = [];
+
+    for (const binding of scope.bindings) {
+      const service = loadedServices.get(binding.name);
+      if (!service) continue;
+      const dependencies = [...(service.manifest.dependencies ?? [])]
+        .filter((dependency) => dependency.kind === "authority" || dependency.kind === "context")
+        .sort((left, right) => left.endpoint < right.endpoint ? -1 : left.endpoint > right.endpoint ? 1 : 0);
+      for (const dependency of dependencies) {
+        if (visited.has(dependency.endpoint)) continue;
+        const targetBinding = registryByName.get(dependency.endpoint);
+        if (!targetBinding) {
+          warnings.push(
+            `recursive dependency target '${dependency.endpoint}' is not registered `
+            + `(declared by ${binding.name}, kind: ${dependency.kind})`,
+          );
+          continue;
+        }
+        visited.add(dependency.endpoint);
+        discovered.push(planBinding(targetBinding, {
+          depth: 1,
+          path: [binding.name, dependency.endpoint],
+          via: {
+            kind: dependency.kind,
+            ...(dependency.reason ? { reason: dependency.reason } : {}),
+          },
+        }));
+      }
+    }
+    plan.push(...discovered);
+
+    for (const endpoint of discovered) {
+      const service = loadedServices.get(endpoint.name);
+      if (!service || !endpoint.traversal) continue;
+      for (const dependency of service.manifest.dependencies ?? []) {
+        if (dependency.kind !== "authority" && dependency.kind !== "context") continue;
+        if (!endpoint.traversal.path.includes(dependency.endpoint)) continue;
+        warnings.push(
+          `recursive dependency cycle truncated: ${endpoint.name} -> ${dependency.endpoint} `
+          + `(kind: ${dependency.kind}, path: ${endpoint.traversal.path.join(" -> ")})`,
+        );
+      }
+    }
   }
 
   if (!plan.some((endpoint) => endpoint.status === "executable")) {
@@ -203,6 +289,17 @@ function commandFor(endpoint: PlannedEndpoint, parsed: ParsedSearch, json: boole
   return command;
 }
 
+function renderTraversalProvenance(endpoint: PlannedEndpoint): string[] {
+  const traversal = endpoint.traversal;
+  if (!traversal) return [];
+  const via = traversal.via ? ` via=${traversal.via.kind}` : "";
+  const lines = [
+    `traversal: depth=${traversal.depth} path=${traversal.path.join(" -> ")}${via}`,
+  ];
+  if (traversal.via?.reason) lines.push(`traversal_reason: ${traversal.via.reason}`);
+  return lines;
+}
+
 function executeHumanMode(
   parsed: ParsedSearch,
   plan: readonly PlannedEndpoint[],
@@ -218,6 +315,7 @@ function executeHumanMode(
   for (const endpoint of executable) {
     if (output.length > 0) output.push("");
     output.push(`== ${endpoint.name} ==`);
+    output.push(...renderTraversalProvenance(endpoint));
     const command = commandFor(endpoint, parsed, true);
     const result = spawnSync(command[0]!, command.slice(1), {
       cwd: endpoint.folder!,
@@ -513,11 +611,17 @@ function executeJsonMode(
         provider: endpoint.provider,
         status: "skipped",
         message: endpoint.warning,
+        ...(endpoint.traversal ?? {}),
       });
       continue;
     }
     if (cancelled) {
-      endpoints.push({ name: endpoint.name, provider: endpoint.provider, status: "cancelled" });
+      endpoints.push({
+        name: endpoint.name,
+        provider: endpoint.provider,
+        status: "cancelled",
+        ...(endpoint.traversal ?? {}),
+      });
       continue;
     }
 
@@ -551,6 +655,7 @@ function executeJsonMode(
           format: "qmd-json",
           error_artifact: errorArtifact,
           message: "provider cancelled by SIGINT",
+          ...(endpoint.traversal ?? {}),
         });
         warnings.push(`endpoint '${endpoint.name}' provider cancelled`);
         continue;
@@ -569,6 +674,7 @@ function executeJsonMode(
           format: "qmd-json",
           error_artifact: errorArtifact,
           message,
+          ...(endpoint.traversal ?? {}),
         });
         continue;
       }
@@ -590,6 +696,7 @@ function executeJsonMode(
           format: "qmd-json",
           error_artifact: errorArtifact,
           message,
+          ...(endpoint.traversal ?? {}),
         });
         continue;
       }
@@ -619,6 +726,7 @@ function executeJsonMode(
           }
           : {}),
         ...(hasProviderStderr ? { error_artifact: errorArtifact } : {}),
+        ...(endpoint.traversal ?? {}),
       });
     } catch (error) {
       failed = true;
@@ -639,6 +747,7 @@ function executeJsonMode(
         ...(existsSync(artifact) ? { artifact, format: "qmd-json" } : {}),
         ...(existsSync(errorArtifact) ? { error_artifact: errorArtifact } : {}),
         message,
+        ...(endpoint.traversal ?? {}),
       });
     }
   }
