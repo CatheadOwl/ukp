@@ -24,12 +24,24 @@ function createService(
   endpointName: string,
   capability: "search" | "rg" = "search",
   provider = "qmd",
+  dependencies: Array<{
+    endpoint: string;
+    kind: "authority" | "context" | "implementation" | "evidence";
+    reason?: string;
+  }> = [],
 ): string {
   const folder = join(root, folderName);
   mkdirSync(join(folder, ".ukp"), { recursive: true });
+  const dependencyTables = dependencies.map((dependency) => [
+    "[[dependencies]]",
+    `endpoint = "${dependency.endpoint}"`,
+    `kind = "${dependency.kind}"`,
+    ...(dependency.reason ? [`reason = ${JSON.stringify(dependency.reason)}`] : []),
+    "",
+  ].join("\n")).join("\n");
   writeFileSync(
     join(folder, ".ukp", "service.toml"),
-    `name = "${endpointName}"\n\n[capabilities.${capability}]\nprovider = "${provider}"\n`,
+    `name = "${endpointName}"\n\n${dependencyTables}[capabilities.${capability}]\nprovider = "${provider}"\n`,
     "utf8",
   );
   return folder;
@@ -68,6 +80,11 @@ describe("search", () => {
       "mem0",
     ]).options.explicitEndpoints).toEqual(["cad", "mem0"]);
     expect(() => parseSearchArgs(["hello", "--endpoint", "cad", "-g"])).toThrow("--endpoint and -g");
+    expect(parseSearchArgs(["hello", "--recursive"]).options.recursive).toBe(true);
+    expect(parseSearchArgs(["hello"]).options.recursive).toBe(false);
+    expect(() => parseSearchArgs(["hello", "--recursive", "--recursive"])).toThrow(
+      "--recursive may only be specified once",
+    );
   });
 
   test("rejects bundled repeated global flags like -gg", () => {
@@ -136,6 +153,140 @@ describe("search", () => {
       expect(result.stdout.indexOf("== second")).toBeLessThan(result.stdout.indexOf("== first"));
       expect(invocationCount(first)).toBe(1);
       expect(invocationCount(second)).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("does not expand declared dependencies without --recursive", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-non-recursive-"));
+    const registryPath = join(root, "registry.toml");
+    const target = createService(root, "target-service", "target");
+    const seed = createService(root, "seed-service", "seed", "search", "qmd", [
+      { endpoint: "target", kind: "authority" },
+    ]);
+    registerAt(registryPath, "seed", seed);
+    registerAt(registryPath, "target", target);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "seed",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("== seed ==");
+      expect(result.stdout).not.toContain("== target ==");
+      expect(result.stdout).not.toContain("traversal:");
+      expect(invocationCount(seed)).toBe(1);
+      expect(invocationCount(target)).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("expands authority and context dependencies at depth one in stable order", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-recursive-"));
+    const registryPath = join(root, "registry.toml");
+    const alpha = createService(root, "alpha-service", "alpha", "search", "qmd", [
+      { endpoint: "seed", kind: "authority" },
+      { endpoint: "third", kind: "context" },
+    ]);
+    const ignored = createService(root, "ignored-service", "ignored");
+    const seed = createService(root, "seed-service", "seed", "search", "qmd", [
+      { endpoint: "zeta", kind: "context" },
+      { endpoint: "ignored", kind: "implementation" },
+      { endpoint: "missing", kind: "authority" },
+      { endpoint: "alpha", kind: "authority", reason: "Alpha is authoritative." },
+    ]);
+    const third = createService(root, "third-service", "third");
+    const zeta = createService(root, "zeta-service", "zeta");
+    for (const [name, folder] of [
+      ["alpha", alpha],
+      ["ignored", ignored],
+      ["seed", seed],
+      ["third", third],
+      ["zeta", zeta],
+    ] as const) registerAt(registryPath, name, folder);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "seed",
+        "--recursive",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.indexOf("== seed ==")).toBeLessThan(result.stdout.indexOf("== alpha =="));
+      expect(result.stdout.indexOf("== alpha ==")).toBeLessThan(result.stdout.indexOf("== zeta =="));
+      expect(result.stdout).toContain("traversal: depth=0 path=seed");
+      expect(result.stdout).toContain("traversal: depth=1 path=seed -> alpha via=authority");
+      expect(result.stdout).toContain("traversal_reason: Alpha is authoritative.");
+      expect(result.stdout).toContain("traversal: depth=1 path=seed -> zeta via=context");
+      expect(result.stdout).not.toContain("== ignored ==");
+      expect(result.stdout).not.toContain("== third ==");
+      expect(result.stderr).toContain("recursive dependency target 'missing' is not registered");
+      expect(result.stderr).toContain("recursive dependency cycle truncated: alpha -> seed");
+      expect(invocationCount(seed)).toBe(1);
+      expect(invocationCount(alpha)).toBe(1);
+      expect(invocationCount(zeta)).toBe(1);
+      expect(invocationCount(ignored)).toBe(0);
+      expect(invocationCount(third)).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("deduplicates recursive targets and emits JSON traversal provenance", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-recursive-json-"));
+    const registryPath = join(root, "registry.toml");
+    const target = createService(root, "target-service", "target");
+    const first = createService(root, "first-service", "first", "search", "qmd", [
+      { endpoint: "target", kind: "context", reason: "First path." },
+    ]);
+    const second = createService(root, "second-service", "second", "search", "qmd", [
+      { endpoint: "target", kind: "authority", reason: "Selected first." },
+    ]);
+    registerAt(registryPath, "first", first);
+    registerAt(registryPath, "second", second);
+    registerAt(registryPath, "target", target);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "second",
+        "--endpoint",
+        "first",
+        "--recursive",
+        "--json",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+        artifactRoot: join(root, "artifacts"),
+        artifactRunId: "recursive-run",
+      });
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(result.stdout);
+      expect(envelope.endpoints.map((endpoint: { name: string }) => endpoint.name)).toEqual([
+        "second",
+        "first",
+        "target",
+      ]);
+      expect(envelope.endpoints[0]).toMatchObject({ depth: 0, path: ["second"], via: null });
+      expect(envelope.endpoints[1]).toMatchObject({ depth: 0, path: ["first"], via: null });
+      expect(envelope.endpoints[2]).toMatchObject({
+        depth: 1,
+        path: ["second", "target"],
+        via: { kind: "authority", reason: "Selected first." },
+      });
+      expect(invocationCount(target)).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -440,6 +591,9 @@ describe("search", () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toBe("");
       const envelope = JSON.parse(result.stdout);
+      expect("depth" in envelope.endpoints[0]).toBe(false);
+      expect("path" in envelope.endpoints[0]).toBe(false);
+      expect("via" in envelope.endpoints[0]).toBe(false);
       expect(envelope.schema).toBe("ukp.search.v1");
       expect(envelope.run_id).toBe("test-run");
       expect(envelope.endpoints.map((endpoint: { status: string }) => endpoint.status)).toEqual([

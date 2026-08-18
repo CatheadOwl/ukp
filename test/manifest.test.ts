@@ -72,6 +72,18 @@ describe("Service Manifest and diagnose", () => {
     }
   });
 
+  test("rejects a folder that declares both Service and Client roles", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-role-conflict-"));
+    mkdirSync(join(root, ".ukp"));
+    writeFileSync(join(root, ".ukp", "service.toml"), "[capabilities.search]\nprovider = \"qmd\"\n");
+    writeFileSync(join(root, ".ukp", "client.toml"), "default_endpoints = [\"docs\"]\n");
+    try {
+      expect(() => loadManifest(root)).toThrow("Folder role conflict");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("ignores legacy get capability contents before schema validation", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
     const folder = join(root, "legacy-get");

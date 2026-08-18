@@ -97,6 +97,8 @@ describe("CLI bootstrap", () => {
     expect(help).toContain("--endpoint <name>");
     expect(help).toContain("-c, --endpoint <name>");
     expect(help).toContain("-g");
+    expect(help).toContain("--recursive");
+    expect(help).toContain("authority/context dependencies at depth 1");
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
     expect(help).not.toContain("default: []");
   });
@@ -366,6 +368,23 @@ describe("CLI bootstrap", () => {
     }
   });
 
+  test("init service refuses a folder that already has a Client Config", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-client-role-"));
+    const errors: string[] = [];
+    mkdirSync(join(root, ".ukp"));
+    writeFileSync(join(root, ".ukp", "client.toml"), 'default_endpoints = ["docs"]\n');
+    try {
+      expect(runCli(["init", "service"], undefined, (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(1);
+      expect(errors.join("\n")).toContain("already a Client workspace");
+      expect(existsSync(join(root, ".ukp", "service.toml"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("guide client is a short CLI-accessible client-path guide", () => {
     const output: string[] = [];
     expect(renderClientGuide()).toContain("UKP Client quickstart");
@@ -375,6 +394,7 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("default_endpoints");
     expect(guide).toContain("scope: explicit / global / client-config / registry-fallback");
     expect(guide).toContain("provider path (ukp guide service)");
+    expect(guide).toContain("cannot coexist in the same folder");
     expect(guide).toContain("does not fall back to the Registry");
     expect(guide).toContain("ukp register does not edit .ukp/client.toml");
   });
