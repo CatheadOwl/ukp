@@ -114,6 +114,19 @@ export function diagnoseService(
   return { service, capabilities };
 }
 
+export function renderDependencyRegistryWarnings(
+  service: LoadedManifest,
+  registry: readonly RegistryBinding[],
+): string[] {
+  if (!service.manifest.dependencies || service.manifest.dependencies.length === 0) return [];
+  const registeredEndpoints = new Set(registry.map((binding) => binding.name));
+  return service.manifest.dependencies
+    .filter((dependency) => !registeredEndpoints.has(dependency.endpoint))
+    .map((dependency) =>
+      `dependency target '${dependency.endpoint}' is not registered (declared by ${service.effectiveName})`
+    );
+}
+
 function collectValues(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
@@ -225,12 +238,24 @@ export function executeDiagnoseCommand(
     const parsed = parseDiagnoseArgs(args);
     if (!parsed.explicitEndpoints && !parsed.global) {
       try {
+        const report = diagnoseService(context.currentDirectory, context.resolveProvider);
+        let dependencyWarnings: string[] = [];
+        try {
+          dependencyWarnings = renderDependencyRegistryWarnings(report.service, readRegistry(context.registryPath));
+        } catch (error) {
+          if (report.service.manifest.dependencies && report.service.manifest.dependencies.length > 0) {
+            dependencyWarnings = [
+              `dependency registry check skipped: ${error instanceof Error ? error.message : String(error)}`,
+            ];
+          }
+        }
+        const warnings = [...parsed.warnings, ...dependencyWarnings];
         return {
           exitCode: 0,
-          stdout: renderDiagnose(diagnoseService(context.currentDirectory, context.resolveProvider), {
+          stdout: renderDiagnose(report, {
             includeSearchabilityHint: true,
           }),
-          stderr: parsed.warnings.length > 0 ? `${parsed.warnings.join("\n")}\n` : "",
+          stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
         };
       } catch (error) {
         return {
@@ -257,6 +282,7 @@ export function executeDiagnoseCommand(
       const result = diagnoseBinding(binding, context.resolveProvider);
       if (result.status === "ok") {
         output.push(renderDiagnose(result.report, { includeSearchabilityHint: true }).trimEnd());
+        warnings.push(...renderDependencyRegistryWarnings(result.report.service, registry));
       } else {
         failed = true;
         output.push("status: failed");

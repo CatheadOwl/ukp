@@ -685,6 +685,38 @@ describe("CLI bootstrap", () => {
     }
   });
 
+  test("diagnose warns about unregistered dependency targets without failing capability checks", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-diagnose-dependency-warning-"));
+    const registryPath = join(root, "registry.toml");
+    const service = join(root, "agent-dev");
+    const output: string[] = [];
+    const errors: string[] = [];
+    mkdirSync(join(service, ".ukp"), { recursive: true });
+    writeFileSync(join(service, ".ukp", "service.toml"), [
+      'name = "agent-dev"',
+      "",
+      "[[dependencies]]",
+      'endpoint = "ukp-product"',
+      'kind = "authority"',
+      "",
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+    ].join("\n"));
+    registerAt(registryPath, "agent-dev", service);
+    try {
+      expect(runCli(["diagnose", "--endpoint", "agent-dev"], (message) => output.push(message), (message) => errors.push(message), {
+        currentDirectory: root,
+        registryPath,
+        resolveProvider: () => ({ supported: true }),
+      })).toBe(0);
+      expect(output.join("\n")).toContain("dependency: depends_on -> ukp-product (kind: authority)");
+      expect(errors.join("\n")).toContain("dependency target 'ukp-product' is not registered (declared by agent-dev)");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("inspect explains explicit endpoint routing without starting search", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-inspect-explicit-"));
     const registryPath = join(root, "registry.toml");
@@ -717,6 +749,7 @@ describe("CLI bootstrap", () => {
     const registryPath = join(root, "registry.toml");
     const service = join(root, "agent-dev");
     const output: string[] = [];
+    const errors: string[] = [];
     mkdirSync(join(service, ".ukp"), { recursive: true });
     writeFileSync(join(service, ".ukp", "service.toml"), [
       'name = "agent-dev"',
@@ -732,7 +765,7 @@ describe("CLI bootstrap", () => {
     ].join("\n"));
     registerAt(registryPath, "agent-dev", service);
     try {
-      expect(runCli(["inspect", "--endpoint", "agent-dev"], (message) => output.push(message), undefined, {
+      expect(runCli(["inspect", "--endpoint", "agent-dev"], (message) => output.push(message), (message) => errors.push(message), {
         currentDirectory: root,
         registryPath,
         resolveProvider: () => ({ supported: true }),
@@ -740,6 +773,9 @@ describe("CLI bootstrap", () => {
       const rendered = output.join("\n");
       expect(rendered).toContain("dependency: depends_on -> anthropic-agent-patterns (kind: context)");
       expect(rendered).toContain("dependency_reason: Agent development uses these patterns as context.");
+      expect(errors.join("\n")).toContain(
+        "dependency target 'anthropic-agent-patterns' is not registered (declared by agent-dev)",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

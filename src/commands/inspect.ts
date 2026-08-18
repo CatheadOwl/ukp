@@ -5,6 +5,7 @@ import { resolveScope, ScopeError, type ResolvedScope } from "../scope.ts";
 import {
   defaultProviderResolver,
   evaluateServiceCapabilities,
+  renderDependencyRegistryWarnings,
   renderDiagnose,
   type DiagnoseReport,
   type ProviderResolver,
@@ -196,6 +197,9 @@ export function executeInspectCommand(
     for (const binding of scope.bindings) {
       const result = inspectBinding(binding, context.resolveProvider);
       if (result.status === "failed" || result.status === "unavailable") failed = true;
+      if (result.status !== "failed") {
+        warnings.push(...renderDependencyRegistryWarnings(result.report.service, registry));
+      }
       output.push("");
       output.push(renderEndpointInspection(binding, result));
     }
