@@ -162,6 +162,18 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("ukp refresh --endpoint your-endpoint-name");
     expect(guide).toContain("Future providers should add provider adapters");
     expect(guide).toContain("ukp unregister --endpoint <name>");
+    expect(guide.indexOf("Fast path:")).toBeLessThan(guide.indexOf("Model:"));
+    expect(guide.indexOf("Key boundary:")).toBeLessThan(guide.indexOf("Model:"));
+    expect(guide.indexOf("ukp init service --name your-endpoint-name"))
+      .toBeLessThan(guide.indexOf("ukp guide service qmd"));
+    expect(guide.indexOf("ukp guide service qmd"))
+      .toBeLessThan(guide.indexOf("ukp diagnose"));
+    expect(guide.indexOf("ukp diagnose")).toBeLessThan(guide.indexOf("ukp register"));
+    expect(guide.indexOf("ukp register")).toBeLessThan(guide.indexOf("ukp inspect --endpoint your-endpoint-name"));
+    expect(guide.indexOf("ukp inspect --endpoint your-endpoint-name"))
+      .toBeLessThan(guide.indexOf("ukp search \"keyword\" --endpoint your-endpoint-name --limit 3"));
+    expect(guide.indexOf("ukp search \"keyword\" --endpoint your-endpoint-name --limit 3"))
+      .toBeLessThan(guide.indexOf("ukp get --endpoint your-endpoint-name <reference>"));
     expect(guide).not.toContain("[capabilities.get]");
     expect(guide).not.toContain("qmd init");
     expect(guide).not.toContain("qmd collection");
@@ -176,10 +188,10 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("qmd init");
     expect(guide).toContain("qmd collection add");
     expect(guide).toContain("provider-owned");
-    expect(guide).toContain("qmd --help");
-    expect(guide).toContain("qmd --help lists the commands");
+    expect(guide).toContain("qmd collection add --help");
+    expect(guide).toContain("relevant QMD subcommand help");
     expect(guide).not.toContain("ukp register");
-    expect(guide).not.toContain("qmd <command> --help");
+    expect(guide).not.toContain("qmd --help lists the commands");
     expect(guide).not.toContain("-n 3 --format json");
     expect(guide).not.toContain("short-name");
     expect(guide).not.toContain("<searchable-folder>");
