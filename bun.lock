@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "ukp",
+      "name": "@catheadowl/ukp",
       "dependencies": {
         "commander": "15.0.0",
         "smol-toml": "1.7.1",

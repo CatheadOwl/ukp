@@ -1,0 +1,15 @@
+node_modules/
+coverage/
+dist/
+*.tgz
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+Thumbs.db
+
+.ukp/
+.qmd/
+artifacts/

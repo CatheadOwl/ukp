@@ -1,16 +1,40 @@
 {
-  "name": "ukp",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@catheadowl/ukp",
+  "version": "0.1.0",
   "type": "module",
+  "description": "Local-first Unified Knowledge Plane CLI for named knowledge endpoints",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CatheadOwl/ukp.git"
+  },
+  "homepage": "https://github.com/CatheadOwl/ukp#readme",
+  "bugs": {
+    "url": "https://github.com/CatheadOwl/ukp/issues"
+  },
+  "keywords": [
+    "knowledge",
+    "cli",
+    "bun",
+    "qmd",
+    "search",
+    "agent"
+  ],
   "bin": {
     "ukp": "src/cli.ts"
   },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "package.json",
+    "bun.lock",
+    "tsconfig.json"
+  ],
   "scripts": {
     "dev": "bun run src/cli.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "ground-truth": "bun run scripts/project-ground-truth.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "commander": "15.0.0",
