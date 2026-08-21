@@ -460,8 +460,8 @@ function snippetOf(result: unknown): string | undefined {
 
 /**
  * A snippet anchored at file line 1 that starts with a `---` frontmatter banner
- * or a heading is file-head boilerplate, not a hit-location excerpt (spec
- * "snippet 语义"). It is not shown as the excerpt; the title stands in for it.
+ * or a heading is file-head boilerplate, not a hit-location excerpt. It is not
+ * shown as the excerpt; the title stands in for it.
  */
 function isFileHeadBanner(snippet: string, line: number | undefined): boolean {
   if (line !== 1) return false;
@@ -470,7 +470,7 @@ function isFileHeadBanner(snippet: string, line: number | undefined): boolean {
 }
 
 /**
- * Render one structured QMD result as a result unit (spec "Result Unit 字段映射").
+ * Render one structured QMD result as a result unit.
  *
  * A result unit answers three reader questions: what it is (`title — basename:line`),
  * why it matches (excerpt), and how to read it (a copyable `get` line addressing
