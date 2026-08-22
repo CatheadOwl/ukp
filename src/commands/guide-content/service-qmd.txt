@@ -1,0 +1,43 @@
+UKP Service quickstart - QMD provider setup
+
+Goal: make a registered Service's content searchable through the default QMD provider.
+Run these from the Service folder root.
+
+Boundary:
+- These are provider-owned steps. QMD owns collection, index, ranking, and config.
+- UKP only routes capability requests. This topic carries the journey; exact
+  flags and arguments belong to the relevant QMD subcommand help.
+
+Fast path for a simple knowledge folder:
+1. qmd init
+2. qmd collection add .
+3. qmd update
+4. qmd search "keyword"
+5. qmd get <reference> --no-line-numbers
+
+1. Initialize QMD (qmd init)
+2. Add the searchable collections (qmd collection add)
+   For a pure knowledge base, add the folder root; otherwise add the folder(s)
+   whose content should be searchable.
+3. Use a stable short collection name (qmd collection rename)
+   QMD names a collection from the indexed folder; rename it to a short
+   stable name so provider-native artifact URIs stay clean.
+4. Update the index (qmd update, qmd status)
+5. Verify the provider before returning to UKP (qmd search / qmd get)
+   If a search returns matches, the provider is ready; return to
+   'ukp guide service' step 4.
+   A read smoke ('qmd get <reference> --no-line-numbers') is required for
+   observe mode (external or nested collection root): it confirms the provider
+   can resolve the weak reference that ukp get will delegate to.
+
+Exact flags and arguments come from the relevant QMD subcommand help, for example:
+  qmd init --help
+  qmd collection add --help
+  qmd update --help
+  qmd search --help
+  qmd get --help
+
+Remember:
+- Provider config is not stored in the UKP Registry.
+- A registered Service is addressable; it is searchable only after provider setup.
+- Keep the local index out of version control: ignore .qmd/*.sqlite and .qmd/*.sqlite-*.
