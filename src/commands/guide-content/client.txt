@@ -1,0 +1,36 @@
+UKP Client quickstart
+
+Goal: use registered Services from a workspace by default, without naming an endpoint on every call.
+
+Model:
+- Client path is separate from the provider path: it uses Services; it does not declare one.
+- One folder has one UKP role: .ukp/client.toml and .ukp/service.toml cannot coexist in the same folder.
+- A workspace .ukp/client.toml default_endpoints list selects which registered endpoints you mean when no selector is given.
+- UKP walks up from the current directory to find the nearest .ukp/client.toml.
+- Client Config stores endpoint names only; bindings live in the Host Registry.
+- Explicit --endpoint <name> or -g overrides the client defaults. With no Client Config, most commands fall back to every registered endpoint.
+- ukp refresh is stricter: it does not fall back to the Registry. It uses your Client Config defaults, or requires --endpoint <name> / -g.
+- ukp register does not edit .ukp/client.toml.
+
+1. Create a workspace Client Config
+   .ukp/client.toml at the workspace root:
+   default_endpoints = ["endpoint-a", "endpoint-b"]
+   Each name must match a registered endpoint; run 'ukp list' to see what is registered.
+
+2. Use Services without a selector
+   ukp search "keyword"
+   ukp inspect
+   ukp get --endpoint endpoint-a docs/example.md   (get still names a path, and --endpoint here wins)
+
+3. Check which scope is active
+   ukp inspect
+   It prints scope: explicit / global / client-config / registry-fallback and the source.
+
+4. Dangling defaults warn instead of failing silently
+   A default_endpoints entry not registered yet is reported as a warning by inspect, and commands still run on the resolvable ones.
+
+Remember:
+- Client path consumes Services; provider path (ukp guide service) creates them.
+- Client Config lists names, not paths or provider details.
+- Explicit selectors always beat Client Config defaults.
+- Register does not edit Client Config, and Client Config does not register endpoints.
