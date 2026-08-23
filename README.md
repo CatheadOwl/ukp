@@ -1,14 +1,3 @@
----
-title: UKP
-date: 2026-07-23
-updated: 2026-08-22
-status: current
-tags:
-  - ukp
-  - cli
-  - public
----
-
 # UKP
 
 Local-first Unified Knowledge Plane CLI for named knowledge endpoints.
@@ -118,6 +107,17 @@ commands that support global scope.
 After the first public package is published:
 
 ```bash
+bun --version
+npm install -g @catheadowl/ukp
+ukp --version
+ukp guide service
+```
+
+For one-off execution from the npm registry:
+
+```bash
+npx @catheadowl/ukp --version
+pnpm dlx @catheadowl/ukp --version
 bunx @catheadowl/ukp --version
 bunx @catheadowl/ukp guide service
 ```
@@ -132,7 +132,8 @@ bun run src/cli.ts guide service
 
 Requirements:
 
-- Bun `1.3.14` or newer in the verified baseline family.
+- Bun `1.3.14` or newer in the verified baseline family. The package is
+  published through npm, but the CLI currently runs on Bun.
 - QMD on `PATH` for `search/qmd`, `get/qmd`, and `refresh/qmd`.
 - Node/npm for package dry-runs and publishing workflows.
 
