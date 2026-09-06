@@ -10,6 +10,9 @@ export interface GetRequest {
   endpoint: string;
   path: string;
   lines?: LineRange;
+  /** "uri" = exact slot addressing (ukp:// input, ADR 0014): the path must
+   * resolve exactly; no fuzzy fallback and no provider delegation on miss. */
+  addressing?: "uri";
 }
 
 export interface LineRange {
@@ -294,6 +297,28 @@ function readViaQmd(
   return { exitCode: 0, stdout: body, stderr: "" };
 }
 
+function readTargetWithLines(targetPath: string, request: GetRequest): GetResult {
+  let content: string;
+  try {
+    content = readFileSync(targetPath, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { exitCode: 1, stdout: "", stderr: `ukp get: resource disappeared during lookup\n` };
+    }
+    throw error;
+  }
+  const rangeResult = applyLineRange(content, request.lines);
+  if (rangeResult.kind === "start-beyond-eof") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr:
+        `ukp get: --lines start ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)\n`,
+    };
+  }
+  return { exitCode: 0, stdout: rangeResult.content, stderr: "" };
+}
+
 export function executeGet(request: GetRequest, context: GetContext): GetResult {
   // A docid[:line] handoff key already carries an embedded line; a separate
   // --lines range would double-specify (ADR 0011 / get-qmd-adapter). Strip any
@@ -351,6 +376,33 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     return readViaQmd(qmdCommand, service.folder, request, binding.name);
   }
 
+  // ukp:// URI input (ADR 0014): exact slot addressing. The rel-path must
+  // resolve exactly — no filesystem fuzzy fallback and no QMD weak-reference
+  // delegation on a miss; failures classify per the three-valued taxonomy
+  // (dangling-endpoint is raised earlier by scope resolution; here:
+  // resource-missing). Containment is the same resolved-realpath check as
+  // the explicit file baseline (G5: resolved containment stance).
+  if (request.addressing === "uri") {
+    let targetPath: string;
+    try {
+      targetPath = resolveEndpointPath(service.folder, request.path);
+    } catch (error) {
+      if (error instanceof GetUsageError) {
+        return { exitCode: 2, stdout: "", stderr: `ukp get: ${error.message}\n` };
+      }
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr:
+            `ukp get: resource-missing '${request.path}' in endpoint '${binding.name}' (ukp:// addresses a slot exactly; no fuzzy resolution)\n`,
+        };
+      }
+      throw error;
+    }
+    return readTargetWithLines(targetPath, request);
+  }
+
   let targetPath: string;
   try {
     targetPath = resolveEndpointPath(service.folder, request.path);
@@ -406,23 +458,5 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     }
   }
 
-  let content: string;
-  try {
-    content = readFileSync(targetPath, "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return { exitCode: 1, stdout: "", stderr: `ukp get: resource disappeared during lookup\n` };
-    }
-    throw error;
-  }
-  const rangeResult = applyLineRange(content, request.lines);
-  if (rangeResult.kind === "start-beyond-eof") {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr:
-        `ukp get: --lines start ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)\n`,
-    };
-  }
-  return { exitCode: 0, stdout: rangeResult.content, stderr: "" };
+  return readTargetWithLines(targetPath, request);
 }

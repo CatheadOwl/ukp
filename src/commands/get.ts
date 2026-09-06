@@ -16,9 +16,11 @@ function createGetCommand(): Command {
     .allowUnknownOption(false)
     .allowExcessArguments(true)
     .helpOption("-h, --help", "show this help")
-    .usage("--endpoint <name> <reference> [--lines <start[:count]>]")
-    .description("Read an endpoint-scoped resource reference from one Service endpoint.")
-    .argument("[reference]", "endpoint-local path or provider-owned reference")
+    .usage("--endpoint <name> <reference> [--lines <start[:count]>] | ukp://<endpoint>/<rel-path>[#L<line>]")
+    .description(
+      "Read an endpoint-scoped resource reference from one Service endpoint. A ukp:// URI is addressed exactly (no fuzzy resolution); #L<line> maps to the line window start.",
+    )
+    .argument("[reference]", "endpoint-local path, ukp:// URI, or provider-owned reference")
     .option("-c, --endpoint <name>", "select the endpoint that owns the resource")
     .option("-g", "not supported by get; use --endpoint <name>")
     .option("--lines <start[:count]>", "read a 1-based text line window");
@@ -69,6 +71,62 @@ function parseGetCommand(args: readonly string[]): {
   };
 }
 
+const UKP_URI_PREFIX = "ukp://";
+
+/**
+ * Parse a `ukp://<endpoint>/<rel-path>[#fragment]` URI (ADR 0014 target form)
+ * into a GetRequest with exact slot addressing.
+ *
+ * This is a deliberate pre-activation pilot slice: it recognizes the scheme
+ * prefix and splits authority/path/fragment verbatim — no percent-decoding,
+ * no case folding, no canonical-form validation (G3 remains unpinned; see
+ * workunits/ukp_uri/TODO). `#L<line>` maps to the line-window start; any other
+ * fragment is an opaque navigation hint and is ignored for reading.
+ */
+function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }): GetRequest {
+  if (flags.endpoint !== undefined) {
+    throw new GetUsageError("a ukp:// URI carries its own endpoint; do not also pass --endpoint");
+  }
+  const rest = uri.slice(UKP_URI_PREFIX.length);
+  const hashIndex = rest.indexOf("#");
+  const fragment = hashIndex === -1 ? undefined : rest.slice(hashIndex + 1);
+  const pathPart = hashIndex === -1 ? rest : rest.slice(0, hashIndex);
+  const slashIndex = pathPart.indexOf("/");
+  // No slash: the whole remainder is the endpoint with an empty rel-path.
+  const endpoint = slashIndex === -1 ? pathPart : pathPart.slice(0, slashIndex);
+  const relPath = slashIndex === -1 ? "" : pathPart.slice(slashIndex + 1);
+  if (endpoint.length === 0) {
+    throw new GetUsageError("ukp:// URI must name an endpoint: ukp://<endpoint>/<rel-path>");
+  }
+  if (relPath.length === 0) {
+    throw new GetUsageError("ukp:// URI must carry a non-empty endpoint-relative path");
+  }
+
+  let lines: LineRange | undefined;
+  const lineMatch = fragment === undefined ? undefined : /^L([0-9]+)$/.exec(fragment);
+  if (lineMatch) {
+    if (flags.lines !== undefined) {
+      throw new GetUsageError("a ukp:// #L<line> fragment already carries a line; do not also pass --lines");
+    }
+    const start = Number(lineMatch[1]);
+    if (start < 1) throw new GetUsageError("ukp:// #L fragment must be a positive line number");
+    lines = { start };
+  }
+  // Non-`#L` fragments are opaque navigation hints (ADR 0014 rule 5): ignored
+  // for reading; a broken path invalidates the fragment, never the reverse.
+
+  return {
+    endpoint,
+    path: relPath,
+    addressing: "uri",
+    ...(lines !== undefined
+      ? { lines }
+      : flags.lines !== undefined
+        ? { lines: parseLineRange(flags.lines) }
+        : {}),
+  };
+}
+
 export function parseGetArgs(args: readonly string[]): GetRequest {
   const parsed = parseGetCommand(args);
   const [path, unexpected] = parsed.positionals;
@@ -78,6 +136,14 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
   }
   if (countFlagOccurrences(args, "--lines") > 1) throw new GetUsageError("--lines may only be specified once");
   if (parsed.global) throw new GetUsageError("get requires --endpoint <name> and does not support -g");
+  if (path !== undefined && path.startsWith(UKP_URI_PREFIX)) {
+    if (unexpected !== undefined) {
+      throw new GetUsageError(
+        `unexpected argument '${unexpected}'; get accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
+      );
+    }
+    return parseUkpUri(path, { endpoint: parsed.endpoint, lines: parsed.lines });
+  }
   if (parsed.endpoint === undefined || parsed.endpoint.length === 0) {
     throw new GetUsageError("get requires --endpoint <name>");
   }
