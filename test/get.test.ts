@@ -858,3 +858,124 @@ describe("docid handoff (ADR 0011)", () => {
     }
   });
 });
+
+describe("get ukp:// URI input (exact slot addressing)", () => {
+  test("parses a ukp:// URI into endpoint, rel-path, and uri addressing", () => {
+    expect(parseGetArgs(["ukp://notes/docs/note.md"])).toEqual({
+      endpoint: "notes",
+      path: "docs/note.md",
+      addressing: "uri",
+    });
+    expect(parseGetArgs(["ukp://notes/docs/note.md#L2"]).lines).toEqual({ start: 2 });
+    // Opaque navigation fragments are ignored for reading (ADR 0014 rule 5).
+    expect(parseGetArgs(["ukp://notes/docs/note.md#recovery"]).lines).toBeUndefined();
+  });
+
+  test("rejects malformed ukp:// URI usage", () => {
+    expect(() => parseGetArgs(["ukp://notes"])).toThrow("non-empty endpoint-relative path");
+    expect(() => parseGetArgs(["ukp:///docs/note.md"])).toThrow("must name an endpoint");
+    expect(() => parseGetArgs(["ukp://notes/docs/note.md#L2", "--lines", "3"])).toThrow(
+      "already carries a line",
+    );
+    expect(() => parseGetArgs(["--endpoint", "notes", "ukp://notes/docs/note.md"])).toThrow(
+      "carries its own endpoint",
+    );
+    expect(() => parseGetArgs(["ukp://notes/docs/note.md#L0"])).toThrow("positive line number");
+  });
+
+  test("reads a file-backed resource through a ukp:// URI, honoring #L<line>", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-file-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const full = executeGetCommand(["ukp://notes/docs/note.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(full).toEqual({ exitCode: 0, stdout: "one\ntwo\nthree\nfour\n", stderr: "" });
+
+      const window = executeGetCommand(["ukp://notes/docs/note.md#L2"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(window).toEqual({ exitCode: 0, stdout: "two\nthree\nfour\n", stderr: "" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reports resource-missing for a ukp:// URI miss without fuzzy fallback", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-missing-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    // Fuzzy bait: a similarly named file must NOT be suggested under URI addressing.
+    writeFileSync(join(service, "docs", "nope-similar.md"), "bait\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeGetCommand(["ukp://notes/docs/nope.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("resource-missing 'docs/nope.md' in endpoint 'notes'");
+      expect(result.stderr).not.toContain("Did you mean");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("does not delegate a ukp:// URI miss to a QMD-backed provider", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-qmd-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["ukp://fixture-qmd/docs/absent.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("resource-missing 'docs/absent.md'");
+      // Exact slot addressing: no provider invocation on a URI miss.
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("classifies an unregistered URI endpoint as a resolution failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-dangling-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeGetCommand(["ukp://ghost/docs/note.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("unknown endpoint 'ghost'");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps containment for ukp:// URI traversal segments", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-containment-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeGetCommand(["ukp://notes/docs/../docs/note.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("'..' path segments");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
