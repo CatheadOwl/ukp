@@ -16,7 +16,7 @@ import {
   resolveProposeFolder,
   type ProposeContext,
 } from "../src/capabilities/propose.ts";
-import { executeProposeCommand } from "../src/commands/propose.ts";
+import { executeProposeCommand, renderProposeHelp } from "../src/commands/propose.ts";
 import { registerAt } from "../src/registry.ts";
 
 function createService(root: string, name: string, provider = "file", folder?: string): string {
@@ -336,6 +336,14 @@ describe("ukp propose command", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("help surfaces --id as the revision key and the persistent-identity default", () => {
+    const help = renderProposeHelp().replace(/\s+/g, " ");
+    expect(help).toContain("resubmitting the same id updates the same proposal (revision +1)");
+    expect(help).toContain("defaults to the --file basename");
+    expect(help).toContain("becomes the proposal's persistent id");
+    expect(help).toContain("renaming the file creates a new proposal");
   });
 
   test("--id defaults to the --file basename and validation applies to the derived id", () => {

@@ -420,6 +420,9 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("three outcomes: created (new, revision 1), unchanged (identical content, no write), updated (replaced, revision +1)");
     expect(guide).toContain("ukp propose --endpoint <name> --file draft.md");
     expect(guide).toContain("--id defaults to the draft basename");
+    expect(guide).toContain("becomes the proposal's persistent identity");
+    expect(guide).toContain("Renaming the file and resubmitting creates a new proposal");
+    expect(guide).toContain("resubmitting the same id updates the same proposal");
     expect(guide).toContain("Never edit Service-side proposal files directly");
     expect(guide).toContain("Service-maintained and stripped from submissions");
     expect(guide).not.toContain("stdin");
