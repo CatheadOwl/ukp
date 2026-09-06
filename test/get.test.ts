@@ -881,6 +881,18 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
       "carries its own endpoint",
     );
     expect(() => parseGetArgs(["ukp://notes/docs/note.md#L0"])).toThrow("positive line number");
+    expect(() => parseGetArgs(["ukp://notes/docs/note.md#L99999999999999999999"])).toThrow(
+      "positive line number",
+    );
+    expect(() => parseGetArgs(["ukp://notes\\docs\\note.md"])).toThrow(
+      "'/' as the path separator",
+    );
+    expect(() => parseGetArgs(["foo", "ukp://notes/docs/note.md"])).toThrow(
+      "unexpected argument",
+    );
+    expect(() => parseGetArgs(["ukp://notes/docs/note.md", "extra"])).toThrow(
+      "unexpected argument",
+    );
   });
 
   test("reads a file-backed resource through a ukp:// URI, honoring #L<line>", () => {
@@ -940,6 +952,47 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
       expect(result.stderr).toContain("resource-missing 'docs/absent.md'");
       // Exact slot addressing: no provider invocation on a URI miss.
       expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("treats a qmd://-shaped ukp:// rel-path as a literal path, never provider input", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-qmd-shaped-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createQmdBackedService(root, "fixture-qmd");
+    registerAt(registryPath, "fixture-qmd", service);
+    try {
+      const result = executeGetCommand(["ukp://fixture-qmd/qmd://running-agents.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      // The rel-path is a literal segment sequence ("qmd:", "", "running-agents.md"):
+      // rejected as a usage error by path validation, never routed to the provider.
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("empty path segments");
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("words a #L beyond-end miss by its URI origin, not --lines", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-eof-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeGetCommand(["ukp://notes/docs/note.md#L9"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "line window start 9 is beyond the end of 'docs/note.md' (4 lines)",
+      );
+      expect(result.stderr).not.toContain("--lines");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

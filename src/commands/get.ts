@@ -92,6 +92,9 @@ function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }):
   const fragment = hashIndex === -1 ? undefined : rest.slice(hashIndex + 1);
   const pathPart = hashIndex === -1 ? rest : rest.slice(0, hashIndex);
   const slashIndex = pathPart.indexOf("/");
+  if (slashIndex === -1 && pathPart.includes("\\")) {
+    throw new GetUsageError("ukp:// URI uses '/' as the path separator: ukp://<endpoint>/<rel-path>");
+  }
   // No slash: the whole remainder is the endpoint with an empty rel-path.
   const endpoint = slashIndex === -1 ? pathPart : pathPart.slice(0, slashIndex);
   const relPath = slashIndex === -1 ? "" : pathPart.slice(slashIndex + 1);
@@ -109,7 +112,11 @@ function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }):
       throw new GetUsageError("a ukp:// #L<line> fragment already carries a line; do not also pass --lines");
     }
     const start = Number(lineMatch[1]);
-    if (start < 1) throw new GetUsageError("ukp:// #L fragment must be a positive line number");
+    // Same integer discipline as --lines: an unrepresentably large number is a
+    // usage error here, not a deferred start-beyond-eof read failure.
+    if (!Number.isSafeInteger(start) || start < 1) {
+      throw new GetUsageError("ukp:// #L fragment must be a positive line number");
+    }
     lines = { start };
   }
   // Non-`#L` fragments are opaque navigation hints (ADR 0014 rule 5): ignored
@@ -136,12 +143,14 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
   }
   if (countFlagOccurrences(args, "--lines") > 1) throw new GetUsageError("--lines may only be specified once");
   if (parsed.global) throw new GetUsageError("get requires --endpoint <name> and does not support -g");
+  // Unexpected positionals are rejected before the missing-flag checks so the
+  // error names the real problem (extra argument), not a missing --endpoint.
+  if (unexpected !== undefined) {
+    throw new GetUsageError(
+      `unexpected argument '${unexpected}'; get accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
+    );
+  }
   if (path !== undefined && path.startsWith(UKP_URI_PREFIX)) {
-    if (unexpected !== undefined) {
-      throw new GetUsageError(
-        `unexpected argument '${unexpected}'; get accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
-      );
-    }
     return parseUkpUri(path, { endpoint: parsed.endpoint, lines: parsed.lines });
   }
   if (parsed.endpoint === undefined || parsed.endpoint.length === 0) {
@@ -149,11 +158,6 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
   }
   if (path === undefined || path.length === 0) {
     throw new GetUsageError("get reference must be a non-empty endpoint-scoped reference");
-  }
-  if (unexpected !== undefined) {
-    throw new GetUsageError(
-      `unexpected argument '${unexpected}'; get accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
-    );
   }
 
   return {
@@ -193,6 +197,7 @@ export function renderGetUsageError(message: string): string {
   return [
     `ukp get: ${message}`,
     "Usage: ukp get --endpoint <name> <reference> [--lines <start[:count]>]",
+    "       ukp get ukp://<endpoint>/<rel-path>[#L<line>]",
     "Run 'ukp get --help' for details.",
   ].join("\n");
 }
