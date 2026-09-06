@@ -309,11 +309,13 @@ function readTargetWithLines(targetPath: string, request: GetRequest): GetResult
   }
   const rangeResult = applyLineRange(content, request.lines);
   if (rangeResult.kind === "start-beyond-eof") {
+    // Word by input origin: a URI #L<line> fragment never mentions --lines.
+    const origin = request.addressing === "uri" ? "line window start" : "--lines start";
     return {
       exitCode: 1,
       stdout: "",
       stderr:
-        `ukp get: --lines start ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)\n`,
+        `ukp get: ${origin} ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)\n`,
     };
   }
   return { exitCode: 0, stdout: rangeResult.content, stderr: "" };
@@ -360,26 +362,14 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     ? context.qmdCommand ?? defaultQmdCommand()
     : undefined;
 
-  // qmd:// provider reference: route before endpoint-local path validation, so
-  // the `://` empty segment is never misread as a file-path usage error.
-  if (request.path.startsWith("qmd://")) {
-    if (!qmdBacked) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `ukp get: qmd:// references require a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
-      };
-    }
-    if (!qmdCommand) {
-      return { exitCode: 1, stdout: "", stderr: "ukp get: qmd executable is not available\n" };
-    }
-    return readViaQmd(qmdCommand, service.folder, request, binding.name);
-  }
-
   // ukp:// URI input (ADR 0014): exact slot addressing. The rel-path must
   // resolve exactly — no filesystem fuzzy fallback and no QMD weak-reference
-  // delegation on a miss; failures classify per the three-valued taxonomy
-  // (dangling-endpoint is raised earlier by scope resolution; here:
+  // delegation on a miss, and this tier routes BEFORE the qmd:// provider
+  // reference check: a rel-path that happens to start with `qmd://` (e.g.
+  // `ukp://ep/qmd://abc`) is a literal URI path segment sequence, never a
+  // provider-owned reference — the URI's determinism promise outranks
+  // provider delegation everywhere. Failures classify per the three-valued
+  // taxonomy (dangling-endpoint is raised earlier by scope resolution; here:
   // resource-missing). Containment is the same resolved-realpath check as
   // the explicit file baseline (G5: resolved containment stance).
   if (request.addressing === "uri") {
@@ -401,6 +391,23 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
       throw error;
     }
     return readTargetWithLines(targetPath, request);
+  }
+
+  // qmd:// provider reference (non-URI input only; the URI tier above already
+  // returned): route before endpoint-local path validation, so the `://`
+  // empty segment is never misread as a file-path usage error.
+  if (request.path.startsWith("qmd://")) {
+    if (!qmdBacked) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp get: qmd:// references require a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
+      };
+    }
+    if (!qmdCommand) {
+      return { exitCode: 1, stdout: "", stderr: "ukp get: qmd executable is not available\n" };
+    }
+    return readViaQmd(qmdCommand, service.folder, request, binding.name);
   }
 
   let targetPath: string;
