@@ -53,6 +53,62 @@ describe("Service Manifest and diagnose", () => {
     );
     expect(defaultProviderResolver("qmd", "vsearch").supported).toBe(false);
     expect(defaultProviderResolver("qmd", "vsearch").reason).toContain("capability 'vsearch' is not implemented");
+    expect(defaultProviderResolver("file", "propose").supported).toBe(true);
+    expect(defaultProviderResolver("remote", "propose").supported).toBe(false);
+    expect(defaultProviderResolver("remote", "propose").reason).toContain(
+      "provider 'remote' is not supported for capability 'propose'",
+    );
+  });
+
+  test("diagnose reports propose/file as supported without false warnings", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-diagnose-propose-"));
+    const folder = join(root, "propose-service");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      'name = "propose-service"',
+      "",
+      "[capabilities.propose]",
+      'provider = "file"',
+      "",
+    ].join("\n"));
+    try {
+      const report = diagnoseService(folder);
+      const propose = report.capabilities.find((capability) => capability.name === "propose");
+      expect(propose?.status).toBe("ok");
+      expect(propose?.reason).toBeUndefined();
+      const rendered = renderDiagnose(report);
+      expect(rendered).toContain("capability: propose");
+      expect(rendered).not.toContain("capability 'propose' is not implemented");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnose front-loads propose folder config typos as warnings", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-diagnose-propose-folder-"));
+    const folder = join(root, "propose-service");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      'name = "propose-service"',
+      "",
+      "[capabilities.propose]",
+      'provider = "file"',
+      "",
+      "[capabilities.propose.config]",
+      'folder = "../escape"',
+      "",
+    ].join("\n"));
+    try {
+      const report = diagnoseService(folder);
+      const propose = report.capabilities.find((capability) => capability.name === "propose");
+      expect(propose?.status).toBe("warning");
+      expect(propose?.reason).toContain("propose config 'folder'");
+      expect(renderDiagnose(report)).toContain("propose config 'folder' has unsafe path segments");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("derives a valid basename without writing back to the Manifest", () => {
