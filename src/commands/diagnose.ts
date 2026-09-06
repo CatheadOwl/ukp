@@ -1,9 +1,10 @@
-import { loadManifest, type LoadedManifest } from "../config/manifest.ts";
+import { loadManifest, type LoadedManifest, type ManifestCapability } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { Command, CommanderError } from "commander";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 import { defaultQmdCommand } from "../capabilities/qmd.ts";
+import { resolveProposeFolder } from "../capabilities/propose.ts";
 
 export interface ProviderCheck {
   supported: boolean;
@@ -54,6 +55,11 @@ export function defaultProviderResolver(provider: string, capability = "search")
       ? { supported: true }
       : { supported: false, reason: `provider '${provider}' is not supported for capability 'get' by this UKP build` };
   }
+  if (capability === "propose") {
+    return provider === "file"
+      ? { supported: true }
+      : { supported: false, reason: `provider '${provider}' is not supported for capability 'propose' by this UKP build` };
+  }
   if (capability === "refresh") {
     if (provider !== "qmd") {
       return { supported: false, reason: `provider '${provider}' is not supported for capability 'refresh' by this UKP build` };
@@ -73,18 +79,34 @@ export function defaultProviderResolver(provider: string, capability = "search")
     : { supported: false, reason: "qmd executable is not available" };
 }
 
+function proposeFolderError(serviceFolder: string, declaration: ManifestCapability): string | undefined {
+  try {
+    resolveProposeFolder(serviceFolder, declaration);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 export function evaluateServiceCapabilities(
   service: LoadedManifest,
   resolveProvider: ProviderResolver = defaultProviderResolver,
 ): DiagnoseReport["capabilities"] {
   const manifestCapabilities = Object.entries(service.manifest.capabilities).map(([name, declaration]) => {
     const check = resolveProvider(declaration.provider, name);
+    // Front-load propose folder validation so config typos surface in the
+    // Service-side self-check instead of the first `ukp propose` run.
+    const folderError = name === "propose"
+      ? proposeFolderError(service.folder, declaration)
+      : undefined;
+    const supported = check.supported && folderError === undefined;
+    const reason = !check.supported ? check.reason : folderError;
     return {
       name,
       provider: declaration.provider,
       source: "manifest" as const,
-      status: check.supported ? "ok" as const : "warning" as const,
-      ...(check.reason ? { reason: check.reason } : {}),
+      status: supported ? "ok" as const : "warning" as const,
+      ...(reason ? { reason } : {}),
     };
   });
 
