@@ -20,7 +20,10 @@ function createProposeCommand(): Command {
     .usage("--endpoint <name> [--id <slug>] --file <path>")
     .description("Submit an idempotent change proposal to one Service endpoint.")
     .option("-c, --endpoint <name>", "select the endpoint that receives the proposal")
-    .option("--id <slug>", "proposal identity (1-63 lowercase ASCII slug; defaults to the --file basename)")
+    .option(
+      "--id <slug>",
+      "revision key: resubmitting the same id updates the same proposal (revision +1); defaults to the --file basename (1-63 lowercase ASCII slug), which then becomes the proposal's persistent id — renaming the file creates a new proposal",
+    )
     .option("--file <path>", "read the proposal content from a file (required)")
     .option("--json", "emit the structured response envelope")
     .option("-g", "not supported by propose; use --endpoint <name>");

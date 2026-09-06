@@ -17,7 +17,9 @@ Model:
 
 2. Submit a proposal
    ukp propose --endpoint <name> --file draft.md
-   --id defaults to the draft basename (extension stripped). Pass --id <slug> to override.
+   --id defaults to the draft basename (extension stripped); the basename becomes the proposal's persistent identity.
+   Renaming the file and resubmitting creates a new proposal, not a revision.
+   Pass --id <slug> to pin the identity explicitly.
    Add --json for a machine-readable envelope (id, status, revision).
 
 3. Revise a proposal
