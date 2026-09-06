@@ -13,16 +13,18 @@ import { executeGuideCommand } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
 import { executeInspectCommand } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
+import { executeProposeCommand } from "./commands/propose.ts";
 import { executeRefreshCommand } from "./commands/refresh.ts";
 import { executeSearchCommand } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
 export { renderDiagnoseHelp } from "./commands/diagnose.ts";
 export { renderGetHelp } from "./commands/get.ts";
-export { renderGuideHelp, renderServiceGuide, renderServiceQmdGuide, renderClientGuide } from "./commands/guide.ts";
+export { renderGuideHelp, renderServiceGuide, renderServiceQmdGuide, renderClientGuide, renderProposeGuide } from "./commands/guide.ts";
 export { renderInitHelp, renderInitServiceHelp } from "./commands/init.ts";
 export { renderInspectHelp } from "./commands/inspect.ts";
 export { renderRefreshHelp } from "./commands/refresh.ts";
+export { renderProposeHelp } from "./commands/propose.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
@@ -34,6 +36,7 @@ export const COMMANDS = [
   ["register", "register a Service endpoint"],
   ["unregister", "remove a registered endpoint"],
   ["list", "list registered endpoint bindings"],
+  ["propose", "submit an idempotent change proposal"],
   ["search", "run atomic lexical search"],
   ["version", "show version information"],
 ] as const;
@@ -142,6 +145,7 @@ export function renderHelp(): string {
     "  ukp guide service     first Service setup, inspect, search, get, and refresh path",
     "  ukp guide service qmd provider setup for the default QMD provider",
     "  ukp guide client      use registered Services by default from a workspace",
+    "  ukp guide propose     submit idempotent change proposals to a Service",
     "",
     "Options:",
     "  -h, --help     show this help",
@@ -283,6 +287,13 @@ export function runCli(
 
   if (command === "list") {
     return writeCommandResult(executeListCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+    }), stdout, stderr);
+  }
+
+  if (command === "propose") {
+    return writeCommandResult(executeProposeCommand(args.slice(1), {
       currentDirectory,
       registryPath,
     }), stdout, stderr);

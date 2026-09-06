@@ -1,0 +1,390 @@
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import { ENDPOINT_NAME, loadManifest, type ManifestCapability } from "../config/manifest.ts";
+import { readRegistry } from "../registry.ts";
+import { resolveScope } from "../scope.ts";
+import { acquireLock, LockBusyError, releaseLock } from "../fslock.ts";
+
+// D-030 slug profile (1–63 chars, strict lowercase ASCII slug) shares the
+// endpoint-name grammar, so the Manifest pattern is reused deliberately.
+export const PROPOSE_SLUG = ENDPOINT_NAME;
+
+export const DEFAULT_PROPOSE_FOLDER = "inbox";
+
+// Service-maintained frontmatter keys: always owned by the Service side of
+// the upsert; never accepted from submitted content (injected values are
+// stripped — see spec/file-provider.md, W1 decision).
+const SERVICE_KEYS = new Set(["id", "status", "revision", "created", "updated"]);
+
+export type ProposeStatus = "created" | "unchanged" | "updated";
+
+export interface ProposeResult {
+  id: string;
+  status: ProposeStatus;
+  revision: number;
+}
+
+export class ProposeProviderError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ProposeProviderError";
+  }
+}
+
+export class ProposeBusyError extends ProposeProviderError {
+  constructor(id: string) {
+    // No provider location on any client-facing surface (probe 20260906).
+    super(`proposal '${id}' is locked by another submission; retry shortly`);
+    this.name = "ProposeBusyError";
+  }
+}
+
+export function assertProposeSlug(id: string): void {
+  if (!PROPOSE_SLUG.test(id)) {
+    throw new ProposeProviderError(
+      `invalid proposal id '${id}': expected 1-63 lowercase ASCII slug characters ([a-z0-9-])`,
+    );
+  }
+}
+
+// Resolves the file-provider folder for a propose capability declaration.
+// The folder is Service-owned config, relative to the Service folder.
+export function resolveProposeFolder(serviceFolder: string, capability: ManifestCapability): string {
+  if (capability.provider !== "file") {
+    throw new ProposeProviderError(
+      `unsupported propose provider '${capability.provider}' (supported: file)`,
+    );
+  }
+  const rawFolder = capability.config?.folder;
+  let folder = DEFAULT_PROPOSE_FOLDER;
+  if (rawFolder !== undefined) {
+    if (typeof rawFolder !== "string" || rawFolder.length === 0) {
+      throw new ProposeProviderError("propose config 'folder' must be a non-empty string");
+    }
+    if (isAbsolute(rawFolder) || rawFolder.includes("\\") || rawFolder.includes(":")) {
+      throw new ProposeProviderError(
+        `propose config 'folder' must be a relative path inside the Service folder: ${rawFolder}`,
+      );
+    }
+    const segments = rawFolder.split(/[\\/]/);
+    if (
+      segments.length === 0
+      || segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
+      || !segments.every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))
+    ) {
+      throw new ProposeProviderError(
+        `propose config 'folder' has unsafe path segments: ${rawFolder}`,
+      );
+    }
+    folder = segments.join(sep);
+  }
+  return join(serviceFolder, folder);
+}
+
+interface ParsedDocument {
+  submitterLines: string[];
+  body: string;
+}
+
+function unquote(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2)
+    || (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+// Parses a proposal document. Submitted content may carry a frontmatter
+// block; service-maintained keys are stripped (the submission never owns
+// them), submitter-owned display keys pass through verbatim.
+function parseDocument(content: string): ParsedDocument {
+  const lines = content.split("\n");
+  if (lines[0] === undefined || lines[0].trim() !== "---") {
+    return { submitterLines: [], body: content };
+  }
+  const closing = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+  if (closing < 0) {
+    return { submitterLines: [], body: content };
+  }
+  const submitterLines: string[] = [];
+  for (const line of lines.slice(1, closing)) {
+    const key = line.split(":", 1)[0]?.trim() ?? "";
+    if (key !== "" && SERVICE_KEYS.has(key)) continue;
+    submitterLines.push(line);
+  }
+  const body = lines.slice(closing + 1).join("\n");
+  return { submitterLines, body };
+}
+
+function parseStoredDocument(content: string): { revision: number; created: string; document: ParsedDocument } {
+  const lines = content.split("\n");
+  if (lines[0]?.trim() !== "---") {
+    throw new ProposeProviderError("stored proposal is missing its frontmatter block");
+  }
+  const closing = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+  if (closing < 0) {
+    throw new ProposeProviderError("stored proposal has an unterminated frontmatter block");
+  }
+  let revision: number | undefined;
+  let created: string | undefined;
+  const submitterLines: string[] = [];
+  for (const line of lines.slice(1, closing)) {
+    const separator = line.indexOf(":");
+    if (separator < 0) continue;
+    const key = line.slice(0, separator).trim();
+    const value = unquote(line.slice(separator + 1));
+    if (key === "revision") {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 1) {
+        throw new ProposeProviderError(`stored proposal has an invalid revision: ${value}`);
+      }
+      revision = parsed;
+    } else if (key === "created") {
+      created = value;
+    } else if (key !== "" && !SERVICE_KEYS.has(key)) {
+      submitterLines.push(line);
+    }
+  }
+  if (revision === undefined || created === undefined) {
+    throw new ProposeProviderError("stored proposal is missing service-maintained frontmatter fields");
+  }
+  return { revision, created, document: { submitterLines, body: lines.slice(closing + 1).join("\n") } };
+}
+
+function renderDocument(
+  id: string,
+  submitterLines: readonly string[],
+  revision: number,
+  created: string,
+  updated: string,
+  body: string,
+): string {
+  const frontmatter = [
+    "---",
+    `id: ${id}`,
+    ...submitterLines,
+    "status: proposed",
+    `revision: ${revision}`,
+    `created: ${created}`,
+    `updated: ${updated}`,
+    "---",
+  ];
+  return `${frontmatter.join("\n")}\n${body}`;
+}
+
+function sameSubmission(left: ParsedDocument, right: ParsedDocument): boolean {
+  return left.body === right.body && left.submitterLines.join("\n") === right.submitterLines.join("\n");
+}
+
+function writeAtomic(targetPath: string, content: string): void {
+  const tempPath = `${targetPath}.tmp.${randomUUID()}`;
+  try {
+    const descriptor = openSync(tempPath, "wx", 0o600);
+    try {
+      writeFileSync(descriptor, content, "utf8");
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    renameSync(tempPath, targetPath);
+  } catch (error) {
+    if (existsSync(tempPath)) unlinkSync(tempPath);
+    throw error;
+  }
+}
+
+export interface ProposeUpsertContext {
+  now?: () => Date;
+}
+
+// The file-provider upsert: sibling lock, in-lock re-read, three-state
+// classification, temp-file + atomic replace (D-032 family discipline).
+export function proposeUpsert(
+  serviceFolder: string,
+  capability: ManifestCapability,
+  id: string,
+  content: string,
+  context: ProposeUpsertContext = {},
+): ProposeResult {
+  assertProposeSlug(id);
+  const folder = resolveProposeFolder(serviceFolder, capability);
+  mkdirSync(folder, { recursive: true });
+  const targetPath = join(folder, `${id}.md`);
+  const lockPath = `${targetPath}.lock`;
+
+  let lockDescriptor: number;
+  try {
+    lockDescriptor = acquireLock(lockPath);
+  } catch (error) {
+    if (error instanceof LockBusyError) throw new ProposeBusyError(id);
+    throw new ProposeProviderError(`cannot acquire proposal lock: ${lockPath}`, { cause: error });
+  }
+
+  try {
+    const submission = parseDocument(content);
+    const timestamp = (context.now ?? (() => new Date()))().toISOString();
+
+    if (!existsSync(targetPath)) {
+      const document = renderDocument(id, submission.submitterLines, 1, timestamp, timestamp, submission.body);
+      writeAtomic(targetPath, document);
+      return { id, status: "created", revision: 1 };
+    }
+
+    const stored = parseStoredDocument(readFileSync(targetPath, "utf8"));
+    if (sameSubmission(submission, stored.document)) {
+      return { id, status: "unchanged", revision: stored.revision };
+    }
+
+    const document = renderDocument(
+      id,
+      submission.submitterLines,
+      stored.revision + 1,
+      stored.created,
+      timestamp,
+      submission.body,
+    );
+    writeAtomic(targetPath, document);
+    return { id, status: "updated", revision: stored.revision + 1 };
+  } finally {
+    releaseLock(lockPath, lockDescriptor);
+  }
+}
+
+export interface ProposeRequest {
+  endpoint: string;
+  id?: string;
+  file?: string;
+  json: boolean;
+}
+
+export interface ProposeContext {
+  currentDirectory: string;
+  registryPath: string;
+  now?: () => Date;
+}
+
+export interface ProposeCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export class ProposeUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProposeUsageError";
+  }
+}
+
+// Derives the default proposal id from a --file basename (extension
+// stripped). The derived value still has to satisfy the slug profile.
+export function deriveIdFromFileName(filePath: string): string {
+  const name = basename(filePath);
+  const dotIndex = name.lastIndexOf(".");
+  const id = dotIndex > 0 ? name.slice(0, dotIndex) : name;
+  if (!PROPOSE_SLUG.test(id)) {
+    throw new ProposeUsageError(
+      `proposal id derived from '${name}' is not a valid slug (1-63 lowercase ASCII [a-z0-9-]); pass --id explicitly`,
+    );
+  }
+  return id;
+}
+
+export function renderProposeHuman(result: ProposeResult): string {
+  // Probe 20260906-promoted shape: no provider location on the human
+  // surface; the --json envelope carries the endpoint name instead.
+  return `proposal ${result.id} ${result.status} (revision ${result.revision})\n`;
+}
+
+export function renderProposeJson(endpoint: string, result: ProposeResult): string {
+  const envelope = {
+    schema: "ukp.propose.v1",
+    command: "propose",
+    capability: "propose",
+    endpoint,
+    id: result.id,
+    status: result.status,
+    revision: result.revision,
+  };
+  return `${JSON.stringify(envelope, null, 2)}\n`;
+}
+
+export function executePropose(request: ProposeRequest, context: ProposeContext): ProposeCommandResult {
+  // Single stable channel (decision 2026-09-06): --file is the only content
+  // source. A stdin channel would need unreliable isTTY-based selection
+  // (agent harnesses spawn with piped stdin), and the canonical propose
+  // loop is read → edit local file → resubmit anyway.
+  if (request.file === undefined) {
+    throw new ProposeUsageError("propose requires --file <path> (the proposal content source)");
+  }
+  const id = request.id ?? deriveIdFromFileName(request.file);
+  if (!PROPOSE_SLUG.test(id)) {
+    throw new ProposeUsageError(
+      `invalid proposal id '${id}': expected 1-63 lowercase ASCII slug characters ([a-z0-9-])`,
+    );
+  }
+
+  const registry = readRegistry(context.registryPath);
+  const scope = resolveScope({
+    currentDirectory: context.currentDirectory,
+    registry,
+    explicitEndpoints: [request.endpoint],
+    global: false,
+  });
+  const [binding] = scope.bindings;
+  if (!binding) {
+    return { exitCode: 1, stdout: "", stderr: "ukp propose: no endpoint selected\n" };
+  }
+
+  const service = loadManifest(binding.path);
+  if (service.effectiveName !== binding.name) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp propose: endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'\n`,
+    };
+  }
+
+  const capability = service.manifest.capabilities.propose;
+  if (!capability) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp propose: endpoint '${binding.name}' does not declare the propose capability\n`,
+    };
+  }
+
+  const filePath = resolve(context.currentDirectory, request.file);
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf8");
+  } catch (error) {
+    const detail = error instanceof Error && "code" in error && error.code === "ENOENT"
+      ? "file not found"
+      : error instanceof Error ? error.message : String(error);
+    return { exitCode: 1, stdout: "", stderr: `ukp propose: cannot read --file '${request.file}': ${detail}\n` };
+  }
+
+  const result = proposeUpsert(service.folder, capability, id, content, { now: context.now });
+  return {
+    exitCode: 0,
+    stdout: request.json
+      ? renderProposeJson(binding.name, result)
+      : renderProposeHuman(result),
+    stderr: "",
+  };
+}

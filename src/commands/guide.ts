@@ -28,7 +28,7 @@ function createGuideCommand(): Command {
     .helpOption("-h, --help", "show this help")
     .usage("<topic> [subtopic]")
     .description("Show short operational guides.")
-    .argument("<topic>", "guide topic: service | service qmd | client")
+    .argument("<topic>", "guide topic: service | service qmd | client | propose")
     .argument("[subtopic]", "provider subtopic for a topic, e.g. service qmd");
 }
 
@@ -65,13 +65,15 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
       return { exitCode: 0, stdout: renderServiceGuide(), stderr: "" };
     }
     if (subtopic) {
-      throw new GuideUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client`);
+      throw new GuideUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client, propose`);
     }
     switch (topic) {
       case "client":
         return { exitCode: 0, stdout: renderClientGuide(), stderr: "" };
+      case "propose":
+        return { exitCode: 0, stdout: renderProposeGuide(), stderr: "" };
       default:
-        throw new GuideUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client`);
+        throw new GuideUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client, propose`);
     }
   } catch (error) {
     if (error instanceof GuideUsageError) {
@@ -99,6 +101,10 @@ export function renderServiceQmdGuide(): string {
 
 export function renderClientGuide(): string {
   return readGuideContent("client.txt");
+}
+
+export function renderProposeGuide(): string {
+  return readGuideContent("propose.txt");
 }
 
 export function renderGuideUsageError(message: string): string {

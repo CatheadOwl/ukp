@@ -1,0 +1,35 @@
+UKP propose quickstart
+
+Goal: submit a change proposal to a Service endpoint as an idempotent, adjudicable document — not a file write.
+
+Model:
+- A proposal is a pending change the Service owner will adjudicate; the submitter proposes, the owner decides.
+- Identity is client-owned: you pick the id (a slug), and resubmitting the same id updates the same proposal.
+- Submission is an upsert with three outcomes: created (new, revision 1), unchanged (identical content, no write), updated (replaced, revision +1).
+- revision is an audit counter and the history of your edits; it never resets.
+- ukp propose is the only documented write path. Never edit Service-side proposal files directly: a later submission overwrites them and your edits bypass revision tracking.
+
+1. Declare the capability (Service side)
+   .ukp/service.toml:
+   [capabilities.propose]
+   provider = "file"
+   Optional [capabilities.propose.config] folder = "inbox" (default) sets where proposals land.
+
+2. Submit a proposal
+   ukp propose --endpoint <name> --file draft.md
+   --id defaults to the draft basename (extension stripped). Pass --id <slug> to override.
+   Add --json for a machine-readable envelope (id, status, revision).
+
+3. Revise a proposal
+   Edit your local draft, then run the same command with the same id.
+   The Service replaces the stored proposal, keeps created, bumps revision, refreshes updated.
+   Identical resubmission is a no-op (exit 0, revision unchanged).
+
+4. Read proposals back
+   Reading is owned by the Service: if it indexes its proposal folder into its search surface,
+   ukp search / ukp get reach proposals like any other content.
+
+Remember:
+- Same id, same proposal: do not fork ids (add-topic, add-topic-v2) for revisions of one idea.
+- Frontmatter service fields (id, status, revision, created, updated) are Service-maintained and stripped from submissions; your subject/kind display fields pass through.
+- status stays "proposed" until adjudication exists; there is no accept/reject command yet.
