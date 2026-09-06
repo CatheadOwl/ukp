@@ -122,6 +122,50 @@ describe("Service Manifest and diagnose", () => {
     }
   });
 
+  test("loads a propose capability with provider config table", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "propose-service");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      "[capabilities.propose]",
+      'provider = "file"',
+      "",
+      "[capabilities.propose.config]",
+      'folder = "proposals"',
+      "",
+    ].join("\n"));
+    try {
+      const loaded = loadManifest(folder);
+      expect(loaded.manifest.capabilities.propose?.provider).toBe("file");
+      expect(loaded.manifest.capabilities.propose?.config).toEqual({ folder: "proposals" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("loads a propose capability without config (provider defaults apply)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "propose-default-config");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), [
+      "[capabilities.search]",
+      'provider = "qmd"',
+      "",
+      "[capabilities.propose]",
+      'provider = "file"',
+      "",
+    ].join("\n"));
+    try {
+      const loaded = loadManifest(folder);
+      expect(loaded.manifest.capabilities.propose?.provider).toBe("file");
+      expect(loaded.manifest.capabilities.propose?.config).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects an invalid explicit endpoint name", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
     const folder = join(root, "invalid-service");

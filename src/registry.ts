@@ -14,10 +14,10 @@ import {
 } from "node:fs";
 import { isAbsolute, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
 import { parse, stringify } from "smol-toml";
 import { z } from "zod";
 import { assertRestrictedToml, ENDPOINT_NAME, ManifestError } from "./config/manifest.ts";
+import { acquireLock, LockBusyError, releaseLock } from "./fslock.ts";
 
 const bindingSchema = z.object({
   name: z.string().min(1),
@@ -43,7 +43,6 @@ export class RegistryBusyError extends RegistryError {
     this.name = "RegistryBusyError";
   }
 }
-
 function validateBindings(endpoints: readonly RegistryBinding[]): RegistryBinding[] {
   const names = new Set<string>();
   const paths = new Set<string>();
@@ -117,68 +116,6 @@ export function unregisterBinding(endpoints: readonly RegistryBinding[], name: s
   return validateBindings(endpoints.filter((_, candidateIndex) => candidateIndex !== index));
 }
 
-function sleep(milliseconds: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-}
-
-function processExists(pid: number): boolean | undefined {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ESRCH") return false;
-    return undefined;
-  }
-}
-
-function reclaimStaleLock(lockPath: string): boolean {
-  try {
-    const metadata = parse(readFileSync(lockPath, "utf8")) as Record<string, unknown>;
-    if (metadata.hostname !== hostname()) return false;
-    if (typeof metadata.pid !== "number" || !Number.isSafeInteger(metadata.pid)) return false;
-    if (typeof metadata.created_at !== "string") return false;
-    const createdAt = Date.parse(metadata.created_at);
-    if (!Number.isFinite(createdAt) || Date.now() - createdAt <= 10 * 60 * 1000) return false;
-    if (processExists(metadata.pid) !== false) return false;
-    unlinkSync(lockPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function acquireLock(lockPath: string): number {
-  const deadline = Date.now() + 5000;
-  while (true) {
-    try {
-      const descriptor = openSync(lockPath, "wx", 0o600);
-      try {
-        writeFileSync(
-          descriptor,
-          `pid = ${process.pid}\nhostname = ${JSON.stringify(hostname())}\ncreated_at = ${JSON.stringify(new Date().toISOString())}\ntoken = ${JSON.stringify(randomUUID())}\n`,
-          "utf8",
-        );
-        fsyncSync(descriptor);
-        return descriptor;
-      } catch (error) {
-        closeSync(descriptor);
-        if (existsSync(lockPath)) unlinkSync(lockPath);
-        throw error;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST" && reclaimStaleLock(lockPath)) {
-        continue;
-      }
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new RegistryBusyError(lockPath);
-        throw new RegistryError(`cannot acquire Registry lock: ${lockPath}`, { cause: error });
-      }
-      sleep(25);
-    }
-  }
-}
-
 export function mutateRegistry(
   registryPath: string,
   mutation: (current: RegistryBinding[]) => RegistryBinding[],
@@ -186,7 +123,13 @@ export function mutateRegistry(
   const directory = dirname(registryPath);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const lockPath = `${registryPath}.lock`;
-  const lockDescriptor = acquireLock(lockPath);
+  let lockDescriptor: number;
+  try {
+    lockDescriptor = acquireLock(lockPath);
+  } catch (error) {
+    if (error instanceof LockBusyError) throw new RegistryBusyError(lockPath);
+    throw new RegistryError(`cannot acquire Registry lock: ${lockPath}`, { cause: error });
+  }
   let tempPath: string | undefined;
   let backupTempPath: string | undefined;
   try {
@@ -216,8 +159,7 @@ export function mutateRegistry(
   } finally {
     if (tempPath && existsSync(tempPath)) unlinkSync(tempPath);
     if (backupTempPath && existsSync(backupTempPath)) unlinkSync(backupTempPath);
-    closeSync(lockDescriptor);
-    if (existsSync(lockPath)) unlinkSync(lockPath);
+    releaseLock(lockPath, lockDescriptor);
   }
 }
 

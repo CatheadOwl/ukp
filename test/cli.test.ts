@@ -18,6 +18,7 @@ import {
   renderServiceGuide,
   renderServiceQmdGuide,
   renderClientGuide,
+  renderProposeGuide,
   runCli,
 } from "../src/cli.ts";
 import { loadManifest } from "../src/config/manifest.ts";
@@ -411,8 +412,21 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("ukp register does not edit .ukp/client.toml");
   });
 
+  test("guide propose is a short CLI-accessible propose-path guide", () => {
+    const output: string[] = [];
+    expect(renderProposeGuide()).toContain("UKP propose quickstart");
+    expect(runCli(["guide", "propose"], (message) => output.push(message))).toBe(0);
+    const guide = output.join("\n");
+    expect(guide).toContain("three outcomes: created (new, revision 1), unchanged (identical content, no write), updated (replaced, revision +1)");
+    expect(guide).toContain("ukp propose --endpoint <name> --file draft.md");
+    expect(guide).toContain("--id defaults to the draft basename");
+    expect(guide).toContain("Never edit Service-side proposal files directly");
+    expect(guide).toContain("Service-maintained and stripped from submissions");
+    expect(guide).not.toContain("stdin");
+  });
+
   test("guide help lists the topics and subtopics", () => {
-    expect(renderGuideHelp()).toContain("guide topic: service | service qmd | client");
+    expect(renderGuideHelp()).toContain("guide topic: service | service qmd | client | propose");
   });
 
   test("guide rejects unknown topics with recovery guidance", () => {

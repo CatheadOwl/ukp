@@ -7,6 +7,7 @@ export const ENDPOINT_NAME = /^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 const capabilitySchema = z.object({
   provider: z.string().min(1),
+  config: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
 const endpointNameSchema = z.string().regex(ENDPOINT_NAME);
@@ -42,6 +43,7 @@ const manifestSchema = z.object({
 }).strict();
 
 export type Manifest = z.infer<typeof manifestSchema>;
+export type ManifestCapability = z.infer<typeof capabilitySchema>;
 export type ManifestDependency = z.infer<typeof dependencySchema>;
 
 export class ManifestError extends Error {
