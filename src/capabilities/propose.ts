@@ -63,7 +63,7 @@ export function assertProposeSlug(id: string): void {
 export function resolveProposeFolder(serviceFolder: string, capability: ManifestCapability): string {
   if (capability.provider !== "file") {
     throw new ProposeProviderError(
-      `unsupported propose provider '${capability.provider}' (supported: file)`,
+      `unsupported propose provider '${capability.provider ?? "(none)"}' (supported: file)`,
     );
   }
   const rawFolder = capability.config?.folder;

@@ -60,6 +60,13 @@ export function defaultProviderResolver(provider: string, capability = "search")
       ? { supported: true }
       : { supported: false, reason: `provider '${provider}' is not supported for capability 'propose' by this UKP build` };
   }
+  if (capability === "nav") {
+    // Manifest load already defaults a bare file-native declaration
+    // (nav / propose) to "file".
+    return provider === "file"
+      ? { supported: true }
+      : { supported: false, reason: `provider '${provider}' is not supported for capability 'nav' by this UKP build` };
+  }
   if (capability === "refresh") {
     if (provider !== "qmd") {
       return { supported: false, reason: `provider '${provider}' is not supported for capability 'refresh' by this UKP build` };
@@ -93,7 +100,10 @@ export function evaluateServiceCapabilities(
   resolveProvider: ProviderResolver = defaultProviderResolver,
 ): DiagnoseReport["capabilities"] {
   const manifestCapabilities = Object.entries(service.manifest.capabilities).map(([name, declaration]) => {
-    const check = resolveProvider(declaration.provider, name);
+    // nav is normalized to its "file" default at Manifest load; a missing
+    // provider on any other capability is surfaced as "(none)".
+    const provider = declaration.provider ?? "(none)";
+    const check = resolveProvider(provider, name);
     // Front-load propose folder validation so config typos surface in the
     // Service-side self-check instead of the first `ukp propose` run.
     const folderError = name === "propose"
@@ -103,7 +113,7 @@ export function evaluateServiceCapabilities(
     const reason = !check.supported ? check.reason : folderError;
     return {
       name,
-      provider: declaration.provider,
+      provider,
       source: "manifest" as const,
       status: supported ? "ok" as const : "warning" as const,
       ...(reason ? { reason } : {}),
@@ -111,8 +121,7 @@ export function evaluateServiceCapabilities(
   });
 
   const getCheck = resolveProvider("file", "get");
-  return [
-    ...manifestCapabilities,
+  const derived = [
     {
       name: "get",
       provider: "file",
@@ -121,6 +130,19 @@ export function evaluateServiceCapabilities(
       ...(getCheck.reason ? { reason: getCheck.reason } : {}),
     },
   ];
+  // Nav is a derived default like get/file (O-013 precedent): report it as
+  // derived-local only when the Manifest does not declare it itself.
+  if (!Object.hasOwn(service.manifest.capabilities, "nav")) {
+    const navCheck = resolveProvider("file", "nav");
+    derived.push({
+      name: "nav",
+      provider: "file",
+      source: "derived-local" as const,
+      status: navCheck.supported ? "ok" as const : "warning" as const,
+      ...(navCheck.reason ? { reason: navCheck.reason } : {}),
+    });
+  }
+  return [...manifestCapabilities, ...derived];
 }
 
 export function diagnoseService(

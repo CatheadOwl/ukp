@@ -13,6 +13,7 @@ Model:
    .ukp/service.toml:
    [capabilities.propose]
    provider = "file"
+   The provider line is optional (a bare [capabilities.propose] means the file provider).
    Optional [capabilities.propose.config] folder = "inbox" (default) sets where proposals land.
 
 2. Submit a proposal

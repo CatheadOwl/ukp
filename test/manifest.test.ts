@@ -24,10 +24,17 @@ describe("Service Manifest and diagnose", () => {
       supported: provider === "qmd",
       reason: provider === "qmd" ? undefined : "unsupported",
     }));
-    expect(report.capabilities).toHaveLength(3);
+    // search + refresh from the Manifest; get and nav as derived-local defaults
+    expect(report.capabilities).toHaveLength(4);
     expect(report.capabilities.filter((capability) => capability.source === "manifest")).toHaveLength(2);
     expect(report.capabilities.some((capability) =>
       capability.name === "get"
+      && capability.provider === "file"
+      && capability.source === "derived-local"
+      && capability.status === "warning"
+    )).toBe(true);
+    expect(report.capabilities.some((capability) =>
+      capability.name === "nav"
       && capability.provider === "file"
       && capability.source === "derived-local"
       && capability.status === "warning"
@@ -195,6 +202,20 @@ describe("Service Manifest and diagnose", () => {
       const loaded = loadManifest(folder);
       expect(loaded.manifest.capabilities.propose?.provider).toBe("file");
       expect(loaded.manifest.capabilities.propose?.config).toEqual({ folder: "proposals" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("bare [capabilities.propose] declaration defaults to the file provider", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "propose-bare");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), "[capabilities.propose]\n");
+    try {
+      const loaded = loadManifest(folder);
+      expect(loaded.manifest.capabilities.propose?.provider).toBe("file");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

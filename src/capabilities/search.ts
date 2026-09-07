@@ -167,11 +167,12 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
       return { name: binding.name, provider: null, status: "skipped", warning, traversal };
     }
     if (capability.provider !== "qmd") {
-      const warning = `endpoint '${binding.name}' uses unsupported search provider '${capability.provider}'`;
+      const provider = capability.provider ?? "(none)";
+      const warning = `endpoint '${binding.name}' uses unsupported search provider '${provider}'`;
       warnings.push(warning);
       return {
         name: binding.name,
-        provider: capability.provider,
+        provider,
         status: "skipped",
         warning,
         traversal,
