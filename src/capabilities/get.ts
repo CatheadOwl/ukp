@@ -305,6 +305,16 @@ function readTargetWithLines(targetPath: string, request: GetRequest): GetResult
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return { exitCode: 1, stdout: "", stderr: `ukp get: resource disappeared during lookup\n` };
     }
+    // A directory tail resolves as a path but is not a readable resource; the
+    // failure must state that in product terms instead of leaking the Node
+    // errno (`EISDIR: illegal operation on a directory, read`) as the surface.
+    if (error instanceof Error && "code" in error && error.code === "EISDIR") {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp get: '${request.path}' is a directory, not a readable resource\n`,
+      };
+    }
     throw error;
   }
   const rangeResult = applyLineRange(content, request.lines);
