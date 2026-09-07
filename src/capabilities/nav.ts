@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { loadManifest, type ManifestCapability } from "../config/manifest.ts";
+import { resolveFileNativeCapability, unsupportedFileNativeProviderMessage } from "../config/file-native.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 
@@ -509,16 +510,6 @@ export function validateNavRoutePath(routePath: string): string[] {
   return segments;
 }
 
-/** Resolves the file-provider nav capability declaration. Only the UKP-native
- * `file` provider exists; QMD-native enumeration is evidence-triggered (N2). */
-export function assertNavProvider(capability: ManifestCapability): void {
-  if (capability.provider !== "file") {
-    throw new NavProviderError(
-      `unsupported nav provider '${capability.provider}' (supported: file)`,
-    );
-  }
-}
-
 export function renderNavHuman(result: NavResult): string {
   const lines = [`endpoint: ${result.endpoint} (root: ${result.root}, depth: ${result.depth})`];
   if (result.entries.length === 0) {
@@ -580,12 +571,17 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
     };
   }
 
-  // Nav is a derived default capability (precedent: get/file baseline,
-  // O-013/D-044): every registered local Service has nav/file unless it
-  // declares otherwise. `[capabilities.nav]` in the Manifest exists only to
-  // override the provider or the visibility defaults.
-  const capability = service.manifest.capabilities.nav ?? { provider: "file" };
-  assertNavProvider(capability);
+  // Nav is a file-native derived default (ADR 0016): every registered local
+  // Service has nav/file unless it declares otherwise. Resolution goes
+  // through the shared file-native table — no command-local fallback.
+  const resolved = resolveFileNativeCapability(service.manifest, "nav");
+  if (!resolved || resolved.capability.provider !== "file") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp nav: ${unsupportedFileNativeProviderMessage("nav", resolved?.capability.provider)}\n`,
+    };
+  }
 
   // Route root: the optional path must resolve to a directory inside the
   // Service folder. Exact addressing only — no fuzzy candidates (D-047
@@ -627,7 +623,7 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
     root,
     depth,
     binding.name,
-    resolveNavVisibility(capability),
+    resolveNavVisibility(resolved.capability),
   );
   return {
     exitCode: 0,

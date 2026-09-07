@@ -12,6 +12,7 @@ import {
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ENDPOINT_NAME, loadManifest, type ManifestCapability } from "../config/manifest.ts";
+import { resolveFileNativeCapability, unsupportedFileNativeProviderMessage } from "../config/file-native.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { acquireLock, LockBusyError, releaseLock } from "../fslock.ts";
@@ -62,9 +63,7 @@ export function assertProposeSlug(id: string): void {
 // The folder is Service-owned config, relative to the Service folder.
 export function resolveProposeFolder(serviceFolder: string, capability: ManifestCapability): string {
   if (capability.provider !== "file") {
-    throw new ProposeProviderError(
-      `unsupported propose provider '${capability.provider ?? "(none)"}' (supported: file)`,
-    );
+    throw new ProposeProviderError(unsupportedFileNativeProviderMessage("propose", capability.provider));
   }
   const rawFolder = capability.config?.folder;
   let folder = DEFAULT_PROPOSE_FOLDER;
@@ -364,8 +363,10 @@ export function executePropose(request: ProposeRequest, context: ProposeContext)
     };
   }
 
-  const capability = service.manifest.capabilities.propose;
-  if (!capability) {
+  // Propose is file-native but write-side (ADR 0016): an explicit
+  // declaration is mandatory; resolution goes through the shared table.
+  const resolved = resolveFileNativeCapability(service.manifest, "propose");
+  if (!resolved) {
     return {
       exitCode: 1,
       stdout: "",
@@ -384,7 +385,7 @@ export function executePropose(request: ProposeRequest, context: ProposeContext)
     return { exitCode: 1, stdout: "", stderr: `ukp propose: cannot read --file '${request.file}': ${detail}\n` };
   }
 
-  const result = proposeUpsert(service.folder, capability, id, content, { now: context.now });
+  const result = proposeUpsert(service.folder, resolved.capability, id, content, { now: context.now });
   return {
     exitCode: 0,
     stdout: request.json
