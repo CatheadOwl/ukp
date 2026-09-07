@@ -183,11 +183,19 @@ describe("propose file provider", () => {
       expect(() => resolveProposeFolder(service, { provider: "remote" })).toThrow(
         "unsupported propose provider 'remote'",
       );
-      for (const bad of ["..", "../escape", "C:/abs", "\\\\server", "a//b", ".hidden-ok/x"]) {
+      for (const bad of ["..", "../escape", "C:/abs", "\\\\server", "a//b", "TODO&Inbox", "in box", "收件箱"]) {
         expect(() => resolveProposeFolder(service, fileCapability(bad))).toThrow(ProposeProviderError);
       }
       expect(() => resolveProposeFolder(service, fileCapability(42 as unknown as string))).toThrow(
         "must be a non-empty string",
+      );
+      // POSIX Portable Filename Character Set: leading ".", "_" or "-" is
+      // legal (no slug-style first-character restriction).
+      expect(resolveProposeFolder(service, fileCapability(".hidden-ok/x"))).toBe(
+        join(service, join(".hidden-ok", "x")),
+      );
+      expect(resolveProposeFolder(service, fileCapability("_draft/a.b-c"))).toBe(
+        join(service, join("_draft", "a.b-c")),
       );
       expect(resolveProposeFolder(service, fileCapability())).toBe(join(service, DEFAULT_PROPOSE_FOLDER));
     } finally {

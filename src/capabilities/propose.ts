@@ -77,14 +77,19 @@ export function resolveProposeFolder(serviceFolder: string, capability: Manifest
         `propose config 'folder' must be a relative path inside the Service folder: ${rawFolder}`,
       );
     }
-    const segments = rawFolder.split(/[\\/]/);
+    const segments = rawFolder.split("/");
+    // Segment charset = POSIX Portable Filename Character Set
+    // (A-Z a-z 0-9 . _ -) — one cited standard, deliberately no extra
+    // structural guards: a closed accepted set converges in one rename
+    // (the error message carries the full standard), and keeps the
+    // diagnose prompt one line. The folder is Service-owned config
+    // (trust domain); this check is lexical, not an identity profile.
     if (
-      segments.length === 0
-      || segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
-      || !segments.every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))
+      segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
+      || !segments.every((segment) => /^[A-Za-z0-9._-]+$/.test(segment))
     ) {
       throw new ProposeProviderError(
-        `propose config 'folder' has unsafe path segments: ${rawFolder}`,
+        `propose config 'folder' has unsafe path segments (each segment must use POSIX portable filename characters A-Z a-z 0-9 . _ -): ${rawFolder}`,
       );
     }
     folder = segments.join(sep);
