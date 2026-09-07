@@ -1,4 +1,5 @@
 import { loadManifest, type LoadedManifest, type ManifestCapability } from "../config/manifest.ts";
+import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { Command, CommanderError } from "commander";
@@ -50,22 +51,15 @@ export class DiagnoseUsageError extends Error {
 }
 
 export function defaultProviderResolver(provider: string, capability = "search"): ProviderCheck {
-  if (capability === "get") {
+  if (isFileNativeCapability(capability)) {
+    // Only the UKP-native file provider exists for the file-native set;
+    // Manifest load already defaults bare declarations to "file".
     return provider === "file"
       ? { supported: true }
-      : { supported: false, reason: `provider '${provider}' is not supported for capability 'get' by this UKP build` };
-  }
-  if (capability === "propose") {
-    return provider === "file"
-      ? { supported: true }
-      : { supported: false, reason: `provider '${provider}' is not supported for capability 'propose' by this UKP build` };
-  }
-  if (capability === "nav") {
-    // Manifest load already defaults a bare file-native declaration
-    // (nav / propose) to "file".
-    return provider === "file"
-      ? { supported: true }
-      : { supported: false, reason: `provider '${provider}' is not supported for capability 'nav' by this UKP build` };
+      : {
+          supported: false,
+          reason: `provider '${provider}' is not supported for capability '${capability}' by this UKP build`,
+        };
   }
   if (capability === "refresh") {
     if (provider !== "qmd") {
@@ -100,8 +94,9 @@ export function evaluateServiceCapabilities(
   resolveProvider: ProviderResolver = defaultProviderResolver,
 ): DiagnoseReport["capabilities"] {
   const manifestCapabilities = Object.entries(service.manifest.capabilities).map(([name, declaration]) => {
-    // nav is normalized to its "file" default at Manifest load; a missing
-    // provider on any other capability is surfaced as "(none)".
+    // Provider is guaranteed post-load for valid Manifests (file-native bare
+    // declarations default to "file"; others fail at load). The "(none)"
+    // arm is defensive depth for direct API callers.
     const provider = declaration.provider ?? "(none)";
     const check = resolveProvider(provider, name);
     // Front-load propose folder validation so config typos surface in the
@@ -120,28 +115,21 @@ export function evaluateServiceCapabilities(
     };
   });
 
-  const getCheck = resolveProvider("file", "get");
-  const derived = [
-    {
-      name: "get",
-      provider: "file",
-      source: "derived-local" as const,
-      status: getCheck.supported ? "ok" as const : "warning" as const,
-      ...(getCheck.reason ? { reason: getCheck.reason } : {}),
-    },
-  ];
-  // Nav is a derived default like get/file (O-013 precedent): report it as
-  // derived-local only when the Manifest does not declare it itself.
-  if (!Object.hasOwn(service.manifest.capabilities, "nav")) {
-    const navCheck = resolveProvider("file", "nav");
-    derived.push({
-      name: "nav",
-      provider: "file",
-      source: "derived-local" as const,
-      status: navCheck.supported ? "ok" as const : "warning" as const,
-      ...(navCheck.reason ? { reason: navCheck.reason } : {}),
+  // Derived file-native defaults (ADR 0016 rule 2): every read-side
+  // file-native capability not declared by the Manifest is still effectively
+  // present. The table is the single source — no per-capability rows here.
+  const derived = Object.entries(FILE_NATIVE_CAPABILITIES)
+    .filter(([name, spec]) => spec.derived && !Object.hasOwn(service.manifest.capabilities, name))
+    .map(([name]) => {
+      const check = resolveProvider("file", name);
+      return {
+        name,
+        provider: "file",
+        source: "derived-local" as const,
+        status: check.supported ? "ok" as const : "warning" as const,
+        ...(check.reason ? { reason: check.reason } : {}),
+      };
     });
-  }
   return [...manifestCapabilities, ...derived];
 }
 
