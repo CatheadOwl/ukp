@@ -937,6 +937,33 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     }
   });
 
+  test("reports a directory tail as not-a-readable-resource without leaking EISDIR", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-dir-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeGetCommand(["ukp://notes/docs"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("'docs' is a directory, not a readable resource");
+      expect(result.stderr).not.toContain("EISDIR");
+
+      // Path tier parity: the same directory-tail failure must be worded and
+      // classified identically without a URI.
+      const pathTier = executeGetCommand(["--endpoint", "notes", "docs"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(pathTier.exitCode).toBe(1);
+      expect(pathTier.stderr).toContain("'docs' is a directory, not a readable resource");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("does not delegate a ukp:// URI miss to a QMD-backed provider", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-qmd-"));
     const registryPath = join(root, "registry.toml");
