@@ -278,7 +278,7 @@ describe("propose file provider", () => {
 });
 
 describe("ukp propose command", () => {
-  function setup(root: string, opts: { declarePropose?: boolean } = {}): {
+  function setup(root: string, opts: { declarePropose?: boolean; barePropose?: boolean } = {}): {
     workspace: string;
     registryPath: string;
   } {
@@ -287,6 +287,9 @@ describe("ukp propose command", () => {
     const service = createService(root, "kb");
     if (opts.declarePropose === false) {
       writeFileSync(join(service, ".ukp", "service.toml"), "name = \"kb\"\n[capabilities.search]\nprovider = \"qmd\"\n");
+    }
+    if (opts.barePropose === true) {
+      writeFileSync(join(service, ".ukp", "service.toml"), "name = \"kb\"\n[capabilities.propose]\n");
     }
     const registryPath = join(root, "registry.toml");
     registerAt(registryPath, "kb", service);
@@ -315,6 +318,23 @@ describe("ukp propose command", () => {
       expect(result.stdout).toBe("proposal add-rg-topic created (revision 1)\n");
       expect(result.stdout).not.toContain("inbox");
       expect(result.stdout).not.toContain(".md");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("bare [capabilities.propose] declaration defaults to the file provider end-to-end", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-propose-cmd-"));
+    try {
+      const { workspace, registryPath } = setup(root, { barePropose: true });
+      writeFileSync(join(workspace, "draft.md"), "# Bare\n");
+      const result = executeProposeCommand(
+        ["--endpoint", "kb", "--id", "bare-declaration", "--file", "draft.md"],
+        contextFor(workspace, registryPath),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("proposal bare-declaration created (revision 1)\n");
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });

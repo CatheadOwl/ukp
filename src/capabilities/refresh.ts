@@ -142,11 +142,12 @@ function planRefresh(parsed: ParsedRefresh, context: RefreshContext): {
       }
 
       if (capability.provider !== "qmd") {
+        const provider = capability.provider ?? "(none)";
         plan.push({
           name: binding.name,
-          provider: capability.provider,
+          provider,
           status: "skipped",
-          message: `endpoint '${binding.name}' uses unsupported refresh provider '${capability.provider}'`,
+          message: `endpoint '${binding.name}' uses unsupported refresh provider '${provider}'`,
         });
         continue;
       }

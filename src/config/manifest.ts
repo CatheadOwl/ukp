@@ -5,8 +5,12 @@ import { z } from "zod";
 
 export const ENDPOINT_NAME = /^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+// `provider` is optional at the schema level: each capability applies its own
+// default at load (file-native capabilities → "file"). Other capabilities
+// surface a missing provider as a load-time fail-fast declaration error.
+const FILE_NATIVE_CAPABILITIES = new Set(["get", "nav", "propose"]);
 const capabilitySchema = z.object({
-  provider: z.string().min(1),
+  provider: z.string().min(1).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
@@ -106,6 +110,31 @@ function removeLegacyGetCapability(raw: unknown): { normalized: unknown; hadLega
   };
 }
 
+/** Nav visibility keys accepted directly under `[capabilities.nav]` (flat
+ * UX: no `.config` hop). Normalized into `config` before schema parse so the
+ * shared strict capability schema stays untouched. A key present both flat
+ * and under `[capabilities.nav.config]` is a declaration conflict. */
+const NAV_FLAT_KEYS = ["exclude_files", "exclude_dirs"] as const;
+
+function normalizeNavFlatKeys(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.capabilities)) return raw;
+  const nav = raw.capabilities.nav;
+  if (!isRecord(nav) || !NAV_FLAT_KEYS.some((key) => Object.hasOwn(nav, key))) return raw;
+
+  const config = isRecord(nav.config) ? { ...nav.config } : {};
+  for (const key of NAV_FLAT_KEYS) {
+    if (!Object.hasOwn(nav, key)) continue;
+    if (Object.hasOwn(config, key)) {
+      throw new ManifestError(
+        `[capabilities.nav] '${key}' is declared both directly and under [capabilities.nav.config]`,
+      );
+    }
+    config[key] = nav[key];
+    delete nav[key];
+  }
+  return { ...raw, capabilities: { ...raw.capabilities, nav: { ...nav, config } } };
+}
+
 export interface LoadedManifest {
   folder: string;
   manifestPath: string;
@@ -145,7 +174,8 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
   }
   assertRestrictedToml(raw);
 
-  const { normalized, hadLegacyGet } = removeLegacyGetCapability(raw);
+  const { normalized: withoutLegacyGet, hadLegacyGet } = removeLegacyGetCapability(raw);
+  const normalized = normalizeNavFlatKeys(withoutLegacyGet);
   const result = manifestSchema.safeParse(normalized);
   if (!result.success) {
     throw new ManifestError(`Service Manifest schema is invalid: ${result.error.message}`);
@@ -159,6 +189,21 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
   const effectiveName = parseName(manifest.name ?? basename(folder), nameSource);
   if (manifest.dependencies?.some((dependency) => dependency.endpoint === effectiveName)) {
     throw new ManifestError(`Service Manifest dependency cannot target the Service itself: '${effectiveName}'`);
+  }
+  // Capability-level provider defaults: a bare `[capabilities.<name>]`
+  // declaration for a file-native capability (nav, propose) means the
+  // UKP-native file provider — the common case needs zero configuration
+  // (nav visibility also follows the endpoint's own .gitignore, not UKP
+  // config). Every other capability still fails fast at load when `provider`
+  // is missing (a typo must not degrade into a runtime "(none)" warning).
+  for (const [name, declaration] of Object.entries(manifest.capabilities)) {
+    if (declaration.provider === undefined) {
+      if (FILE_NATIVE_CAPABILITIES.has(name)) {
+        manifest.capabilities[name] = { ...declaration, provider: "file" };
+      } else {
+        throw new ManifestError(`[capabilities.${name}] must declare a provider`);
+      }
+    }
   }
   return { folder, manifestPath, manifest, effectiveName, nameSource };
 }

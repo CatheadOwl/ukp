@@ -13,6 +13,7 @@ import { executeGuideCommand } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
 import { executeInspectCommand } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
+import { executeNavCommand } from "./commands/nav.ts";
 import { executeProposeCommand } from "./commands/propose.ts";
 import { executeRefreshCommand } from "./commands/refresh.ts";
 import { executeSearchCommand } from "./commands/search.ts";
@@ -25,6 +26,7 @@ export { renderInitHelp, renderInitServiceHelp } from "./commands/init.ts";
 export { renderInspectHelp } from "./commands/inspect.ts";
 export { renderRefreshHelp } from "./commands/refresh.ts";
 export { renderProposeHelp } from "./commands/propose.ts";
+export { renderNavHelp } from "./commands/nav.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
@@ -36,6 +38,7 @@ export const COMMANDS = [
   ["register", "register a Service endpoint"],
   ["unregister", "remove a registered endpoint"],
   ["list", "list registered endpoint bindings"],
+  ["nav", "navigate the Markdown structure of an endpoint"],
   ["propose", "submit an idempotent change proposal"],
   ["search", "run atomic lexical search"],
   ["version", "show version information"],
@@ -287,6 +290,13 @@ export function runCli(
 
   if (command === "list") {
     return writeCommandResult(executeListCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+    }), stdout, stderr);
+  }
+
+  if (command === "nav") {
+    return writeCommandResult(executeNavCommand(args.slice(1), {
       currentDirectory,
       registryPath,
     }), stdout, stderr);
