@@ -1059,3 +1059,114 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     }
   });
 });
+
+describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
+  test("percent-decodes %XX per component, unifying the double-spelling trap", () => {
+    // Markdown-legal spelling (`embedding%20practice.md`) and raw spelling
+    // must hit the same file (D-059: decode is required for the embedding
+    // loop, since CommonMark cannot carry a raw space in a link target).
+    expect(parseGetArgs(["ukp://notes/embedding%20practice.md"])).toEqual({
+      endpoint: "notes",
+      path: "embedding practice.md",
+      addressing: "uri",
+    });
+    expect(parseGetArgs(["ukp://notes/embedding practice.md"])).toEqual({
+      endpoint: "notes",
+      path: "embedding practice.md",
+      addressing: "uri",
+    });
+    // Multi-byte UTF-8 escapes decode to the same target as raw CJK (IRI stance).
+    expect(parseGetArgs(["ukp://notes/%E4%B8%AD%E6%96%87.md"])).toEqual({
+      endpoint: "notes",
+      path: "中文.md",
+      addressing: "uri",
+    });
+    expect(parseGetArgs(["ukp://notes/中文.md"])).toEqual({
+      endpoint: "notes",
+      path: "中文.md",
+      addressing: "uri",
+    });
+    // Fragment is decoded too; #L<n> recognition is unaffected.
+    expect(parseGetArgs(["ukp://notes/docs/note.md#L2"]).lines).toEqual({ start: 2 });
+  });
+
+  test("keeps invalid percent sequences literal and lets %2F act as a separator", () => {
+    // `%of` is not a hex triplet, so it stays literal. (Note the flip side,
+    // pinned behavior: any `%xx` with hex digits decodes unconditionally —
+    // e.g. `%be` in "100%best" is a valid escape.)
+    expect(parseGetArgs(["ukp://notes/50%off.md"]).path).toBe("50%off.md");
+    expect(parseGetArgs(["ukp://notes/do%2Fcs/note.md"])).toEqual({
+      // A decoded `%2F` becomes a separator character (D-059): unambiguous
+      // because no filesystem allows `/` inside a name.
+      endpoint: "notes",
+      path: "do/cs/note.md",
+      addressing: "uri",
+    });
+  });
+
+  test("decoder edge cases: trailing %, incomplete escape, invalid UTF-8", () => {
+    // Trailing `%` and incomplete `%A` stay literal (D-059 lenient stance).
+    expect(parseGetArgs(["ukp://notes/100%"]).path).toBe("100%");
+    expect(parseGetArgs(["ukp://notes/100%A.md"]).path).toBe("100%A.md");
+    // `%FF` is a valid escape but invalid UTF-8 → U+FFFD replacement char.
+    expect(parseGetArgs(["ukp://notes/bad%FF.md"]).path).toBe("bad\ufffd.md");
+    // Consecutive valid escapes decode as one byte run: %E4 %B8 form an
+    // incomplete UTF-8 sequence → a single U+FFFD, then literal `x`.
+    expect(parseGetArgs(["ukp://notes/%E4%B8x.md"]).path).toBe("\ufffdx.md");
+  });
+
+  test("rejects an encoded traversal segment after decoding (containment holds)", () => {
+    // `%2E%2E` decodes to `..` before the capability layer's containment
+    // check, so the encoded spelling of a traversal is rejected identically.
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-encoded-traversal-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeGetCommand(["ukp://notes/docs/%2E%2E/docs/note.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("'..' path segments");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("recognizes the scheme case-insensitively but requires the hierarchical //", () => {
+    // RFC 3986: scheme comparison is case-insensitive (ASCII).
+    expect(parseGetArgs(["UKP://notes/docs/note.md"])).toEqual({
+      endpoint: "notes",
+      path: "docs/note.md",
+      addressing: "uri",
+    });
+    // Single-slash `ukp:/...` is not the hierarchical form: it is not a URI
+    // input and falls back to the plain-reference path, which then demands
+    // --endpoint (D-059).
+    expect(() => parseGetArgs(["ukp:/notes/docs/note.md"])).toThrow("get requires --endpoint");
+  });
+
+  test("reads a spaced filename through its percent-encoded markdown spelling", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-decode-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    writeFileSync(join(service, "embedding practice.md"), "spaced\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      const encoded = executeGetCommand(["ukp://notes/embedding%20practice.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(encoded).toEqual({ exitCode: 0, stdout: "spaced\n", stderr: "" });
+
+      const raw = executeGetCommand(["ukp://notes/embedding practice.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(raw).toEqual({ exitCode: 0, stdout: "spaced\n", stderr: "" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

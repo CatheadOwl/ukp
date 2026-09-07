@@ -71,33 +71,84 @@ function parseGetCommand(args: readonly string[]): {
   };
 }
 
-const UKP_URI_PREFIX = "ukp://";
+/** ASCII-only case-insensitive `ukp://` scheme match (RFC 3986: scheme is
+ * case-insensitive; restricting the classes to ASCII avoids Unicode
+ * case-folding surprises like the Kelvin sign). */
+const UKP_URI_PREFIX_RE = /^[uU][kK][pP]:\/\//;
+
+/**
+ * Percent-decode a `%XX`-escaped string into its UTF-8 form (G3 pin, D-059).
+ *
+ * WHATWG-URL-style lenient decoding applied per component (endpoint /
+ * rel-path / fragment): every valid `%XX` triplet contributes one byte to a
+ * UTF-8 decode; invalid `%` sequences are kept literally; invalid UTF-8
+ * bytes decode as U+FFFD. Decoding happens after the authority/path/fragment
+ * split, so `/` and `#` are always literal delimiters; a decoded `%2F`
+ * becomes a separator character — unambiguous because no supported
+ * filesystem allows `/` inside a name. Raw (unescaped) UTF-8 passes through
+ * verbatim (IRI semantics: URI/IRI distinction is deliberately not enforced).
+ */
+function percentDecodeUtf8(component: string): string {
+  if (!component.includes("%")) return component;
+  const decoder = new TextDecoder("utf-8");
+  let result = "";
+  let bytes: number[] = [];
+  let i = 0;
+  const flush = () => {
+    if (bytes.length > 0) {
+      result += decoder.decode(new Uint8Array(bytes));
+      bytes = [];
+    }
+  };
+  while (i < component.length) {
+    const hex = /^%[0-9a-fA-F]{2}$/.exec(component.slice(i, i + 3));
+    if (hex) {
+      bytes.push(Number.parseInt(component.slice(i + 1, i + 3), 16));
+      i += 3;
+      continue;
+    }
+    flush();
+    result += component[i];
+    i += 1;
+  }
+  flush();
+  return result;
+}
 
 /**
  * Parse a `ukp://<endpoint>/<rel-path>[#fragment]` URI (ADR 0014 target form)
  * into a GetRequest with exact slot addressing.
  *
- * This is a deliberate pre-activation pilot slice: it recognizes the scheme
- * prefix and splits authority/path/fragment verbatim — no percent-decoding,
- * no case folding, no canonical-form validation (G3 remains unpinned; see
- * workunits/ukp_uri/TODO). `#L<line>` maps to the line-window start; any other
- * fragment is an opaque navigation hint and is ignored for reading.
+ * Encoding stance (G3 pin, D-059): UTF-8/IRI semantics — raw UTF-8 is legal
+ * as-is; `%XX` triplets are percent-decoded per component (see
+ * percentDecodeUtf8). Case stance: exact compare, no case folding and no
+ * canonicalization (RFC 8089 precedent) — platform case-sensitivity
+ * differences are declared behavior, not normalized. `#L<line>` maps to the
+ * line-window start; any other fragment is an opaque navigation hint and is
+ * ignored for reading.
  */
 function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }): GetRequest {
+  // Precondition: the caller (parseGetArgs) has already matched
+  // UKP_URI_PREFIX_RE against this input; the non-null assertion below relies
+  // on that guard. New callers must test the prefix before calling.
   if (flags.endpoint !== undefined) {
     throw new GetUsageError("a ukp:// URI carries its own endpoint; do not also pass --endpoint");
   }
-  const rest = uri.slice(UKP_URI_PREFIX.length);
+  const rest = uri.slice(uri.match(UKP_URI_PREFIX_RE)![0].length);
   const hashIndex = rest.indexOf("#");
-  const fragment = hashIndex === -1 ? undefined : rest.slice(hashIndex + 1);
+  const fragment = hashIndex === -1 ? undefined : percentDecodeUtf8(rest.slice(hashIndex + 1));
   const pathPart = hashIndex === -1 ? rest : rest.slice(0, hashIndex);
   const slashIndex = pathPart.indexOf("/");
   if (slashIndex === -1 && pathPart.includes("\\")) {
     throw new GetUsageError("ukp:// URI uses '/' as the path separator: ukp://<endpoint>/<rel-path>");
   }
   // No slash: the whole remainder is the endpoint with an empty rel-path.
-  const endpoint = slashIndex === -1 ? pathPart : pathPart.slice(0, slashIndex);
-  const relPath = slashIndex === -1 ? "" : pathPart.slice(slashIndex + 1);
+  // Percent-decoding is applied per component after the split (D-059): `/`
+  // and `#` are always literal delimiters at split time; a decoded `%2F`
+  // becomes a separator character downstream, which is unambiguous because
+  // no filesystem allows `/` inside a name.
+  const endpoint = slashIndex === -1 ? percentDecodeUtf8(pathPart) : percentDecodeUtf8(pathPart.slice(0, slashIndex));
+  const relPath = percentDecodeUtf8(slashIndex === -1 ? "" : pathPart.slice(slashIndex + 1));
   if (endpoint.length === 0) {
     throw new GetUsageError("ukp:// URI must name an endpoint: ukp://<endpoint>/<rel-path>");
   }
@@ -150,7 +201,7 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
       `unexpected argument '${unexpected}'; get accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
     );
   }
-  if (path !== undefined && path.startsWith(UKP_URI_PREFIX)) {
+  if (path !== undefined && UKP_URI_PREFIX_RE.test(path)) {
     return parseUkpUri(path, { endpoint: parsed.endpoint, lines: parsed.lines });
   }
   if (parsed.endpoint === undefined || parsed.endpoint.length === 0) {
