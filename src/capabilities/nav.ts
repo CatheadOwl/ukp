@@ -201,7 +201,7 @@ function ruleMatches(rule: IgnoreRule, path: string, isDirectory: boolean): bool
 
 export interface NavEntry {
   /** Endpoint-relative route path, forward slashes. Files keep their `.md`
-   * suffix so the path is directly consumable by `ukp get`. */
+   * suffix so the path is directly consumable by `ukp read`. */
   path: string;
   kind: "file" | "folder";
   description: string | null;

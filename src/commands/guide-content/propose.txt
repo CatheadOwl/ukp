@@ -30,7 +30,7 @@ Model:
 
 4. Read proposals back
    Reading is owned by the Service: if it indexes its proposal folder into its search surface,
-   ukp search / ukp get reach proposals like any other content.
+   ukp search / ukp read reach proposals like any other content.
 
 Remember:
 - Same id, same proposal: do not fork ids (add-topic, add-topic-v2) for revisions of one idea.

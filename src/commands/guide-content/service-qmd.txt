@@ -28,7 +28,8 @@ Fast path for a simple knowledge folder:
    'ukp guide service' step 4.
    A read smoke ('qmd get <reference> --no-line-numbers') is required for
    observe mode (external or nested collection root): it confirms the provider
-   can resolve the weak reference that ukp get will delegate to.
+   can resolve the provider references that ukp read will delegate to it
+   (bare docid handoff keys and qmd:// references).
 
 Exact flags and arguments come from the relevant QMD subcommand help, for example:
   qmd init --help

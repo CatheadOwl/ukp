@@ -11,7 +11,7 @@ import { ScopeError } from "../scope.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 
 function createGetCommand(): Command {
-  return new Command("ukp get")
+  return new Command("ukp read")
     .exitOverride()
     .allowUnknownOption(false)
     .allowExcessArguments(true)
@@ -24,7 +24,7 @@ function createGetCommand(): Command {
     )
     .argument("[reference]", "endpoint-local path, ukp:// URI, docid[:line] handoff key, or qmd:// provider reference")
     .option("-c, --endpoint <name>", "select the endpoint that owns the resource")
-    .option("-g", "not supported; get is explicitly endpoint-scoped (current scope: 'ukp inspect'; endpoints: 'ukp list')")
+    .option("-g", "not supported; read is explicitly endpoint-scoped (current scope: 'ukp inspect'; endpoints: 'ukp list')")
     .option("--lines <start[:count]>", "read a 1-based text line window");
 }
 
@@ -195,22 +195,22 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
     throw new GetUsageError("--endpoint may only be specified once");
   }
   if (countFlagOccurrences(args, "--lines") > 1) throw new GetUsageError("--lines may only be specified once");
-  if (parsed.global) throw new GetUsageError("get requires --endpoint <name> and does not support -g");
+  if (parsed.global) throw new GetUsageError("read requires --endpoint <name> and does not support -g");
   // Unexpected positionals are rejected before the missing-flag checks so the
   // error names the real problem (extra argument), not a missing --endpoint.
   if (unexpected !== undefined) {
     throw new GetUsageError(
-      `unexpected argument '${unexpected}'; get accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
+      `unexpected argument '${unexpected}'; read accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
     );
   }
   if (path !== undefined && UKP_URI_PREFIX_RE.test(path)) {
     return parseUkpUri(path, { endpoint: parsed.endpoint, lines: parsed.lines });
   }
   if (parsed.endpoint === undefined || parsed.endpoint.length === 0) {
-    throw new GetUsageError("get requires --endpoint <name>");
+    throw new GetUsageError("read requires --endpoint <name>");
   }
   if (path === undefined || path.length === 0) {
-    throw new GetUsageError("get reference must be a non-empty endpoint-scoped reference");
+    throw new GetUsageError("read reference must be a non-empty endpoint-scoped reference");
   }
 
   return {
@@ -232,12 +232,12 @@ export function executeGetCommand(args: readonly string[], context: GetContext):
       return { exitCode: 2, stdout: "", stderr: renderGetUsageError(error.message) };
     }
     if (error instanceof ScopeError) {
-      return { exitCode: 1, stdout: "", stderr: `ukp get: ${error.message}\n` };
+      return { exitCode: 1, stdout: "", stderr: `ukp read: ${error.message}\n` };
     }
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `ukp get: ${error instanceof Error ? error.message : String(error)}\n`,
+      stderr: `ukp read: ${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
 }
@@ -248,9 +248,9 @@ export function renderGetHelp(): string {
 
 export function renderGetUsageError(message: string): string {
   return [
-    `ukp get: ${message}`,
-    "Usage: ukp get --endpoint <name> <reference> [--lines <start[:count]>]",
-    "       ukp get ukp://<endpoint>/<rel-path>[#L<line>]",
-    "Run 'ukp get --help' for details.",
+    `ukp read: ${message}`,
+    "Usage: ukp read --endpoint <name> <reference> [--lines <start[:count]>]",
+    "       ukp read ukp://<endpoint>/<rel-path>[#L<line>]",
+    "Run 'ukp read --help' for details.",
   ].join("\n");
 }

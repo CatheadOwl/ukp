@@ -47,7 +47,7 @@ For a human or agent starting from a folder:
 5. `ukp inspect --endpoint <name>` shows the current binding, manifest, and
    provider availability.
 6. `ukp search "<query>" --endpoint <name>` finds matches.
-7. `ukp get --endpoint <name> <reference>` reads a result.
+7. `ukp read --endpoint <name> <reference>` reads a result.
 
 An agent can carry out the same flow on your behalf. UKP handles naming,
 routing, and the command surface; the provider handles collection setup,
@@ -77,7 +77,7 @@ you.
 | `ukp register` / `ukp unregister --endpoint <name>` / `ukp list` | Manages Host Registry endpoint bindings. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp search` | Runs lexical search; `--recursive` expands direct authority/context dependencies. |
-| `ukp get` | Reads an endpoint-scoped resource reference from one registered local Service. |
+| `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. |
 | `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
 | `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
 

@@ -47,7 +47,7 @@ function providerUnavailableNoExecutable(endpointName: string): GetResult {
     exitCode: 1,
     stdout: "",
     stderr:
-      `ukp get: provider-unavailable: the QMD read channel for endpoint '${endpointName}' has no usable qmd executable.\n`
+      `ukp read: provider-unavailable: the QMD read channel for endpoint '${endpointName}' has no usable qmd executable.\n`
       + `Browse the endpoint with 'ukp nav --endpoint ${endpointName}' or install qmd, then retry.\n`,
   };
 }
@@ -283,12 +283,12 @@ function readViaQmd(
       exitCode: 1,
       stdout: "",
       stderr:
-        `ukp get: provider-unavailable: the QMD read channel for endpoint '${endpointName}' could not start (${detail}).\n`
+        `ukp read: provider-unavailable: the QMD read channel for endpoint '${endpointName}' could not start (${detail}).\n`
         + `Browse the endpoint with 'ukp nav --endpoint ${endpointName}' or verify the qmd installation, then retry.\n`,
     };
   }
   if (result.signal === "SIGINT" || result.status === 130) {
-    return { exitCode: 130, stdout: "", stderr: "ukp get: provider cancelled\n" };
+    return { exitCode: 130, stdout: "", stderr: "ukp read: provider cancelled\n" };
   }
   if (result.status !== 0) {
     // Provider stderr detail keeps at most the first non-empty line — a
@@ -305,7 +305,7 @@ function readViaQmd(
       return {
         exitCode: 1,
         stdout: "",
-        stderr: "ukp get: qmd build does not support '--no-line-numbers'; provider incompatible\n",
+        stderr: "ukp read: qmd build does not support '--no-line-numbers'; provider incompatible\n",
       };
     }
     const providerError = rawProviderError
@@ -316,7 +316,7 @@ function readViaQmd(
       exitCode: 1,
       stdout: "",
       stderr:
-        `ukp get: resource-missing: '${request.path}' could not be resolved by the provider in endpoint '${endpointName}'\n`
+        `ukp read: resource-missing: '${request.path}' could not be resolved by the provider in endpoint '${endpointName}'\n`
         + (providerError ? `(provider: ${providerError})\n` : ""),
     };
   }
@@ -326,7 +326,7 @@ function readViaQmd(
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `ukp get: provider returned no content for '${request.path}' in endpoint '${endpointName}'\n`,
+      stderr: `ukp read: provider returned no content for '${request.path}' in endpoint '${endpointName}'\n`,
     };
   }
   return { exitCode: 0, stdout: body, stderr: "" };
@@ -338,7 +338,7 @@ function readTargetWithLines(targetPath: string, request: GetRequest): GetResult
     content = readFileSync(targetPath, "utf8");
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return { exitCode: 1, stdout: "", stderr: `ukp get: resource disappeared during lookup\n` };
+      return { exitCode: 1, stdout: "", stderr: `ukp read: resource disappeared during lookup\n` };
     }
     // A directory tail resolves as a path but is not a readable resource; the
     // failure must state that in product terms instead of leaking the Node
@@ -347,7 +347,7 @@ function readTargetWithLines(targetPath: string, request: GetRequest): GetResult
       return {
         exitCode: 1,
         stdout: "",
-        stderr: `ukp get: '${request.path}' is a directory, not a readable resource\n`,
+        stderr: `ukp read: '${request.path}' is a directory, not a readable resource\n`,
       };
     }
     throw error;
@@ -360,7 +360,7 @@ function readTargetWithLines(targetPath: string, request: GetRequest): GetResult
       exitCode: 1,
       stdout: "",
       stderr:
-        `ukp get: ${origin} ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)\n`,
+        `ukp read: ${origin} ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)\n`,
     };
   }
   return { exitCode: 0, stdout: rangeResult.content, stderr: "" };
@@ -387,7 +387,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
   });
   const [binding] = scope.bindings;
   if (!binding) {
-    return { exitCode: 1, stdout: "", stderr: "ukp get: no endpoint selected\n" };
+    return { exitCode: 1, stdout: "", stderr: "ukp read: no endpoint selected\n" };
   }
 
   const service = loadManifest(binding.path);
@@ -395,7 +395,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `ukp get: endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'\n`,
+      stderr: `ukp read: endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'\n`,
     };
   }
 
@@ -424,14 +424,14 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
       targetPath = resolveEndpointPath(service.folder, request.path);
     } catch (error) {
       if (error instanceof GetUsageError) {
-        return { exitCode: 2, stdout: "", stderr: `ukp get: ${error.message}\n` };
+        return { exitCode: 2, stdout: "", stderr: `ukp read: ${error.message}\n` };
       }
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         return {
           exitCode: 1,
           stdout: "",
           stderr:
-            `ukp get: resource-missing '${request.path}' in endpoint '${binding.name}' (ukp:// addresses a slot exactly; no fuzzy resolution)\n`,
+            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}' (ukp:// addresses a slot exactly; no fuzzy resolution)\n`,
         };
       }
       throw error;
@@ -447,7 +447,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
       return {
         exitCode: 1,
         stdout: "",
-        stderr: `ukp get: qmd:// references require a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
+        stderr: `ukp read: qmd:// references require a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
       };
     }
     if (!qmdCommand) {
@@ -466,7 +466,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
       return {
         exitCode: 1,
         stdout: "",
-        stderr: `ukp get: a docid[:line] reference requires a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
+        stderr: `ukp read: a docid[:line] reference requires a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
       };
     }
     if (!qmdCommand) {
@@ -480,7 +480,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     targetPath = resolveEndpointPath(service.folder, request.path);
   } catch (error) {
     if (error instanceof GetUsageError) {
-      return { exitCode: 2, stdout: "", stderr: `ukp get: ${error.message}\n` };
+      return { exitCode: 2, stdout: "", stderr: `ukp read: ${error.message}\n` };
     }
     // realpathSync throws ENOENT if path doesn't exist
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
@@ -500,7 +500,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
           exitCode: 1,
           stdout: "",
           stderr:
-            `ukp get: resource-missing '${request.path}' in endpoint '${binding.name}' (plain paths address files exactly; provider reads use a bare docid handoff key or qmd://)`
+            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}' (plain paths address files exactly; provider reads use a bare docid handoff key or qmd://)`
             + (candidates.length > 0
               ? `\nDid you mean:\n${candidates.join("\n")}\n`
               : "\n"),
@@ -520,7 +520,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
         return {
           exitCode: 1,
           stdout: "",
-          stderr: `ukp get: multiple resources match '${request.path}' in endpoint '${binding.name}':\n${matchList}\nUse a more specific path.\n`,
+          stderr: `ukp read: multiple resources match '${request.path}' in endpoint '${binding.name}':\n${matchList}\nUse a more specific path.\n`,
         };
       } else if (nameFuzzyMatches.length > 0) {
         // Name fuzzy match (filename fuzzy): always show candidates
@@ -530,13 +530,13 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
         return {
           exitCode: 1,
           stdout: "",
-          stderr: `ukp get: no exact match for '${request.path}' in endpoint '${binding.name}'.\nDid you mean:\n${matchList}\n`,
+          stderr: `ukp read: no exact match for '${request.path}' in endpoint '${binding.name}'.\nDid you mean:\n${matchList}\n`,
         };
       } else {
         return {
           exitCode: 1,
           stdout: "",
-          stderr: `ukp get: resource '${request.path}' was not found in endpoint '${binding.name}'\n`,
+          stderr: `ukp read: resource '${request.path}' was not found in endpoint '${binding.name}'\n`,
         };
       }
     } else {

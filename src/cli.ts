@@ -30,7 +30,9 @@ export { renderNavHelp } from "./commands/nav.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
-  ["get", "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)"],
+  ["read", "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)"],
+  // `get` was renamed to `read` (D-062); with no external users the old
+  // spelling was removed outright instead of kept as an alias.
   ["guide", "show short operational guides"],
   ["init", "initialize UKP-owned files"],
   ["inspect", "explain current scope and endpoint routing"],
@@ -147,7 +149,7 @@ export function renderHelp(): string {
     "Endpoint names for --endpoint come from 'ukp list'.",
     "",
     "Guides:",
-    "  ukp guide service     first Service setup, inspect, search, get, and refresh path",
+    "  ukp guide service     first Service setup, inspect, search, read, and refresh path",
     "  ukp guide service qmd provider setup for the default QMD provider",
     "  ukp guide client      use registered Services by default from a workspace",
     "  ukp guide propose     submit idempotent change proposals to a Service",
@@ -241,7 +243,7 @@ export function runCli(
     }), stdout, stderr);
   }
 
-  if (command === "get") {
+  if (command === "read") {
     return writeCommandResult(executeGetCommand(args.slice(1), {
       currentDirectory,
       registryPath,
