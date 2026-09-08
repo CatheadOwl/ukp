@@ -18,11 +18,13 @@ function createGetCommand(): Command {
     .helpOption("-h, --help", "show this help")
     .usage("--endpoint <name> <reference> [--lines <start[:count]>] | ukp://<endpoint>/<rel-path>[#L<line>]")
     .description(
-      "Read an endpoint-scoped resource reference from one Service endpoint. A ukp:// URI is addressed exactly (no fuzzy resolution); #L<line> maps to the line window start.",
+      "Read an endpoint-scoped resource reference from one Service endpoint (endpoint names come from 'ukp list'). "
+        + "A ukp:// URI is addressed exactly (no fuzzy resolution); #L<line> maps to the line window start. "
+        + "On success stdout carries only the resource body; all diagnostics go to stderr.",
     )
-    .argument("[reference]", "endpoint-local path, ukp:// URI, or provider-owned reference")
+    .argument("[reference]", "endpoint-local path, ukp:// URI, docid[:line] handoff key, or qmd:// provider reference")
     .option("-c, --endpoint <name>", "select the endpoint that owns the resource")
-    .option("-g", "not supported by get; use --endpoint <name>")
+    .option("-g", "not supported; get is explicitly endpoint-scoped (current scope: 'ukp inspect'; endpoints: 'ukp list')")
     .option("--lines <start[:count]>", "read a 1-based text line window");
 }
 

@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { executeGetCommand, parseGetArgs } from "../src/commands/get.ts";
 import { registerAt } from "../src/registry.ts";
-import { stripQmdHeader } from "../src/capabilities/qmd.ts";
+import { buildQmdInvocation, stripQmdHeader } from "../src/capabilities/qmd.ts";
 
 const qmdFixture = join(import.meta.dir, "fixtures", "qmd-provider");
 const qmdFixtureExecutable = join(qmdFixture, "qmd-fixture.mjs");
@@ -400,8 +400,9 @@ describe("get", () => {
 });
 
 // A QMD-backed Service simulates the ISSUE-007 repro: docs/ja and docs/zh hold
-// translations QMD ignores, docs/english.md is exact-path readable, and the QMD
-// fixture is the provider-owned resolver for weak references.
+// translations QMD ignores, docs/english.md is exact-path readable. Since ADR
+// 0017 the provider is entered only by explicit shapes (bare docid, qmd://);
+// a plain-path miss never delegates.
 function writeQmdServiceToml(service: string, endpointName: string): void {
   writeFileSync(
     join(service, ".ukp", "service.toml"),
@@ -456,8 +457,8 @@ function readQmdInvocation(service: string): { reference?: string; noLineNumbers
 }
 
 describe("get/qmd adapter", () => {
-  test("delegates an unresolved reference to qmd get and strips the provider header", () => {
-    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-weak-"));
+  test("reports a plain-path miss on a QMD-backed endpoint as resource-missing with file candidates, without delegation", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-plain-miss-"));
     const registryPath = join(root, "registry.toml");
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
@@ -467,12 +468,15 @@ describe("get/qmd adapter", () => {
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
       });
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe("# Running agents\n\nOperating the OpenAI Agents SDK service.\n");
-      expect(result.stderr).toBe("");
-      const invocation = readQmdInvocation(service);
-      expect(invocation.reference).toBe("running_agents.md");
-      expect(invocation.noLineNumbers).toBe(true);
+      // ADR 0017: shape-based dispatch — a plain-path miss never enters the
+      // provider; it fails as resource-missing with the file layer's
+      // candidate list (advisory only, never a silent weak-read hit).
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("resource-missing 'running_agents.md' in endpoint 'fixture-qmd'");
+      expect(result.stderr).toContain("Did you mean");
+      expect(result.stderr).toContain("docs/ja/running_agents.md");
+      expect(result.stdout).toBe("");
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -516,7 +520,7 @@ describe("get/qmd adapter", () => {
     }
   });
 
-  test("forwards a line range as reference:start:count", () => {
+  test("forwards a docid line range as reference:start:count", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-range-"));
     const registryPath = join(root, "registry.toml");
     const service = createQmdBackedService(root, "fixture-qmd");
@@ -525,7 +529,7 @@ describe("get/qmd adapter", () => {
       const result = executeGetCommand([
         "--endpoint",
         "fixture-qmd",
-        "running_agents.md",
+        "d4e5f6",
         "--lines",
         "1:2",
       ], {
@@ -535,25 +539,26 @@ describe("get/qmd adapter", () => {
       });
       expect(result.exitCode).toBe(0);
       const invocation = readQmdInvocation(service);
-      expect(invocation.reference).toBe("running_agents.md:1:2");
+      expect(invocation.reference).toBe("#d4e5f6:1:2");
       expect(invocation.noLineNumbers).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("surfaces a provider miss as a recovery message without fuzzy candidates", () => {
+  test("surfaces a provider miss as a resource-missing recovery message without fuzzy candidates", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-miss-"));
     const registryPath = join(root, "registry.toml");
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "missing-thing"], {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/missing-thing"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
       });
       expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("resource-missing");
       expect(result.stderr).toContain("resource not found");
       expect(result.stderr).not.toContain("Did you mean");
       expect(result.stdout).toBe("");
@@ -562,20 +567,24 @@ describe("get/qmd adapter", () => {
     }
   });
 
-  test("reports an unavailable qmd executable without falling back to fuzzy scan", () => {
+  test("classifies a failed qmd spawn as provider-unavailable with a recovery hint", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-unavailable-"));
     const registryPath = join(root, "registry.toml");
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "running_agents.md"], {
+      // A bare docid is an explicit provider shape (ADR 0017), so it still
+      // enters the provider channel even when the executable is broken.
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "d4e5f6"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: ["/definitely/not-a-real-qmd"],
       });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("failed to run qmd");
-      expect(result.stderr).not.toContain("Did you mean");
+      expect(result.stderr).toContain("provider-unavailable");
+      expect(result.stderr).toContain("'fixture-qmd'");
+      expect(result.stderr).toContain("ukp nav --endpoint fixture-qmd");
+      expect(result.stderr).not.toContain("resource-missing");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -587,7 +596,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "no-lines-qmd");
     registerAt(registryPath, "no-lines-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "no-lines-qmd", "running_agents.md"], {
+      const result = executeGetCommand(["--endpoint", "no-lines-qmd", "d4e5f6"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -623,7 +632,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "provider-sigint-qmd");
     registerAt(registryPath, "provider-sigint-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "provider-sigint-qmd", "running_agents.md"], {
+      const result = executeGetCommand(["--endpoint", "provider-sigint-qmd", "d4e5f6"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -644,7 +653,7 @@ describe("get/qmd adapter", () => {
       const result = executeGetCommand([
         "--endpoint",
         "fixture-qmd",
-        "running_agents.md",
+        "d4e5f6",
         "--lines",
         "2",
       ], {
@@ -653,7 +662,7 @@ describe("get/qmd adapter", () => {
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(readQmdInvocation(service).reference).toBe("running_agents.md:2");
+      expect(readQmdInvocation(service).reference).toBe("#d4e5f6:2");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -665,7 +674,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "emptybody-ref"], {
+      const result = executeGetCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/emptybody-ref"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -678,7 +687,7 @@ describe("get/qmd adapter", () => {
     }
   });
 
-  test("reports a qmd:// reference with an unavailable qmd without fuzzy fallback", () => {
+  test("classifies an unavailable qmd on a qmd:// reference as provider-unavailable", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-uri-unavailable-"));
     const registryPath = join(root, "registry.toml");
     const service = createQmdBackedService(root, "fixture-qmd");
@@ -690,8 +699,8 @@ describe("get/qmd adapter", () => {
         qmdCommand: ["/definitely/not-a-real-qmd"],
       });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("failed to run qmd");
-      expect(result.stderr).not.toContain("Did you mean");
+      expect(result.stderr).toContain("provider-unavailable");
+      expect(result.stderr).not.toContain("resource-missing");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -738,7 +747,7 @@ describe("get/qmd adapter", () => {
     }
   });
 
-  test("delegates a config.md weak reference with a line range instead of a fuzzy multi-match", () => {
+  test("reports a config.md plain-path miss on a QMD-backed endpoint as resource-missing with candidates", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-config-"));
     const registryPath = join(root, "registry.toml");
     const service = createConfigService(root, "openai-agents");
@@ -749,20 +758,58 @@ describe("get/qmd adapter", () => {
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
       });
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
-      // The translated docs/ja + docs/zh copies exist, but the adapter must
-      // return the QMD-visible English body, never a candidate list.
-      expect(result.stdout).not.toContain("multiple resources match");
-      // Exact body of the fixture's `config` branch after header stripping —
-      // a fuzzy multi-match or a get/file read of docs/config.md would fail this.
-      expect(result.stdout).toBe("# Configuration\n\nSDK-wide defaults configured at startup.\n");
-      const invocation = readQmdInvocation(service);
-      expect(invocation.reference).toBe("config.md:1:80");
-      expect(invocation.noLineNumbers).toBe(true);
+      // ADR 0017: the weak-reference delegation tier is retired. The exact
+      // docs/config.md file exists, but "config.md" is not its exact path, so
+      // the plain-path tier fails as resource-missing and lists the file
+      // layer's candidates — the QMD-visible English body is never silently
+      // weak-matched, and the translations are never auto-read either.
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("resource-missing 'config.md' in endpoint 'openai-agents'");
+      expect(result.stderr).toContain("docs/config.md");
+      expect(result.stderr).toContain("docs/ja/config.md");
+      expect(result.stdout).toBe("");
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildQmdInvocation", () => {
+  test("appends provider arguments verbatim for a plain command", () => {
+    expect(buildQmdInvocation(["/usr/bin/qmd", "--flag"], ["get", "#a1b2c3:2"])).toEqual({
+      file: "/usr/bin/qmd",
+      args: ["--flag", "get", "#a1b2c3:2"],
+      verbatim: false,
+    });
+  });
+
+  test("cmd.exe wrappers get one cmd-escaped /c payload (ISSUE-011)", () => {
+    const wrapper = ["C:\\Windows\\cmd.exe", "/d", "/s", "/c", "C:\\npm\\qmd.cmd"];
+    // Arbitrary user text (search queries) must never be re-parsed by cmd:
+    // every element quoted (inner quotes doubled), payload wrapped in one
+    // extra outer quote pair for /s, spawned verbatim so the runtime does not
+    // re-quote it — neutralizing `& | < > ^` and spaces.
+    const inner = '"C:\\npm\\qmd.cmd" "search" "foo&calc" "-n" "20"';
+    expect(buildQmdInvocation(wrapper, ["search", "foo&calc", "-n", "20"])).toEqual({
+      file: "C:\\Windows\\cmd.exe",
+      args: ["/d", "/s", "/c", `"${inner}"`],
+      verbatim: true,
+    });
+    expect(buildQmdInvocation(wrapper, ["get", 'a b"c'])).toEqual({
+      file: "C:\\Windows\\cmd.exe",
+      args: ["/d", "/s", "/c", '""C:\\npm\\qmd.cmd" "get" "a b""c""'],
+      verbatim: true,
+    });
+  });
+
+  test("powershell wrappers are not treated as cmd.exe wrappers", () => {
+    const ps = ["powershell.exe", "-NoProfile", "-File", "qmd.ps1"];
+    expect(buildQmdInvocation(ps, ["update"])).toEqual({
+      file: "powershell.exe",
+      args: ["-NoProfile", "-File", "qmd.ps1", "update"],
+      verbatim: false,
+    });
   });
 });
 
@@ -814,6 +861,27 @@ describe("docid handoff (ADR 0011)", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(readQmdInvocation(service).reference).toBe("#d4e5f6:2");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a bare docid reference on a non-QMD-backed endpoint", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-docid-nonqmd-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "file-notes");
+    registerAt(registryPath, "file-notes", service);
+    try {
+      const result = executeGetCommand(["--endpoint", "file-notes", "d4e5f6"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      // Shape-based dispatch (ADR 0017): a bare docid is a provider shape;
+      // without a QMD-backed route there is no provider tier to enter.
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("docid[:line] reference requires a QMD-backed endpoint");
+      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -3,7 +3,7 @@ import { loadClientConfig, findNearestClientConfig } from "../config/client.ts";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
-import { defaultQmdCommand } from "./qmd.ts";
+import { buildQmdInvocation, defaultQmdCommand } from "./qmd.ts";
 
 export interface RefreshOptions {
   explicitEndpoints?: string[];
@@ -202,8 +202,14 @@ function renderSkipped(endpoint: Exclude<PlannedEndpoint, { status: "executable"
   ].join("\n");
 }
 
-function commandFor(endpoint: Extract<PlannedEndpoint, { status: "executable" }>): string[] {
-  return [...endpoint.command, "update"];
+function commandFor(endpoint: Extract<PlannedEndpoint, { status: "executable" }>): {
+  file: string;
+  args: string[];
+  verbatim: boolean;
+} {
+  // Uniform provider plumbing (ISSUE-011): a cmd.exe shim wrapper must get
+  // the whole call as one cmd-escaped /c payload.
+  return buildQmdInvocation(endpoint.command, ["update"]);
 }
 
 const QMD_MAINTENANCE_SCOPE =
@@ -226,10 +232,11 @@ export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): 
     output.push("provider: qmd");
     output.push(`maintenance_scope: ${QMD_MAINTENANCE_SCOPE}`);
     const command = commandFor(endpoint);
-    const result = spawnSync(command[0]!, command.slice(1), {
+    const result = spawnSync(command.file, command.args, {
       cwd: endpoint.folder,
       encoding: "utf8",
       windowsHide: true,
+      windowsVerbatimArguments: command.verbatim,
       maxBuffer: 64 * 1024 * 1024,
     });
 

@@ -30,7 +30,7 @@ export { renderNavHelp } from "./commands/nav.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
-  ["get", "read an endpoint-scoped resource reference"],
+  ["get", "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)"],
   ["guide", "show short operational guides"],
   ["init", "initialize UKP-owned files"],
   ["inspect", "explain current scope and endpoint routing"],
@@ -143,6 +143,8 @@ export function renderHelp(): string {
     "",
     "Commands:",
     ...COMMANDS.map(([name, description]) => `  ${name.padEnd(10)} ${description}`),
+    "",
+    "Endpoint names for --endpoint come from 'ukp list'.",
     "",
     "Guides:",
     "  ukp guide service     first Service setup, inspect, search, get, and refresh path",
