@@ -7,12 +7,19 @@ import { resolveScope } from "../scope.ts";
 import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
 
 export interface GetRequest {
-  endpoint: string;
+  /** Undefined only for an absolute filesystem reference, which the
+   * capability maps against the Registry before any read (ADR-URI-001
+   * tolerant tier); every other tier requires it. */
+  endpoint?: string;
   path: string;
   lines?: LineRange;
   /** "uri" = exact slot addressing (ukp:// input, ADR 0014): the path must
    * resolve exactly; no fuzzy fallback and no provider delegation on miss. */
   addressing?: "uri";
+  /** Document-relative context (ADR-URI-001 tolerant tier): the
+   * endpoint-relative route of the source document the reference was copied
+   * from. `path` is then resolved against that document's directory. */
+  fromRef?: string;
 }
 
 export interface LineRange {
@@ -91,6 +98,109 @@ function resolveEndpointPath(serviceFolder: string, reference: string): string {
     throw new GetUsageError("reference must stay inside the selected Service folder when resolved as a file");
   }
   return targetReal;
+}
+
+/** Tolerant-tier absolute-shape detection (ADR-URI-001): an input that is an
+ * absolute filesystem path (any of the shapes the plain tier rejects) is
+ * mapped against the Registry instead of being a usage error. */
+export function isAbsoluteFilesystemReference(reference: string): boolean {
+  // `C:foo` (no separator) is drive-relative, not absolute — it stays on the
+  // plain tier, where validateEndpointRelativePath rejects the `X:` shape.
+  return (
+    isAbsolute(reference)
+    || win32.isAbsolute(reference)
+    || /^[A-Za-z]:[\\/]/.test(reference)
+    || reference.startsWith("//")
+    || reference.startsWith("\\\\")
+  );
+}
+
+/**
+ * Resolve a document-relative reference (ADR-URI-001 tolerant tier): the
+ * reference as it appears inside a source document (`../x.md`, `./x.md`,
+ * bare `x.md`), resolved against `fromRef`'s directory with `.`/`..`
+ * segment normalization. Pure string work — no filesystem access, no fuzzy
+ * search; escaping the endpoint root is a usage error, not a containment
+ * miss (the caller learns the boundary before any file is touched).
+ */
+function resolveDocRelativeReference(fromRef: string, reference: string): string {
+  const base = validateEndpointRelativePath(fromRef).slice(0, -1);
+  const segments = [...base];
+  for (const segment of reference.split(/[\\/]/)) {
+    if (segment.length === 0 || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) {
+        throw new GetUsageError(
+          `'${reference}' (from '${fromRef}') resolves outside the endpoint`,
+        );
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  if (segments.length === 0) {
+    throw new GetUsageError(
+      `'${reference}' (from '${fromRef}') resolves to the endpoint root, not a resource`,
+    );
+  }
+  return segments.join("/");
+}
+
+/**
+ * Map an absolute filesystem reference to { endpoint, route } by matching it
+ * against every registered endpoint's Service folder (ADR-URI-001 tolerant
+ * tier; the agent-facing equivalent of `gh pr view` accepting a pasted URL).
+ * Containment uses the same resolved-realpath stance as reads; a target that
+ * does not exist yet falls back to a lexical check against the real Service
+ * root. Ambiguity (zero or multiple endpoints) is a usage error, never a
+ * silent first-match: the mapping must be reproducible.
+ */
+function resolveAbsoluteReference(
+  reference: string,
+  registry: readonly { name: string; path: string }[],
+): { endpoint: string; route: string } {
+  const matches: { endpoint: string; route: string }[] = [];
+  for (const binding of registry) {
+    let service: ReturnType<typeof loadManifest>;
+    try {
+      service = loadManifest(binding.path);
+    } catch {
+      continue;
+    }
+    if (service.effectiveName !== binding.name) continue;
+    let serviceReal: string;
+    try {
+      serviceReal = realpathSync(service.folder);
+    } catch {
+      continue;
+    }
+    let target: string;
+    try {
+      target = realpathSync(reference);
+    } catch {
+      target = resolve(reference);
+    }
+    if (!isInsideService(serviceReal, target)) continue;
+    matches.push({
+      endpoint: binding.name,
+      route: relative(serviceReal, target).replace(/\\/g, "/"),
+    });
+  }
+  if (matches.length === 0) {
+    const names = registry.map((binding) => binding.name).join(", ");
+    throw new GetUsageError(
+      `absolute reference '${reference}' matches no registered endpoint`
+        + (names.length > 0 ? ` (registered: ${names})` : " (no endpoints registered)"),
+    );
+  }
+  if (matches.length > 1) {
+    const list = matches.map((match) => `${match.endpoint} (${match.route})`).join(", ");
+    throw new GetUsageError(
+      `absolute reference '${reference}' matches multiple endpoints: ${list}; use 'ukp read --endpoint <name> <route>' instead`,
+    );
+  }
+  return matches[0];
 }
 
 function normalizeFilename(name: string): string {
@@ -378,7 +488,53 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     );
   }
 
+  // Tolerant-addressing pre-pass (ADR-URI-001): the caller's address encoding
+  // is the product's job, never a shape the agent must pre-normalize. Two
+  // explicit tiers — an absolute filesystem path mapped against the Registry
+  // (endpoint inferred), and a document-relative reference resolved against
+  // --from. Both rewrite the request to the canonical endpoint+route and echo
+  // the mapping on stderr (stdout stays body-only); both fail loud as usage
+  // errors, never silently delegating (the weak-reference lesson, ADR 0017).
   const registry = readRegistry(context.registryPath);
+  let resolutionNote: string | undefined;
+  if (request.addressing !== "uri" && isAbsoluteFilesystemReference(request.path)) {
+    if (request.fromRef !== undefined) {
+      throw new GetUsageError("an absolute filesystem path cannot be combined with --from");
+    }
+    if (request.endpoint !== undefined) {
+      throw new GetUsageError(
+        "an absolute filesystem path carries its own endpoint (matched against registered endpoints); do not also pass --endpoint",
+      );
+    }
+    const mapped = resolveAbsoluteReference(request.path, registry);
+    request = { ...request, endpoint: mapped.endpoint, path: mapped.route };
+    resolutionNote = `ukp read: absolute path matched endpoint '${mapped.endpoint}', route '${mapped.route}'`;
+  } else if (request.fromRef !== undefined) {
+    if (request.endpoint === undefined) {
+      throw new GetUsageError("--from requires --endpoint <name>");
+    }
+    if (request.path.startsWith("qmd://") || isBareDocidReference(barePath)) {
+      throw new GetUsageError("--from applies to document-relative path references, not provider references");
+    }
+    const resolved = resolveDocRelativeReference(request.fromRef, request.path);
+    resolutionNote = `ukp read: resolved '${request.path}' from '${request.fromRef}' -> '${resolved}'`;
+    request = { ...request, path: resolved };
+  }
+
+  const result = executeResolvedRead(request, context, registry);
+  return resolutionNote === undefined
+    ? result
+    : { ...result, stderr: `${resolutionNote}\n${result.stderr}` };
+}
+
+function executeResolvedRead(
+  request: GetRequest,
+  context: GetContext,
+  registry: ReturnType<typeof readRegistry>,
+): GetResult {
+  if (request.endpoint === undefined) {
+    return { exitCode: 1, stdout: "", stderr: "ukp read: no endpoint selected\n" };
+  }
   const scope = resolveScope({
     currentDirectory: context.currentDirectory,
     registry,
@@ -460,7 +616,9 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
   // (ADR 0017: shape-based dispatch). It routes to the provider before any
   // filesystem resolution: the fingerprint carries search-handoff intent, and
   // a Service-folder file that happens to be named like a docid must not
-  // shadow it.
+  // shadow it. (Recomputed here: the tolerant pre-pass may have rewritten
+  // request.path, but a rewritten path is always a plain route, never a docid.)
+  const barePath = stripDocidHash(request.path);
   if (isBareDocidReference(barePath)) {
     if (!qmdBacked) {
       return {

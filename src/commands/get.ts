@@ -2,6 +2,7 @@ import { Command, CommanderError } from "commander";
 import {
   executeGet,
   GetUsageError,
+  isAbsoluteFilesystemReference,
   type GetContext,
   type GetRequest,
   type GetResult,
@@ -20,12 +21,14 @@ function createGetCommand(): Command {
     .description(
       "Read an endpoint-scoped resource reference from one Service endpoint (endpoint names come from 'ukp list'). "
         + "A ukp:// URI is addressed exactly (no fuzzy resolution); #L<line> maps to the line window start. "
+        + "A document-relative reference resolves against --from <route>; an absolute filesystem path maps to the endpoint whose Service folder contains it (mapping echoed on stderr). "
         + "On success stdout carries only the resource body; all diagnostics go to stderr.",
     )
     .argument("[reference]", "endpoint-local path, ukp:// URI, docid[:line] handoff key, or qmd:// provider reference")
     .option("-c, --endpoint <name>", "select the endpoint that owns the resource")
     .option("-g", "not supported; read is explicitly endpoint-scoped (current scope: 'ukp inspect'; endpoints: 'ukp list')")
-    .option("--lines <start[:count]>", "read a 1-based text line window");
+    .option("--lines <start[:count]>", "read a 1-based text line window")
+    .option("--from <route>", "resolve a document-relative reference (../x.md, bare filename) against this source document's endpoint-relative route");
 }
 
 function parseLineRange(value: string): LineRange {
@@ -47,6 +50,7 @@ function parseGetCommand(args: readonly string[]): {
   endpoint?: string;
   global?: boolean;
   lines?: string;
+  from?: string;
 } {
   const command = createGetCommand()
     .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
@@ -64,12 +68,14 @@ function parseGetCommand(args: readonly string[]): {
     endpoint?: string;
     g?: boolean;
     lines?: string;
+    from?: string;
   }>();
   return {
     positionals: command.args,
     endpoint: options.endpoint,
     global: options.g,
     lines: options.lines,
+    from: options.from,
   };
 }
 
@@ -195,6 +201,7 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
     throw new GetUsageError("--endpoint may only be specified once");
   }
   if (countFlagOccurrences(args, "--lines") > 1) throw new GetUsageError("--lines may only be specified once");
+  if (countFlagOccurrences(args, "--from") > 1) throw new GetUsageError("--from may only be specified once");
   if (parsed.global) throw new GetUsageError("read requires --endpoint <name> and does not support -g");
   // Unexpected positionals are rejected before the missing-flag checks so the
   // error names the real problem (extra argument), not a missing --endpoint.
@@ -204,7 +211,27 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
     );
   }
   if (path !== undefined && UKP_URI_PREFIX_RE.test(path)) {
+    if (parsed.from !== undefined) {
+      throw new GetUsageError("a ukp:// URI carries its own endpoint; --from is for document-relative references");
+    }
     return parseUkpUri(path, { endpoint: parsed.endpoint, lines: parsed.lines });
+  }
+  // Tolerant tier (ADR-URI-001): an absolute filesystem path carries its own
+  // endpoint (Registry-matched), so --endpoint is neither required nor
+  // allowed; --from is for document-relative references only.
+  if (path !== undefined && isAbsoluteFilesystemReference(path)) {
+    if (parsed.from !== undefined) {
+      throw new GetUsageError("an absolute filesystem path cannot be combined with --from");
+    }
+    if (parsed.endpoint !== undefined) {
+      throw new GetUsageError(
+        "an absolute filesystem path carries its own endpoint (matched against registered endpoints); do not also pass --endpoint",
+      );
+    }
+    return {
+      path,
+      ...(parsed.lines === undefined ? {} : { lines: parseLineRange(parsed.lines) }),
+    };
   }
   if (parsed.endpoint === undefined || parsed.endpoint.length === 0) {
     throw new GetUsageError("read requires --endpoint <name>");
@@ -212,10 +239,14 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
   if (path === undefined || path.length === 0) {
     throw new GetUsageError("read reference must be a non-empty endpoint-scoped reference");
   }
+  if (parsed.from !== undefined && parsed.from.length === 0) {
+    throw new GetUsageError("--from must be a non-empty endpoint-relative route");
+  }
 
   return {
     endpoint: parsed.endpoint,
     path,
+    ...(parsed.from === undefined ? {} : { fromRef: parsed.from }),
     ...(parsed.lines === undefined ? {} : { lines: parseLineRange(parsed.lines) }),
   };
 }
@@ -250,6 +281,8 @@ export function renderGetUsageError(message: string): string {
   return [
     `ukp read: ${message}`,
     "Usage: ukp read --endpoint <name> <reference> [--lines <start[:count]>]",
+    "       ukp read --endpoint <name> --from <route> <document-relative reference>",
+    "       ukp read <absolute filesystem path>",
     "       ukp read ukp://<endpoint>/<rel-path>[#L<line>]",
     "Run 'ukp read --help' for details.",
   ].join("\n");
