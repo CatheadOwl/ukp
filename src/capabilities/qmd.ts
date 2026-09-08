@@ -116,14 +116,14 @@ export function buildQmdInvocation(
 }
 
 /**
- * Strip QMD `get` provider header so `ukp get` stdout starts at the body.
+ * Strip QMD `get` provider header so `ukp read` stdout starts at the body.
  *
  * QMD prints a provider location header (first line, `qmd://<collection>/<path>`),
  * zero or more metadata lines, a `---` separator, then the body. The adapter
  * strips that prefix only when the leading region really is a QMD header — the
  * first non-empty line before the separator starts with `qmd://`. A body-only
  * output that merely contains a `---` divider is left intact. CRLF line endings
- * are normalized to LF so `ukp get` stdout is line-ending-stable.
+ * are normalized to LF so `ukp read` stdout is line-ending-stable.
  */
 export function stripQmdHeader(output: string): string {
   const normalized = output.replace(/\r\n/g, "\n");

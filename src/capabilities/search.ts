@@ -506,7 +506,7 @@ function renderResultUnit(unitIndex: number, endpointName: string, result: unkno
   if (excerpt && excerpt !== fallback) lines.push(`   ${excerpt.replace(/\n/g, "\n   ")}`);
   if (docid) {
     const key = line ? `${docid}:${line}` : docid;
-    lines.push(`   get: ukp get --endpoint ${endpointName} ${key}`);
+    lines.push(`   read: ukp read --endpoint ${endpointName} ${key}`);
   } else {
     lines.push(`   (no direct read — provider-managed result)`);
   }
@@ -554,7 +554,7 @@ function renderFallbackProviderBlock(providerOutput: string, endpoint: PlannedEn
     seen.add(bare);
     const lineHit = /:(\d+)\s+#[a-f0-9]{6}/.exec(textLine);
     const lineHint = lineHit ? ` --lines ${Number(lineHit[1])}` : "";
-    lines.push(`UKP reference: ukp get --endpoint ${endpoint.name} ${bare}${lineHint}`);
+    lines.push(`UKP reference: ukp read --endpoint ${endpoint.name} ${bare}${lineHint}`);
   }
   return lines.join("\n");
 }

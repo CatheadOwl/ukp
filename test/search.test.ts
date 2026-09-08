@@ -113,7 +113,7 @@ describe("search", () => {
       expect(result.stdout).toContain("== fixture-qmd ==");
       expect(result.stdout).toContain("1. CAD fixture note — cad-notes.md:1");
       expect(result.stdout).toContain("   CAD fixture note content.");
-      expect(result.stdout).toContain("   get: ukp get --endpoint fixture-qmd a1b2c3:1");
+      expect(result.stdout).toContain("   read: ukp read --endpoint fixture-qmd a1b2c3:1");
       expect(result.stdout).not.toContain("UKP reference:");
       expect(result.stdout).not.toContain("qmd://");
       expect(result.stdout).not.toContain("(search/qmd)");
@@ -722,7 +722,7 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("1. Embedded provider location note — provider-note.md:5");
-      expect(result.stdout).toContain("   get: ukp get --endpoint embedded-uri f6a7b8:5");
+      expect(result.stdout).toContain("   read: ukp read --endpoint embedded-uri f6a7b8:5");
       // A 6-hex token in body content (e.g. a color code) is not a docid and
       // must not become the handoff key or a get hint.
       expect(result.stdout).toContain("Accent color #ff0000.");
@@ -751,12 +751,12 @@ describe("search", () => {
       expect(result.stdout).toContain("== multi-result ==");
       expect(result.stdout).toContain("1. CAD fixture note — cad-notes.md:1");
       expect(result.stdout).toContain("   CAD fixture note content.");
-      expect(result.stdout).toContain("   get: ukp get --endpoint multi-result a1b2c3:1");
+      expect(result.stdout).toContain("   read: ukp read --endpoint multi-result a1b2c3:1");
       // Result units within one endpoint are separated by a blank line: the get
       // line of unit 1 is directly followed by an empty line before the `2.` unit.
       expect(result.stdout).toContain("a1b2c3:1\n\n2. Collection-shaped fixture note — collection-note.md:3");
       expect(result.stdout).toContain("2. Collection-shaped fixture note — collection-note.md:3");
-      expect(result.stdout).toContain("   get: ukp get --endpoint multi-result b2c3d4:3");
+      expect(result.stdout).toContain("   read: ukp read --endpoint multi-result b2c3d4:3");
       expect(result.stdout).not.toContain("UKP reference:");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -780,7 +780,7 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("1. No-line fixture note — no-line.md");
-      expect(result.stdout).toContain("   get: ukp get --endpoint no-line c1d2e3");
+      expect(result.stdout).toContain("   read: ukp read --endpoint no-line c1d2e3");
       expect(result.stdout).not.toContain("--lines");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -805,7 +805,7 @@ describe("search", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("1. no-title.md:2");
       expect(result.stdout).toContain("   No-title fixture content.");
-      expect(result.stdout).toContain("   get: ukp get --endpoint no-title e6f7a8:2");
+      expect(result.stdout).toContain("   read: ukp read --endpoint no-title e6f7a8:2");
       // No title means no ` — ` separator — the identity is just `basename:line`.
       expect(result.stdout).not.toContain(" — ");
     } finally {
@@ -832,7 +832,7 @@ describe("search", () => {
       expect(result.stdout).toContain("1. No-docid fixture note — no-docid.md:3");
       expect(result.stdout).toContain("   No-docid fixture content cannot form a get route.");
       expect(result.stdout).toContain("   (no direct read — provider-managed result)");
-      expect(result.stdout).not.toContain("get: ukp get");
+      expect(result.stdout).not.toContain("read: ukp read");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -855,7 +855,7 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("1. Banner fixture note — banner.md:1");
-      expect(result.stdout).toContain("   get: ukp get --endpoint banner d2e3f4:1");
+      expect(result.stdout).toContain("   read: ukp read --endpoint banner d2e3f4:1");
       expect(result.stdout).not.toContain("---");
       expect(result.stdout).not.toContain("Banner body text.");
     } finally {
@@ -882,7 +882,7 @@ describe("search", () => {
       expect(result.stdout).toContain("== no-json ==");
       expect(result.stdout).toContain("qmd://fixture-qmd/documents/cad-notes.md:1  #a1b2c3");
       expect(result.stdout).toContain("CAD fixture note");
-      expect(result.stdout).toContain("UKP reference: ukp get --endpoint no-json a1b2c3 --lines 1");
+      expect(result.stdout).toContain("UKP reference: ukp read --endpoint no-json a1b2c3 --lines 1");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -915,15 +915,15 @@ describe("search", () => {
       // first block is directly followed by an empty line before the second
       // `== <name> ==` header.
       expect(result.stdout).toContain("c3d4e5:7\n\n== collection-shaped ==");
-      expect(result.stdout).toContain("   get: ukp get --endpoint path-shaped c3d4e5:7");
-      expect(result.stdout).toContain("   get: ukp get --endpoint collection-shaped b2c3d4:3");
+      expect(result.stdout).toContain("   read: ukp read --endpoint path-shaped c3d4e5:7");
+      expect(result.stdout).toContain("   read: ukp read --endpoint collection-shaped b2c3d4:3");
       expect(result.stdout).not.toContain("UKP reference:");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }, 15_000);
 
-  test("qmd search reference round-trips through ukp get by docid", () => {
+  test("qmd search reference round-trips through ukp read by docid", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-roundtrip-"));
     const registryPath = join(root, "registry.toml");
     const artifactRoot = join(root, "artifacts");
@@ -958,7 +958,7 @@ describe("search", () => {
       // The path-shaped URI survives as display-only provenance.
       expect(mapping.provider_location.startsWith("qmd://")).toBe(true);
 
-      // The self-contained hint — `ukp get --endpoint <name> <docid>:<line>`
+      // The self-contained hint — `ukp read --endpoint <name> <docid>:<line>`
       // copied verbatim from search — must execute successfully.
       const getResult = executeGetCommand([
         "--endpoint",

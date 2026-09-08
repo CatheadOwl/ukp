@@ -211,7 +211,7 @@ describe("get", () => {
         registryPath,
       });
       expect(unknown.exitCode).toBe(1);
-      expect(unknown.stderr).toContain("ukp get: unknown endpoint 'missing'");
+      expect(unknown.stderr).toContain("ukp read: unknown endpoint 'missing'");
       expect(unknown.stderr).not.toContain("ScopeError");
 
       const missing = executeGetCommand(["--endpoint", "notes", "docs/missing.md"], {
@@ -1212,7 +1212,7 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
     // Single-slash `ukp:/...` is not the hierarchical form: it is not a URI
     // input and falls back to the plain-reference path, which then demands
     // --endpoint (D-059).
-    expect(() => parseGetArgs(["ukp:/notes/docs/note.md"])).toThrow("get requires --endpoint");
+    expect(() => parseGetArgs(["ukp:/notes/docs/note.md"])).toThrow("read requires --endpoint");
   });
 
   test("reads a spaced filename through its percent-encoded markdown spelling", () => {

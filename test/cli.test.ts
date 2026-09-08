@@ -115,14 +115,21 @@ describe("CLI bootstrap", () => {
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
   });
 
-  test("get help documents endpoint selector and line ranges", () => {
+  test("read help documents endpoint selector and line ranges; the retired get spelling is rejected", () => {
     const output: string[] = [];
-    expect(renderGetHelp()).toContain("Usage: ukp get --endpoint <name> <reference>");
-    expect(runCli(["get", "--help"], (message) => output.push(message))).toBe(0);
+    expect(renderGetHelp()).toContain("Usage: ukp read --endpoint <name> <reference>");
+    expect(runCli(["read", "--help"], (message) => output.push(message))).toBe(0);
     const help = output.join("\n");
     expect(help).toContain("--endpoint <name>");
     expect(help).toContain("-c, --endpoint <name>");
-    expect(help).toContain("--lines <start[:count]>");
+    expect(help).toContain("--lines <start[:count]>]");
+    // `get` was renamed to `read` (D-062); the old spelling is not an alias.
+    const mainHelp = renderHelp();
+    expect(mainHelp).toContain("\n  read");
+    expect(mainHelp).not.toContain("\n  get ");
+    const errors: string[] = [];
+    expect(runCli(["get", "-c", "notes", "docs/note.md"], undefined, (message) => errors.push(message))).toBe(2);
+    expect(errors.join("\n")).toContain("unknown command 'get'");
   });
 
   test("inspect help documents endpoint selectors and exits successfully", () => {
@@ -158,8 +165,8 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("ukp diagnose");
     expect(guide).toContain("ukp register");
     expect(guide).toContain("ukp inspect --endpoint your-endpoint-name");
-    expect(guide).toContain("ukp get --endpoint your-endpoint-name docs/example.md");
-    expect(guide).toContain("derived get/file baseline");
+    expect(guide).toContain("ukp read --endpoint your-endpoint-name docs/example.md");
+    expect(guide).toContain("derived read/file baseline");
     expect(guide).toContain("ukp refresh --endpoint your-endpoint-name");
     expect(guide).toContain("Future providers should add provider adapters");
     expect(guide).toContain("ukp unregister --endpoint <name>");
@@ -174,7 +181,7 @@ describe("CLI bootstrap", () => {
     expect(guide.indexOf("ukp inspect --endpoint your-endpoint-name"))
       .toBeLessThan(guide.indexOf("ukp search \"keyword\" --endpoint your-endpoint-name --limit 3"));
     expect(guide.indexOf("ukp search \"keyword\" --endpoint your-endpoint-name --limit 3"))
-      .toBeLessThan(guide.indexOf("ukp get --endpoint your-endpoint-name <reference>"));
+      .toBeLessThan(guide.indexOf("ukp read --endpoint your-endpoint-name <reference>"));
     expect(guide).not.toContain("[capabilities.get]");
     expect(guide).not.toContain("qmd init");
     expect(guide).not.toContain("qmd collection");
@@ -590,8 +597,8 @@ describe("CLI bootstrap", () => {
     }
   }, 15_000);
 
-  test("get -c compatibility alias reads an endpoint-relative file", () => {
-    const root = mkdtempSync(join(tmpdir(), "ukp-cli-get-alias-"));
+  test("read -c compatibility alias reads an endpoint-relative file", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-read-alias-"));
     const registryPath = join(root, "registry.toml");
     const service = join(root, "notes");
     const output: string[] = [];
@@ -605,7 +612,7 @@ describe("CLI bootstrap", () => {
     writeFileSync(join(service, "docs", "note.md"), "alpha\nbeta\ngamma\n", "utf8");
     registerAt(registryPath, "notes", service);
     try {
-      expect(runCli(["get", "-c", "notes", "docs/note.md", "--lines=2:1"], (message) => output.push(message), undefined, {
+      expect(runCli(["read", "-c", "notes", "docs/note.md", "--lines=2:1"], (message) => output.push(message), undefined, {
         currentDirectory: root,
         registryPath,
       })).toBe(0);

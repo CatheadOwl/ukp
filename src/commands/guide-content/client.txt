@@ -20,7 +20,7 @@ Model:
 2. Use Services without a selector
    ukp search "keyword"
    ukp inspect
-   ukp get --endpoint endpoint-a docs/example.md   (get still names a path, and --endpoint here wins)
+   ukp read --endpoint endpoint-a docs/example.md   (read still names a path, and --endpoint here wins)
 
 3. Check which scope is active
    ukp inspect

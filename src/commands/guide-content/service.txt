@@ -19,7 +19,7 @@ Fast path:
 4. Inspect, search, then read
    ukp inspect --endpoint your-endpoint-name
    ukp search "keyword" --endpoint your-endpoint-name --limit 3
-   ukp get --endpoint your-endpoint-name <reference>
+   ukp read --endpoint your-endpoint-name <reference>
 
 Key boundary:
 - init/register makes the folder addressable as a Service.
@@ -77,11 +77,11 @@ Details:
    In a workspace with .ukp/client.toml default_endpoints, you can omit --endpoint for search.
 
 7. Read an endpoint-scoped reference
-   Every registered local Service has the derived get/file baseline; no Manifest get entry is needed.
-   ukp get --endpoint your-endpoint-name docs/example.md
-   ukp get --endpoint your-endpoint-name docs/example.md --lines 10:20
-   On a QMD-backed Service (including observe mode), read with
-   'ukp get --endpoint <name> <reference>' (e.g. running_agents.md); do not
+   Every registered local Service has the derived read/file baseline; no Manifest get entry is needed.
+   ukp read --endpoint your-endpoint-name docs/example.md
+   ukp read --endpoint your-endpoint-name docs/example.md --lines 10:20
+   On a QMD-backed Service (including observe mode), provider content is read with
+   'ukp read --endpoint <name> <docid handoff key or qmd:// reference>'; do not
    manually convert qmd:// provider locations into Service-folder paths.
 
 8. Refresh provider-owned state
@@ -95,7 +95,7 @@ Details:
 Advanced:
 - Declared dependencies belong in the Service Manifest as [[dependencies]] entries.
 - ukp init service --dependency <name> emits a context dependency; edit the Manifest later for authority, implementation, evidence, or a reason.
-- Dependencies do not change ordinary search/get. Only explicit search --recursive traverses direct authority/context dependencies.
+- Dependencies do not change ordinary search/read. Only explicit search --recursive traverses direct authority/context dependencies.
 - Workspace defaults belong to the client path; run 'ukp guide client' from the consuming workspace.
 - refresh is a provider-owned maintenance route, not part of the first search smoke.
 
@@ -105,7 +105,7 @@ Remember:
 - Provider collection decides what content is indexed; folder-external authoritative knowledge should be modeled as its own endpoint when UKP ownership matters.
 - Register makes the folder addressable; it does not make content searchable (provider indexing does).
 - Register does not edit .ukp/client.toml or provider configuration.
-- Declarative dependencies live in the Service Manifest as [[dependencies]] entries; they do not change ordinary search/get, while explicit search --recursive traverses direct authority/context dependencies.
+- Declarative dependencies live in the Service Manifest as [[dependencies]] entries; they do not change ordinary search/read, while explicit search --recursive traverses direct authority/context dependencies.
 - Future providers should add provider adapters instead of turning provider internals into UKP rules.
 - To register an already-used name at a new location, unregister the old binding first:
   ukp unregister --endpoint <name>
