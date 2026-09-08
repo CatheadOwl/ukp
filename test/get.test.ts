@@ -131,21 +131,21 @@ describe("get", () => {
         registryPath,
       });
       expect(absolute.exitCode).toBe(2);
-      expect(absolute.stderr).toContain("endpoint-scoped");
+      expect(absolute.stderr).toContain("carries its own endpoint");
 
       const driveQualified = executeGetCommand(["--endpoint", "notes", "C:\\secret.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(driveQualified.exitCode).toBe(2);
-      expect(driveQualified.stderr).toContain("endpoint-scoped");
+      expect(driveQualified.stderr).toContain("carries its own endpoint");
 
       const unc = executeGetCommand(["--endpoint", "notes", "\\\\server\\share\\secret.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(unc.exitCode).toBe(2);
-      expect(unc.stderr).toContain("endpoint-scoped");
+      expect(unc.stderr).toContain("carries its own endpoint");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -171,6 +171,138 @@ describe("get", () => {
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("inside the selected Service folder");
       expect(result.stdout).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves document-relative references against --from (tolerant tier)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-from-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    mkdirSync(join(service, "principles"), { recursive: true });
+    writeFileSync(join(service, "principles", "background.md"), "background\n", "utf8");
+    writeFileSync(join(service, "docs", "changelog.md"), "changelog\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      // ../ reference: docs/changelog.md -> ../principles/background.md
+      const parent = executeGetCommand([
+        "--endpoint", "notes", "--from", "docs/changelog.md", "../principles/background.md",
+      ], { currentDirectory: root, registryPath });
+      expect(parent.exitCode).toBe(0);
+      expect(parent.stdout).toBe("background\n");
+      expect(parent.stderr).toContain("resolved '../principles/background.md' from 'docs/changelog.md' -> 'principles/background.md'");
+
+      // bare filename resolves in the source document's directory
+      const bare = executeGetCommand([
+        "--endpoint", "notes", "--from", "docs/changelog.md", "changelog.md",
+      ], { currentDirectory: root, registryPath });
+      expect(bare.exitCode).toBe(0);
+      expect(bare.stdout).toBe("changelog\n");
+
+      // ./ prefix is normalized away
+      const dot = executeGetCommand([
+        "--endpoint", "notes", "--from", "docs/changelog.md", "./changelog.md",
+      ], { currentDirectory: root, registryPath });
+      expect(dot.exitCode).toBe(0);
+      expect(dot.stdout).toBe("changelog\n");
+
+      // escaping the endpoint root is a usage error, not a containment miss
+      const escape = executeGetCommand([
+        "--endpoint", "notes", "--from", "docs/changelog.md", "../../outside.md",
+      ], { currentDirectory: root, registryPath });
+      expect(escape.exitCode).toBe(2);
+      expect(escape.stderr).toContain("resolves outside the endpoint");
+
+      // a miss reports the resolved canonical route
+      const miss = executeGetCommand([
+        "--endpoint", "notes", "--from", "docs/changelog.md", "../principles/missing.md",
+      ], { currentDirectory: root, registryPath });
+      expect(miss.exitCode).toBe(1);
+      expect(miss.stderr).toContain("-> 'principles/missing.md'");
+
+      // parse-level guards
+      expect(() => parseGetArgs(["--from", "docs/x.md", "../y.md"])).toThrow("requires --endpoint");
+      expect(() => parseGetArgs(["--endpoint", "notes", "--from", "docs/x.md", "--from", "docs/y.md", "a.md"])).toThrow(
+        "--from may only be specified once",
+      );
+      expect(() => parseGetArgs(["--endpoint", "notes", "--from", "docs/x.md", "ukp://notes/a.md"])).toThrow(
+        "--from is for document-relative references",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("maps absolute filesystem references to the owning endpoint (tolerant tier)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-absolute-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const hit = executeGetCommand([resolve(service, "docs", "note.md")], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(hit.exitCode).toBe(0);
+      expect(hit.stdout).toBe("one\ntwo\nthree\nfour\n");
+      expect(hit.stderr).toContain("absolute path matched endpoint 'notes', route 'docs/note.md'");
+
+      // non-existing target inside the Service folder still maps (lexical containment)
+      const missing = executeGetCommand([resolve(service, "docs", "missing.md")], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(missing.exitCode).toBe(1);
+      expect(missing.stderr).toContain("route 'docs/missing.md'");
+      expect(missing.stderr).toContain("was not found");
+
+      // outside every registered endpoint → usage error naming the registry
+      writeFileSync(join(root, "secret.md"), "secret\n", "utf8");
+      const outside = executeGetCommand([resolve(root, "secret.md")], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(outside.exitCode).toBe(2);
+      expect(outside.stderr).toContain("matches no registered endpoint");
+      expect(outside.stderr).toContain("notes");
+
+      // parse-level guards: --endpoint and --from conflict with the absolute tier
+      expect(() => parseGetArgs(["--endpoint", "notes", resolve(root, "secret.md")])).toThrow(
+        "carries its own endpoint",
+      );
+      expect(() => parseGetArgs(["--from", "docs/x.md", resolve(root, "secret.md")])).toThrow(
+        "cannot be combined with --from",
+      );
+
+      // drive-relative (no separator) is NOT the absolute tier; the plain tier rejects it
+      const driveRelative = executeGetCommand(["--endpoint", "notes", "C:note.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(driveRelative.exitCode).toBe(2);
+      expect(driveRelative.stderr).toContain("endpoint-scoped");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects ambiguous absolute references spanning nested endpoints", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-absolute-ambiguous-"));
+    const registryPath = join(root, "registry.toml");
+    const outer = createService(root, "outer");
+    const inner = createService(outer, "inner");
+    registerAt(registryPath, "outer", outer);
+    registerAt(registryPath, "inner", inner);
+    try {
+      const result = executeGetCommand([resolve(inner, "docs", "note.md")], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("matches multiple endpoints");
+      expect(result.stderr).toContain("outer");
+      expect(result.stderr).toContain("inner");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
