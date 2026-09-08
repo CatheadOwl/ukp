@@ -20,9 +20,9 @@ function createNavCommand(): Command {
     .allowExcessArguments(true)
     .helpOption("-h, --help", "show this help")
     .usage("--endpoint <name> [path] [--depth <n>] [--json]")
-    .description("Navigate the Markdown structure of one Service endpoint.")
+    .description("Navigate the Markdown structure of one Service endpoint (endpoint names come from 'ukp list').")
     .option("-c, --endpoint <name>", "select the endpoint to navigate")
-    .option("--depth <n>", "how many directory levels to expand from the route root (0-10, default 0; deeper folders appear as [truncated: N])")
+    .option("--depth <n>", "how many directory levels to expand from the route root (0-10, default 0; deeper folders appear as [truncated: N], where N is that folder's total recursive .md count)")
     .option("--json", "emit the structured response envelope")
     .option("-g", "not supported by nav; use --endpoint <name>");
 }

@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { defaultQmdCommand, isBareDocidReference, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
+import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
 
 export interface GetRequest {
   endpoint: string;
@@ -37,6 +37,19 @@ export class GetUsageError extends Error {
     super(message);
     this.name = "GetUsageError";
   }
+}
+
+/** provider-unavailable classification for "no qmd executable at all" — the
+ * read channel is absent, which is the same recovery class as a spawn
+ * failure (install/verify qmd), never resource-missing. */
+function providerUnavailableNoExecutable(endpointName: string): GetResult {
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr:
+      `ukp get: provider-unavailable: the QMD read channel for endpoint '${endpointName}' has no usable qmd executable.\n`
+      + `Browse the endpoint with 'ukp nav --endpoint ${endpointName}' or install qmd, then retry.\n`,
+  };
 }
 
 function validateEndpointRelativePath(reference: string): string[] {
@@ -231,13 +244,14 @@ function applyLineRange(content: string, range: LineRange | undefined): LineRang
 }
 
 /**
- * Read an unresolved reference through the QMD-backed get adapter.
- *
- * UKP delegates resolution and read to QMD in one provider-owned operation.
- * The adapter re-adds the `#` to a bare docid handoff key (ADR 0011) so QMD
- * resolves it by content fingerprint, strips the provider header so stdout
- * starts at the body, and keeps UKP's exit/error discipline without leaking
- * QMD internals as traces.
+ * Read an explicit provider-tier reference (bare docid handoff key, ADR 0011,
+ * or a `qmd://` provider reference, ADR 0008) through the QMD-backed get
+ * adapter. Never entered from a plain-path miss (ADR 0017: shape-based
+ * dispatch). The adapter re-adds the `#` to a bare docid so QMD resolves it
+ * by content fingerprint, strips the provider header so stdout starts at the
+ * body, and keeps UKP's exit/error discipline — failures classify as
+ * provider-unavailable (spawn) or resource-missing (provider ran, no
+ * resolution) without leaking QMD internals as traces.
  */
 function readViaQmd(
   qmdCommand: readonly string[],
@@ -245,31 +259,48 @@ function readViaQmd(
   request: GetRequest,
   endpointName: string,
 ): GetResult {
-  const command = [
-    ...qmdCommand,
+  const providerArgs = [
     "get",
     toQmdGetArgument(request.path, request.lines),
     "--no-line-numbers",
   ];
-  const result = spawnSync(command[0]!, command.slice(1), {
+  const invocation = buildQmdInvocation(qmdCommand, providerArgs);
+  const result = spawnSync(invocation.file, invocation.args, {
     cwd: serviceFolder,
     encoding: "utf8",
     windowsHide: true,
+    windowsVerbatimArguments: invocation.verbatim,
     maxBuffer: 64 * 1024 * 1024,
   });
 
   if (result.error) {
-    return { exitCode: 1, stdout: "", stderr: "ukp get: failed to run qmd\n" };
+    // provider-unavailable, not resource-missing: the read channel itself
+    // could not start (spawn failure — qmd missing, or an unstartable shim
+    // form). The two classes drive completely different recovery actions, so
+    // the wording must classify and point at recovery paths.
+    const detail = result.error instanceof Error ? result.error.message : String(result.error);
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr:
+        `ukp get: provider-unavailable: the QMD read channel for endpoint '${endpointName}' could not start (${detail}).\n`
+        + `Browse the endpoint with 'ukp nav --endpoint ${endpointName}' or verify the qmd installation, then retry.\n`,
+    };
   }
   if (result.signal === "SIGINT" || result.status === 130) {
     return { exitCode: 130, stdout: "", stderr: "ukp get: provider cancelled\n" };
   }
   if (result.status !== 0) {
-    const providerError = (result.stderr ?? "").trim();
+    // Provider stderr detail keeps at most the first non-empty line — a
+    // multi-line crash dump must not flood the surface (a provider
+    // malfunction still lands in this branch; the classification stays
+    // resource-missing-shaped, which is a declared limitation of a one-line
+    // provider detail).
+    const rawProviderError = (result.stderr ?? "").trim();
     if (
-      providerError.includes("no-line-numbers")
-      || providerError.includes("unknown option")
-      || providerError.includes("unknown flag")
+      rawProviderError.includes("no-line-numbers")
+      || rawProviderError.includes("unknown option")
+      || rawProviderError.includes("unknown flag")
     ) {
       return {
         exitCode: 1,
@@ -277,12 +308,16 @@ function readViaQmd(
         stderr: "ukp get: qmd build does not support '--no-line-numbers'; provider incompatible\n",
       };
     }
+    const providerError = rawProviderError
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
     return {
       exitCode: 1,
       stdout: "",
-      stderr: providerError
-        ? `ukp get: ${providerError}\n`
-        : `ukp get: resource '${request.path}' could not be resolved in endpoint '${endpointName}'\n`,
+      stderr:
+        `ukp get: resource-missing: '${request.path}' could not be resolved by the provider in endpoint '${endpointName}'\n`
+        + (providerError ? `(provider: ${providerError})\n` : ""),
     };
   }
 
@@ -365,8 +400,9 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
   }
 
   // QMD-backed route is derived from the declared search provider; there is no
-  // explicit get capability in the current Manifest. QMD visibility governs only
-  // this unresolved-reference delegation, never the explicit file baseline.
+  // explicit get capability in the current Manifest. ADR 0017: QMD visibility
+  // governs only the explicit provider tiers (bare docid, qmd://), never the
+  // file-native plain-path tier.
   const qmdBacked = service.manifest.capabilities.search?.provider === "qmd";
   const qmdCommand = qmdBacked
     ? context.qmdCommand ?? defaultQmdCommand()
@@ -403,7 +439,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     return readTargetWithLines(targetPath, request);
   }
 
-  // qmd:// provider reference (non-URI input only; the URI tier above already
+  // ukp:// provider reference (non-URI input only; the URI tier above already
   // returned): route before endpoint-local path validation, so the `://`
   // empty segment is never misread as a file-path usage error.
   if (request.path.startsWith("qmd://")) {
@@ -415,7 +451,26 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
       };
     }
     if (!qmdCommand) {
-      return { exitCode: 1, stdout: "", stderr: "ukp get: qmd executable is not available\n" };
+      return providerUnavailableNoExecutable(binding.name);
+    }
+    return readViaQmd(qmdCommand, service.folder, request, binding.name);
+  }
+
+  // Bare docid[:line] handoff key (ADR 0011) — an explicit provider shape
+  // (ADR 0017: shape-based dispatch). It routes to the provider before any
+  // filesystem resolution: the fingerprint carries search-handoff intent, and
+  // a Service-folder file that happens to be named like a docid must not
+  // shadow it.
+  if (isBareDocidReference(barePath)) {
+    if (!qmdBacked) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp get: a docid[:line] reference requires a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
+      };
+    }
+    if (!qmdCommand) {
+      return providerUnavailableNoExecutable(binding.name);
     }
     return readViaQmd(qmdCommand, service.folder, request, binding.name);
   }
@@ -429,13 +484,27 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     }
     // realpathSync throws ENOENT if path doesn't exist
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      // QMD-backed: delegate resolution to the provider; do not fuzzy-scan the
-      // Service folder (that would bypass QMD's collection/ignore visibility).
+      // ADR 0017: read is file-native — a plain-path miss is resource-missing
+      // on every endpoint; the provider is never entered from a miss. On a
+      // QMD-backed endpoint the filesystem scan is advisory only (candidate
+      // list for human shorthand recovery); it never resolves the read, so
+      // provider collection/ignore visibility is never bypassed by a silent
+      // hit (ISSUE-007). Pure file-backed endpoints keep the file layer's
+      // own suffix/fuzzy resolution, whose visibility root is the Service
+      // folder itself.
       if (qmdBacked) {
-        if (!qmdCommand) {
-          return { exitCode: 1, stdout: "", stderr: "ukp get: qmd executable is not available\n" };
-        }
-        return readViaQmd(qmdCommand, service.folder, request, binding.name);
+        const { serviceReal, suffixMatches, nameFuzzyMatches } = findFilesBySuffix(service.folder, request.path);
+        const candidates = [...suffixMatches, ...nameFuzzyMatches]
+          .map((m) => `  - ${relative(serviceReal, m).replace(/\\/g, "/")}`);
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr:
+            `ukp get: resource-missing '${request.path}' in endpoint '${binding.name}' (plain paths address files exactly; provider reads use a bare docid handoff key or qmd://)`
+            + (candidates.length > 0
+              ? `\nDid you mean:\n${candidates.join("\n")}\n`
+              : "\n"),
+        };
       }
       // Pure file-backed: filesystem fuzzy fallback (visibility root is the
       // Service folder itself).
@@ -446,7 +515,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
         targetPath = suffixMatches[0];
       } else if (suffixMatches.length > 1) {
         const matchList = suffixMatches
-          .map((m) => `  - ${relative(serviceReal, m)}`)
+          .map((m) => `  - ${relative(serviceReal, m).replace(/\\/g, "/")}`)
           .join("\n");
         return {
           exitCode: 1,
@@ -456,7 +525,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
       } else if (nameFuzzyMatches.length > 0) {
         // Name fuzzy match (filename fuzzy): always show candidates
         const matchList = nameFuzzyMatches
-          .map((m) => `  - ${relative(serviceReal, m)}`)
+          .map((m) => `  - ${relative(serviceReal, m).replace(/\\/g, "/")}`)
           .join("\n");
         return {
           exitCode: 1,

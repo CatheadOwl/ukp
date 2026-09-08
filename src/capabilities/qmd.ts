@@ -51,9 +51,68 @@ export function toQmdGetArgument(
 export function defaultQmdCommand(): string[] | undefined {
   const executable = Bun.which("qmd") ?? Bun.which("qmd.ps1") ?? Bun.which("qmd.cmd");
   if (!executable) return undefined;
-  return executable.toLowerCase().endsWith(".ps1")
-    ? [Bun.which("powershell.exe") ?? "powershell.exe", "-NoProfile", "-File", executable]
-    : [executable];
+  const lower = executable.toLowerCase();
+  if (lower.endsWith(".ps1")) {
+    return [Bun.which("powershell.exe") ?? "powershell.exe", "-NoProfile", "-File", executable];
+  }
+  // ISSUE-011: npm's global bin shims on Windows (qmd.cmd) are batch scripts,
+  // not executable images — CreateProcess cannot start them directly and
+  // spawnSync returns result.error. Route them through cmd.exe, same wrapper
+  // precedent as the .ps1 branch above. The wrapper prefix is detected by
+  // buildQmdInvocation, which re-assembles the whole provider call as one
+  // cmd-escaped /c payload — callers must never append raw arguments after a
+  // cmd.exe wrapper themselves (cmd re-parses the joined command line: an
+  // unquoted `&` in a search query would split the command).
+  if (lower.endsWith(".cmd") || lower.endsWith(".bat")) {
+    return [Bun.which("cmd.exe") ?? "cmd.exe", "/d", "/s", "/c", executable];
+  }
+  return [executable];
+}
+
+/** Detect a defaultQmdCommand cmd.exe wrapper prefix (…, "/c", <exe>). */
+function isCmdWrapper(command: readonly string[]): boolean {
+  if (command.length < 5) return false;
+  const first = command[0]!.toLowerCase();
+  return (first.endsWith("cmd.exe") || first === "cmd")
+    && command.slice(1, -1).includes("/c");
+}
+
+/**
+ * Build the spawn file/args (and Windows quoting mode) for one provider
+ * invocation.
+ *
+ * For a plain command the provider arguments are appended verbatim. For a
+ * cmd.exe wrapper (ISSUE-011) the whole call after `/c` must become ONE argv
+ * entry carrying the canonical cmd pattern: every element quoted with
+ * internal quotes doubled, the whole payload wrapped in one extra outer
+ * quote pair, spawned with `windowsVerbatimArguments: true` so the runtime
+ * does not re-quote/re-escape it. With `/s`, cmd strips exactly the first and
+ * last (outer) quote, leaving `"exe" "arg1" "arg2"…` — metacharacters
+ * (`& | < > ^ ( )`), spaces, and quotes in arbitrary arguments (search
+ * queries carry user text) are neutralized. Verified empirically against the
+ * real npm shim: without verbatim mode Bun re-quotes the payload and cmd
+ * sees a mangled command name.
+ *
+ * Known residual: cmd expands `%VAR%` for existing variables even inside
+ * double quotes; a literal percent query on a machine defining that variable
+ * is altered — accepted edge, no reliable cmd escaping exists for it.
+ */
+export function buildQmdInvocation(
+  command: readonly string[],
+  providerArgs: readonly string[],
+): { file: string; args: string[]; verbatim: boolean } {
+  if (!isCmdWrapper(command)) {
+    return { file: command[0]!, args: [...command.slice(1), ...providerArgs], verbatim: false };
+  }
+  const cIndex = command.lastIndexOf("/c");
+  const inner = [command[cIndex + 1]!, ...providerArgs]
+    .map((part) => `"${part.replace(/"/g, '""')}"`)
+    .join(" ");
+  return {
+    file: command[0]!,
+    args: [...command.slice(1, cIndex + 1), `"${inner}"`],
+    verbatim: true,
+  };
 }
 
 /**

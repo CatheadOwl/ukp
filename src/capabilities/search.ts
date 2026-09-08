@@ -18,7 +18,7 @@ import {
 } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { defaultQmdCommand, isDocidBody, stripDocidHash } from "./qmd.ts";
+import { buildQmdInvocation, defaultQmdCommand, isDocidBody, stripDocidHash } from "./qmd.ts";
 
 export interface SearchRequest {
   query: string;
@@ -278,16 +278,21 @@ function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
   return { plan, warnings };
 }
 
-function commandFor(endpoint: PlannedEndpoint, parsed: ParsedSearch, json: boolean): string[] {
-  const command = [
-    ...endpoint.command!,
+function commandFor(endpoint: PlannedEndpoint, parsed: ParsedSearch, json: boolean): {
+  file: string;
+  args: string[];
+  verbatim: boolean;
+} {
+  const providerArgs = [
     "search",
     parsed.request.query,
     "-n",
     String(parsed.request.limit),
   ];
-  if (json) command.push("--format", "json");
-  return command;
+  if (json) providerArgs.push("--format", "json");
+  // The query is arbitrary user text: route through buildQmdInvocation so a
+  // cmd.exe shim wrapper (ISSUE-011) never lets cmd re-parse it.
+  return buildQmdInvocation(endpoint.command!, providerArgs);
 }
 
 function renderTraversalProvenance(endpoint: PlannedEndpoint): string[] {
@@ -318,10 +323,11 @@ function executeHumanMode(
     output.push(`== ${endpoint.name} ==`);
     output.push(...renderTraversalProvenance(endpoint));
     const command = commandFor(endpoint, parsed, true);
-    const result = spawnSync(command[0]!, command.slice(1), {
+    const result = spawnSync(command.file, command.args, {
       cwd: endpoint.folder!,
       encoding: "utf8",
       windowsHide: true,
+      windowsVerbatimArguments: command.verbatim,
       maxBuffer: 64 * 1024 * 1024,
     });
     const providerOutput = (result.stdout ?? "").trimEnd();
@@ -635,10 +641,11 @@ function executeJsonMode(
       stdoutFd = openSync(artifact, "w", 0o600);
       stderrFd = openSync(errorArtifact, "w", 0o600);
       const command = commandFor(endpoint, parsed, true);
-      const result = spawnSync(command[0]!, command.slice(1), {
+      const result = spawnSync(command.file, command.args, {
         cwd: endpoint.folder!,
         stdio: ["ignore", stdoutFd, stderrFd],
         windowsHide: true,
+        windowsVerbatimArguments: command.verbatim,
       });
       closeSync(stdoutFd);
       stdoutFd = undefined;
