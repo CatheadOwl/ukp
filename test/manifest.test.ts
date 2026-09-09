@@ -28,7 +28,7 @@ describe("Service Manifest and diagnose", () => {
     expect(report.capabilities).toHaveLength(4);
     expect(report.capabilities.filter((capability) => capability.source === "manifest")).toHaveLength(2);
     expect(report.capabilities.some((capability) =>
-      capability.name === "get"
+      capability.name === "read"
       && capability.provider === "file"
       && capability.source === "derived-local"
       && capability.status === "warning"
@@ -41,7 +41,7 @@ describe("Service Manifest and diagnose", () => {
     )).toBe(true);
     expect(renderDiagnose(report)).toContain("endpoint: fixture-qmd");
     expect(renderDiagnose(report)).toContain("description: Deterministic QMD-compatible search fixture");
-    expect(renderDiagnose(report)).toContain("capability: get (derived local baseline)");
+    expect(renderDiagnose(report)).toContain("capability: read (derived local baseline)");
     expect(renderDiagnose(report)).not.toContain("indexed content");
     const diagnoseOutput = renderDiagnose(report, { includeSearchabilityHint: true });
     expect(diagnoseOutput).toContain("hint: diagnose checks wiring, not indexed content");
@@ -52,8 +52,8 @@ describe("Service Manifest and diagnose", () => {
   test("default provider resolver remains compatible with provider-only calls", () => {
     expect(defaultProviderResolver("not-qmd").supported).toBe(false);
     expect(defaultProviderResolver("not-qmd").reason).toContain("provider 'not-qmd' is not supported");
-    expect(defaultProviderResolver("file", "get").supported).toBe(true);
-    expect(defaultProviderResolver("qmd", "get").reason).toContain("provider 'qmd' is not supported for capability 'get'");
+    expect(defaultProviderResolver("file", "read").supported).toBe(true);
+    expect(defaultProviderResolver("qmd", "read").reason).toContain("provider 'qmd' is not supported for capability 'read'");
     expect(typeof defaultProviderResolver("qmd", "refresh").supported).toBe("boolean");
     expect(defaultProviderResolver("file", "refresh").reason).toContain(
       "provider 'file' is not supported for capability 'refresh'",
@@ -307,7 +307,7 @@ describe("Service Manifest and diagnose", () => {
         service: loaded,
         capabilities: [
           { name: "search", provider: "qmd", source: "manifest", status: "ok" },
-          { name: "get", provider: "file", source: "derived-local", status: "ok" },
+          { name: "read", provider: "file", source: "derived-local", status: "ok" },
         ],
       });
       expect(rendered).toContain("dependency: depends_on -> ukp-product (kind: authority)");

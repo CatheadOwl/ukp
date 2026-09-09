@@ -378,8 +378,8 @@ interface QmdReferenceMapping {
   endpoint: string;
   reference?: string;
   line?: number;
-  status: "get_ready" | "provider_only";
-  get_adapter?: "qmd";
+  status: "read_ready" | "provider_only";
+  read_adapter?: "qmd";
   reason?: string;
 }
 
@@ -417,13 +417,13 @@ function providerLocationOf(result: unknown): string {
 }
 
 /**
- * Map one QMD search result to a UKP get-ready reference (ADR 0011).
+ * Map one QMD search result to a UKP read-ready reference (ADR 0011).
  *
  * QMD-indexed results carry a stable `docid` content fingerprint. `search`
  * emits it as a bare handoff key (`#` stripped), not the weak `qmd://`/path
- * name; `get` re-adds the `#` and resolves by fingerprint exactly. Name, title,
+ * name; `read` re-adds the `#` and resolves by fingerprint exactly. Name, title,
  * and path become display-only provenance (`provider_location`). A result with
- * no usable docid has no UKP get route and is `provider_only`.
+ * no usable docid has no UKP read route and is `provider_only`.
  */
 function mapQmdResultToReference(endpointName: string, result: unknown): QmdReferenceMapping {
   const providerLocation = providerLocationOf(result);
@@ -441,8 +441,8 @@ function mapQmdResultToReference(endpointName: string, result: unknown): QmdRefe
     endpoint: endpointName,
     reference: docid,
     ...maybeLine(lineOf(result)),
-    status: "get_ready",
-    get_adapter: "qmd",
+    status: "read_ready",
+    read_adapter: "qmd",
   };
 }
 
@@ -480,7 +480,7 @@ function isFileHeadBanner(snippet: string, line: number | undefined): boolean {
  * Render one structured QMD result as a result unit.
  *
  * A result unit answers three reader questions: what it is (`title — basename:line`),
- * why it matches (excerpt), and how to read it (a copyable `get` line addressing
+ * why it matches (excerpt), and how to read it (a copyable `read` line addressing
  * the ADR 0011 handoff key `docid[:line]`). Provider vocabulary never reaches the
  * default Human surface: the docid appears only inside the `get` command, and
  * location provenance is reduced to a human-readable basename (the raw `qmd://`

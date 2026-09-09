@@ -1,17 +1,17 @@
 import { Command, CommanderError } from "commander";
 import {
-  executeGet,
-  GetUsageError,
+  executeRead,
+  ReadUsageError,
   isAbsoluteFilesystemReference,
-  type GetContext,
-  type GetRequest,
-  type GetResult,
+  type ReadContext,
+  type ReadRequest,
+  type ReadResult,
   type LineRange,
-} from "../capabilities/get.ts";
+} from "../capabilities/read.ts";
 import { ScopeError } from "../scope.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 
-function createGetCommand(): Command {
+function createReadCommand(): Command {
   return new Command("ukp read")
     .exitOverride()
     .allowUnknownOption(false)
@@ -33,33 +33,33 @@ function createGetCommand(): Command {
 
 function parseLineRange(value: string): LineRange {
   const match = /^([0-9]+)(?::([0-9]+))?$/.exec(value);
-  if (!match) throw new GetUsageError("--lines must use <start[:count]> with decimal integers");
+  if (!match) throw new ReadUsageError("--lines must use <start[:count]> with decimal integers");
   const start = Number(match[1]);
   const count = match[2] === undefined ? undefined : Number(match[2]);
   if (!Number.isSafeInteger(start) || start < 1) {
-    throw new GetUsageError("--lines start must be a positive integer");
+    throw new ReadUsageError("--lines start must be a positive integer");
   }
   if (count !== undefined && (!Number.isSafeInteger(count) || count < 1)) {
-    throw new GetUsageError("--lines count must be a positive integer");
+    throw new ReadUsageError("--lines count must be a positive integer");
   }
   return count === undefined ? { start } : { start, count };
 }
 
-function parseGetCommand(args: readonly string[]): {
+function parseReadCommand(args: readonly string[]): {
   positionals: string[];
   endpoint?: string;
   global?: boolean;
   lines?: string;
   from?: string;
 } {
-  const command = createGetCommand()
+  const command = createReadCommand()
     .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
 
   try {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
-      throw new GetUsageError(error.message.replace(/^error: /, ""));
+      throw new ReadUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
   }
@@ -125,7 +125,7 @@ function percentDecodeUtf8(component: string): string {
 
 /**
  * Parse a `ukp://<endpoint>/<rel-path>[#fragment]` URI (ADR 0014 target form)
- * into a GetRequest with exact slot addressing.
+ * into a ReadRequest with exact slot addressing.
  *
  * Encoding stance (G3 pin, D-059): UTF-8/IRI semantics — raw UTF-8 is legal
  * as-is; `%XX` triplets are percent-decoded per component (see
@@ -135,12 +135,12 @@ function percentDecodeUtf8(component: string): string {
  * line-window start; any other fragment is an opaque navigation hint and is
  * ignored for reading.
  */
-function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }): GetRequest {
-  // Precondition: the caller (parseGetArgs) has already matched
+function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }): ReadRequest {
+  // Precondition: the caller (parseReadArgs) has already matched
   // UKP_URI_PREFIX_RE against this input; the non-null assertion below relies
   // on that guard. New callers must test the prefix before calling.
   if (flags.endpoint !== undefined) {
-    throw new GetUsageError("a ukp:// URI carries its own endpoint; do not also pass --endpoint");
+    throw new ReadUsageError("a ukp:// URI carries its own endpoint; do not also pass --endpoint");
   }
   const rest = uri.slice(uri.match(UKP_URI_PREFIX_RE)![0].length);
   const hashIndex = rest.indexOf("#");
@@ -148,7 +148,7 @@ function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }):
   const pathPart = hashIndex === -1 ? rest : rest.slice(0, hashIndex);
   const slashIndex = pathPart.indexOf("/");
   if (slashIndex === -1 && pathPart.includes("\\")) {
-    throw new GetUsageError("ukp:// URI uses '/' as the path separator: ukp://<endpoint>/<rel-path>");
+    throw new ReadUsageError("ukp:// URI uses '/' as the path separator: ukp://<endpoint>/<rel-path>");
   }
   // No slash: the whole remainder is the endpoint with an empty rel-path.
   // Percent-decoding is applied per component after the split (D-059): `/`
@@ -158,23 +158,23 @@ function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }):
   const endpoint = slashIndex === -1 ? percentDecodeUtf8(pathPart) : percentDecodeUtf8(pathPart.slice(0, slashIndex));
   const relPath = percentDecodeUtf8(slashIndex === -1 ? "" : pathPart.slice(slashIndex + 1));
   if (endpoint.length === 0) {
-    throw new GetUsageError("ukp:// URI must name an endpoint: ukp://<endpoint>/<rel-path>");
+    throw new ReadUsageError("ukp:// URI must name an endpoint: ukp://<endpoint>/<rel-path>");
   }
   if (relPath.length === 0) {
-    throw new GetUsageError("ukp:// URI must carry a non-empty endpoint-relative path");
+    throw new ReadUsageError("ukp:// URI must carry a non-empty endpoint-relative path");
   }
 
   let lines: LineRange | undefined;
   const lineMatch = fragment === undefined ? undefined : /^L([0-9]+)$/.exec(fragment);
   if (lineMatch) {
     if (flags.lines !== undefined) {
-      throw new GetUsageError("a ukp:// #L<line> fragment already carries a line; do not also pass --lines");
+      throw new ReadUsageError("a ukp:// #L<line> fragment already carries a line; do not also pass --lines");
     }
     const start = Number(lineMatch[1]);
     // Same integer discipline as --lines: an unrepresentably large number is a
     // usage error here, not a deferred start-beyond-eof read failure.
     if (!Number.isSafeInteger(start) || start < 1) {
-      throw new GetUsageError("ukp:// #L fragment must be a positive line number");
+      throw new ReadUsageError("ukp:// #L fragment must be a positive line number");
     }
     lines = { start };
   }
@@ -193,26 +193,26 @@ function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }):
   };
 }
 
-export function parseGetArgs(args: readonly string[]): GetRequest {
-  const parsed = parseGetCommand(args);
+export function parseReadArgs(args: readonly string[]): ReadRequest {
+  const parsed = parseReadCommand(args);
   const [path, unexpected] = parsed.positionals;
 
   if (countFlagOccurrences(args, "--endpoint") + countFlagOccurrences(args, "-c") > 1) {
-    throw new GetUsageError("--endpoint may only be specified once");
+    throw new ReadUsageError("--endpoint may only be specified once");
   }
-  if (countFlagOccurrences(args, "--lines") > 1) throw new GetUsageError("--lines may only be specified once");
-  if (countFlagOccurrences(args, "--from") > 1) throw new GetUsageError("--from may only be specified once");
-  if (parsed.global) throw new GetUsageError("read requires --endpoint <name> and does not support -g");
+  if (countFlagOccurrences(args, "--lines") > 1) throw new ReadUsageError("--lines may only be specified once");
+  if (countFlagOccurrences(args, "--from") > 1) throw new ReadUsageError("--from may only be specified once");
+  if (parsed.global) throw new ReadUsageError("read requires --endpoint <name> and does not support -g");
   // Unexpected positionals are rejected before the missing-flag checks so the
   // error names the real problem (extra argument), not a missing --endpoint.
   if (unexpected !== undefined) {
-    throw new GetUsageError(
+    throw new ReadUsageError(
       `unexpected argument '${unexpected}'; read accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
     );
   }
   if (path !== undefined && UKP_URI_PREFIX_RE.test(path)) {
     if (parsed.from !== undefined) {
-      throw new GetUsageError("a ukp:// URI carries its own endpoint; --from is for document-relative references");
+      throw new ReadUsageError("a ukp:// URI carries its own endpoint; --from is for document-relative references");
     }
     return parseUkpUri(path, { endpoint: parsed.endpoint, lines: parsed.lines });
   }
@@ -221,10 +221,10 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
   // allowed; --from is for document-relative references only.
   if (path !== undefined && isAbsoluteFilesystemReference(path)) {
     if (parsed.from !== undefined) {
-      throw new GetUsageError("an absolute filesystem path cannot be combined with --from");
+      throw new ReadUsageError("an absolute filesystem path cannot be combined with --from");
     }
     if (parsed.endpoint !== undefined) {
-      throw new GetUsageError(
+      throw new ReadUsageError(
         "an absolute filesystem path carries its own endpoint (matched against registered endpoints); do not also pass --endpoint",
       );
     }
@@ -234,13 +234,13 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
     };
   }
   if (parsed.endpoint === undefined || parsed.endpoint.length === 0) {
-    throw new GetUsageError("read requires --endpoint <name>");
+    throw new ReadUsageError("read requires --endpoint <name>");
   }
   if (path === undefined || path.length === 0) {
-    throw new GetUsageError("read reference must be a non-empty endpoint-scoped reference");
+    throw new ReadUsageError("read reference must be a non-empty endpoint-scoped reference");
   }
   if (parsed.from !== undefined && parsed.from.length === 0) {
-    throw new GetUsageError("--from must be a non-empty endpoint-relative route");
+    throw new ReadUsageError("--from must be a non-empty endpoint-relative route");
   }
 
   return {
@@ -251,16 +251,16 @@ export function parseGetArgs(args: readonly string[]): GetRequest {
   };
 }
 
-export function executeGetCommand(args: readonly string[], context: GetContext): GetResult {
+export function executeReadCommand(args: readonly string[], context: ReadContext): ReadResult {
   if (isHelpRequest(args)) {
-    return { exitCode: 0, stdout: renderGetHelp(), stderr: "" };
+    return { exitCode: 0, stdout: renderReadHelp(), stderr: "" };
   }
 
   try {
-    return executeGet(parseGetArgs(args), context);
+    return executeRead(parseReadArgs(args), context);
   } catch (error) {
-    if (error instanceof GetUsageError) {
-      return { exitCode: 2, stdout: "", stderr: renderGetUsageError(error.message) };
+    if (error instanceof ReadUsageError) {
+      return { exitCode: 2, stdout: "", stderr: renderReadUsageError(error.message) };
     }
     if (error instanceof ScopeError) {
       return { exitCode: 1, stdout: "", stderr: `ukp read: ${error.message}\n` };
@@ -273,11 +273,11 @@ export function executeGetCommand(args: readonly string[], context: GetContext):
   }
 }
 
-export function renderGetHelp(): string {
-  return createGetCommand().helpInformation();
+export function renderReadHelp(): string {
+  return createReadCommand().helpInformation();
 }
 
-export function renderGetUsageError(message: string): string {
+export function renderReadUsageError(message: string): string {
   return [
     `ukp read: ${message}`,
     "Usage: ukp read --endpoint <name> <reference> [--lines <start[:count]>]",

@@ -30,7 +30,7 @@ Use UKP when:
 - Inspect what a command will touch before running it.
 - Search one endpoint, a workspace default scope, the whole local Registry, or
   direct authority/context dependencies with explicit recursion.
-- Read endpoint-scoped references through `get/file` or QMD-backed `get/qmd`.
+- Read endpoint-scoped references through `read/file` or QMD-backed `read/qmd`.
 - Refresh provider-owned indexes through a stable UKP command.
 - Give agents JSON output and provider-native artifacts when they need
   machine-readable handoff.
@@ -135,7 +135,7 @@ Requirements:
 
 - Bun `1.3.14` or newer in the verified baseline family. The package is
   published through npm, but the CLI currently runs on Bun.
-- QMD on `PATH` for `search/qmd`, `get/qmd`, and `refresh/qmd`.
+- QMD on `PATH` for `search/qmd`, `read/qmd`, and `refresh/qmd`.
 - Node/npm for package dry-runs and publishing workflows.
 
 UKP can be installed without QMD, but QMD-backed capabilities will report as

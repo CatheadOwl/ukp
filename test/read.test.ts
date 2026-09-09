@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { executeGetCommand, parseGetArgs } from "../src/commands/read.ts";
+import { executeReadCommand, parseReadArgs } from "../src/commands/read.ts";
 import { registerAt } from "../src/registry.ts";
 import { buildQmdInvocation, stripQmdHeader } from "../src/capabilities/qmd.ts";
 
@@ -23,34 +23,34 @@ function createService(root: string, endpointName: string, provider = "file", ca
   return service;
 }
 
-describe("get", () => {
+describe("read", () => {
   test("parses endpoint-local reference and line range", () => {
-    expect(parseGetArgs(["--endpoint", "cad", "docs/note.md"])).toEqual({
+    expect(parseReadArgs(["--endpoint", "cad", "docs/note.md"])).toEqual({
       endpoint: "cad",
       path: "docs/note.md",
     });
-    expect(parseGetArgs(["-c", "cad", "docs/note.md", "--lines", "2:3"]).lines).toEqual({
+    expect(parseReadArgs(["-c", "cad", "docs/note.md", "--lines", "2:3"]).lines).toEqual({
       start: 2,
       count: 3,
     });
-    expect(parseGetArgs(["-c", "cad", "docs/note.md", "--lines", "2"]).lines).toEqual({
+    expect(parseReadArgs(["-c", "cad", "docs/note.md", "--lines", "2"]).lines).toEqual({
       start: 2,
     });
-    expect(() => parseGetArgs(["docs/note.md"])).toThrow("requires --endpoint");
-    expect(() => parseGetArgs(["-c", "cad", "docs/note.md", "-g"])).toThrow("does not support -g");
-    expect(() => parseGetArgs(["-c", "cad", "docs/note.md", "--lines", "0:1"])).toThrow("positive");
-    expect(() => parseGetArgs(["-c", "cad", "docs/note.md", "--lines", "1:0"])).toThrow("positive");
-    expect(() => parseGetArgs(["-c", "cad", "docs/note.md", "--lines", "1", "--lines", "2"])).toThrow(
+    expect(() => parseReadArgs(["docs/note.md"])).toThrow("requires --endpoint");
+    expect(() => parseReadArgs(["-c", "cad", "docs/note.md", "-g"])).toThrow("does not support -g");
+    expect(() => parseReadArgs(["-c", "cad", "docs/note.md", "--lines", "0:1"])).toThrow("positive");
+    expect(() => parseReadArgs(["-c", "cad", "docs/note.md", "--lines", "1:0"])).toThrow("positive");
+    expect(() => parseReadArgs(["-c", "cad", "docs/note.md", "--lines", "1", "--lines", "2"])).toThrow(
       "--lines may only be specified once",
     );
-    expect(() => parseGetArgs([
+    expect(() => parseReadArgs([
       "--endpoint",
       "cad",
       "--endpoint",
       "other",
       "docs/note.md",
     ])).toThrow("--endpoint may only be specified once");
-    expect(() => parseGetArgs(["-c", "cad", "docs/note.md", "extra"])).toThrow("exactly one reference");
+    expect(() => parseReadArgs(["-c", "cad", "docs/note.md", "extra"])).toThrow("exactly one reference");
   });
 
   test("reads a file-backed endpoint resource and line range", () => {
@@ -59,13 +59,13 @@ describe("get", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const full = executeGetCommand(["--endpoint", "notes", "docs/note.md"], {
+      const full = executeReadCommand(["--endpoint", "notes", "docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(full).toEqual({ exitCode: 0, stdout: "one\ntwo\nthree\nfour\n", stderr: "" });
 
-      const range = executeGetCommand(["--endpoint", "notes", "docs/note.md", "--lines", "2:2"], {
+      const range = executeReadCommand(["--endpoint", "notes", "docs/note.md", "--lines", "2:2"], {
         currentDirectory: root,
         registryPath,
       });
@@ -81,7 +81,7 @@ describe("get", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["--endpoint", "notes", "docs/note.md", "--lines", "5"], {
+      const result = executeReadCommand(["--endpoint", "notes", "docs/note.md", "--lines", "5"], {
         currentDirectory: root,
         registryPath,
       });
@@ -99,7 +99,7 @@ describe("get", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["--endpoint", "notes", "docs/note.md", "--lines", "3:5"], {
+      const result = executeReadCommand(["--endpoint", "notes", "docs/note.md", "--lines", "3:5"], {
         currentDirectory: root,
         registryPath,
       });
@@ -118,7 +118,7 @@ describe("get", () => {
     writeFileSync(join(root, "secret.md"), "secret\n", "utf8");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["--endpoint", "notes", "../secret.md"], {
+      const result = executeReadCommand(["--endpoint", "notes", "../secret.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -126,21 +126,21 @@ describe("get", () => {
       expect(result.stderr).toContain("must not contain '.' or '..'");
       expect(result.stdout).toBe("");
 
-      const absolute = executeGetCommand(["--endpoint", "notes", resolve(root, "secret.md")], {
+      const absolute = executeReadCommand(["--endpoint", "notes", resolve(root, "secret.md")], {
         currentDirectory: root,
         registryPath,
       });
       expect(absolute.exitCode).toBe(2);
       expect(absolute.stderr).toContain("carries its own endpoint");
 
-      const driveQualified = executeGetCommand(["--endpoint", "notes", "C:\\secret.md"], {
+      const driveQualified = executeReadCommand(["--endpoint", "notes", "C:\\secret.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(driveQualified.exitCode).toBe(2);
       expect(driveQualified.stderr).toContain("carries its own endpoint");
 
-      const unc = executeGetCommand(["--endpoint", "notes", "\\\\server\\share\\secret.md"], {
+      const unc = executeReadCommand(["--endpoint", "notes", "\\\\server\\share\\secret.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -164,7 +164,7 @@ describe("get", () => {
     }
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["--endpoint", "notes", "docs/secret-link.md"], {
+      const result = executeReadCommand(["--endpoint", "notes", "docs/secret-link.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -186,7 +186,7 @@ describe("get", () => {
     registerAt(registryPath, "notes", service);
     try {
       // ../ reference: docs/changelog.md -> ../principles/background.md
-      const parent = executeGetCommand([
+      const parent = executeReadCommand([
         "--endpoint", "notes", "--from", "docs/changelog.md", "../principles/background.md",
       ], { currentDirectory: root, registryPath });
       expect(parent.exitCode).toBe(0);
@@ -194,39 +194,39 @@ describe("get", () => {
       expect(parent.stderr).toContain("resolved '../principles/background.md' from 'docs/changelog.md' -> 'principles/background.md'");
 
       // bare filename resolves in the source document's directory
-      const bare = executeGetCommand([
+      const bare = executeReadCommand([
         "--endpoint", "notes", "--from", "docs/changelog.md", "changelog.md",
       ], { currentDirectory: root, registryPath });
       expect(bare.exitCode).toBe(0);
       expect(bare.stdout).toBe("changelog\n");
 
       // ./ prefix is normalized away
-      const dot = executeGetCommand([
+      const dot = executeReadCommand([
         "--endpoint", "notes", "--from", "docs/changelog.md", "./changelog.md",
       ], { currentDirectory: root, registryPath });
       expect(dot.exitCode).toBe(0);
       expect(dot.stdout).toBe("changelog\n");
 
       // escaping the endpoint root is a usage error, not a containment miss
-      const escape = executeGetCommand([
+      const escape = executeReadCommand([
         "--endpoint", "notes", "--from", "docs/changelog.md", "../../outside.md",
       ], { currentDirectory: root, registryPath });
       expect(escape.exitCode).toBe(2);
       expect(escape.stderr).toContain("resolves outside the endpoint");
 
       // a miss reports the resolved canonical route
-      const miss = executeGetCommand([
+      const miss = executeReadCommand([
         "--endpoint", "notes", "--from", "docs/changelog.md", "../principles/missing.md",
       ], { currentDirectory: root, registryPath });
       expect(miss.exitCode).toBe(1);
       expect(miss.stderr).toContain("-> 'principles/missing.md'");
 
       // parse-level guards
-      expect(() => parseGetArgs(["--from", "docs/x.md", "../y.md"])).toThrow("requires --endpoint");
-      expect(() => parseGetArgs(["--endpoint", "notes", "--from", "docs/x.md", "--from", "docs/y.md", "a.md"])).toThrow(
+      expect(() => parseReadArgs(["--from", "docs/x.md", "../y.md"])).toThrow("requires --endpoint");
+      expect(() => parseReadArgs(["--endpoint", "notes", "--from", "docs/x.md", "--from", "docs/y.md", "a.md"])).toThrow(
         "--from may only be specified once",
       );
-      expect(() => parseGetArgs(["--endpoint", "notes", "--from", "docs/x.md", "ukp://notes/a.md"])).toThrow(
+      expect(() => parseReadArgs(["--endpoint", "notes", "--from", "docs/x.md", "ukp://notes/a.md"])).toThrow(
         "--from is for document-relative references",
       );
     } finally {
@@ -240,7 +240,7 @@ describe("get", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const hit = executeGetCommand([resolve(service, "docs", "note.md")], {
+      const hit = executeReadCommand([resolve(service, "docs", "note.md")], {
         currentDirectory: root,
         registryPath,
       });
@@ -250,7 +250,7 @@ describe("get", () => {
 
       // non-existing target inside the Service folder still maps (lexical containment)
       // and fails fast: absolute tier = exact intent, no candidate scan
-      const missing = executeGetCommand([resolve(service, "docs", "missing.md")], {
+      const missing = executeReadCommand([resolve(service, "docs", "missing.md")], {
         currentDirectory: root,
         registryPath,
       });
@@ -260,7 +260,7 @@ describe("get", () => {
 
       // outside every registered endpoint → usage error naming the registry
       writeFileSync(join(root, "secret.md"), "secret\n", "utf8");
-      const outside = executeGetCommand([resolve(root, "secret.md")], {
+      const outside = executeReadCommand([resolve(root, "secret.md")], {
         currentDirectory: root,
         registryPath,
       });
@@ -269,15 +269,15 @@ describe("get", () => {
       expect(outside.stderr).toContain("notes");
 
       // parse-level guards: --endpoint and --from conflict with the absolute tier
-      expect(() => parseGetArgs(["--endpoint", "notes", resolve(root, "secret.md")])).toThrow(
+      expect(() => parseReadArgs(["--endpoint", "notes", resolve(root, "secret.md")])).toThrow(
         "carries its own endpoint",
       );
-      expect(() => parseGetArgs(["--from", "docs/x.md", resolve(root, "secret.md")])).toThrow(
+      expect(() => parseReadArgs(["--from", "docs/x.md", resolve(root, "secret.md")])).toThrow(
         "cannot be combined with --from",
       );
 
       // drive-relative (no separator) is NOT the absolute tier; the plain tier rejects it
-      const driveRelative = executeGetCommand(["--endpoint", "notes", "C:note.md"], {
+      const driveRelative = executeReadCommand(["--endpoint", "notes", "C:note.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -296,7 +296,7 @@ describe("get", () => {
     registerAt(registryPath, "outer", outer);
     registerAt(registryPath, "inner", inner);
     try {
-      const result = executeGetCommand([resolve(inner, "docs", "note.md")], {
+      const result = executeReadCommand([resolve(inner, "docs", "note.md")], {
         currentDirectory: root,
         registryPath,
       });
@@ -317,13 +317,13 @@ describe("get", () => {
     registerAt(registryPath, "search-only", searchOnly);
     registerAt(registryPath, "qmd-get", qmdGet);
     try {
-      const searchOnlyRead = executeGetCommand(["--endpoint", "search-only", "docs/note.md"], {
+      const searchOnlyRead = executeReadCommand(["--endpoint", "search-only", "docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(searchOnlyRead).toEqual({ exitCode: 0, stdout: "one\ntwo\nthree\nfour\n", stderr: "" });
 
-      const legacyQmdGet = executeGetCommand(["--endpoint", "qmd-get", "docs/note.md"], {
+      const legacyQmdGet = executeReadCommand(["--endpoint", "qmd-get", "docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -339,7 +339,7 @@ describe("get", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const unknown = executeGetCommand(["--endpoint", "missing", "docs/note.md"], {
+      const unknown = executeReadCommand(["--endpoint", "missing", "docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -347,7 +347,7 @@ describe("get", () => {
       expect(unknown.stderr).toContain("ukp read: unknown endpoint 'missing'");
       expect(unknown.stderr).not.toContain("ScopeError");
 
-      const missing = executeGetCommand(["--endpoint", "notes", "docs/missing.md"], {
+      const missing = executeReadCommand(["--endpoint", "notes", "docs/missing.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -368,7 +368,7 @@ describe("get", () => {
     registerAt(registryPath, "notes", service);
     try {
       // Request "sub/note.md" - exact suffix match, single result
-      const result = executeGetCommand(["--endpoint", "notes", "sub/note.md"], {
+      const result = executeReadCommand(["--endpoint", "notes", "sub/note.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -391,7 +391,7 @@ describe("get", () => {
     registerAt(registryPath, "notes", service);
     try {
       // Request "note.md" - multiple matches
-      const result = executeGetCommand(["--endpoint", "notes", "note.md"], {
+      const result = executeReadCommand(["--endpoint", "notes", "note.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -412,7 +412,7 @@ describe("get", () => {
     registerAt(registryPath, "notes", service);
     try {
       // Request "my-note" (hyphen) should match "my_note.md" (underscore)
-      const result = executeGetCommand(["--endpoint", "notes", "my-note"], {
+      const result = executeReadCommand(["--endpoint", "notes", "my-note"], {
         currentDirectory: root,
         registryPath,
       });
@@ -432,7 +432,7 @@ describe("get", () => {
     registerAt(registryPath, "notes", service);
     try {
       // Request "readme" (no extension) should match "readme.md"
-      const result = executeGetCommand(["--endpoint", "notes", "readme"], {
+      const result = executeReadCommand(["--endpoint", "notes", "readme"], {
         currentDirectory: root,
         registryPath,
       });
@@ -455,7 +455,7 @@ describe("get", () => {
     registerAt(registryPath, "notes", service);
     try {
       // Request "api/guide" should only match docs/api/guide.md
-      const result = executeGetCommand(["--endpoint", "notes", "api/guide"], {
+      const result = executeReadCommand(["--endpoint", "notes", "api/guide"], {
         currentDirectory: root,
         registryPath,
       });
@@ -489,7 +489,7 @@ describe("get", () => {
     registerAt(registryPath, "notes", service);
     try {
       // Request "linked" should find docs/linked/linked.md through symlink
-      const result = executeGetCommand(["--endpoint", "notes", "linked"], {
+      const result = executeReadCommand(["--endpoint", "notes", "linked"], {
         currentDirectory: root,
         registryPath,
       });
@@ -510,7 +510,7 @@ describe("get", () => {
     registerAt(registryPath, "notes", service);
     try {
       // Request ".env" should match .env exactly (suffix match)
-      const exact = executeGetCommand(["--endpoint", "notes", ".env"], {
+      const exact = executeReadCommand(["--endpoint", "notes", ".env"], {
         currentDirectory: root,
         registryPath,
       });
@@ -519,7 +519,7 @@ describe("get", () => {
 
       // Request ".my-config" (hyphen) should fuzzy match ".my_config" (underscore)
       // This verifies dotfiles are normalized correctly (not stripped to empty string)
-      const fuzzy = executeGetCommand(["--endpoint", "notes", ".my-config"], {
+      const fuzzy = executeReadCommand(["--endpoint", "notes", ".my-config"], {
         currentDirectory: root,
         registryPath,
       });
@@ -556,8 +556,8 @@ function createQmdBackedService(root: string, endpointName: string): string {
   return service;
 }
 
-// Mirrors the real-world E2E cases behind the get/qmd adapter:
-// - deepeval-docs: an exact endpoint-local `.mdx` path read through get/file.
+// Mirrors the real-world E2E cases behind the read/qmd adapter:
+// - deepeval-docs: an exact endpoint-local `.mdx` path read through read/file.
 // - openai-agents: a weak `config.md` reference that also exists in translated
 //   folders (ja/zh) — previously tripped the fuzzy scan into a multi-match error.
 function createMdxService(root: string, endpointName: string): string {
@@ -589,14 +589,14 @@ function readQmdInvocation(service: string): { reference?: string; noLineNumbers
   return JSON.parse(readFileSync(join(service, "qmd-fixture-invocation.json"), "utf8"));
 }
 
-describe("get/qmd adapter", () => {
+describe("read/qmd adapter", () => {
   test("reports a plain-path miss on a QMD-backed endpoint as resource-missing with file candidates, without delegation", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-plain-miss-"));
     const registryPath = join(root, "registry.toml");
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "running_agents.md"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "running_agents.md"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -621,7 +621,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/running-agents.md"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/running-agents.md"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -635,13 +635,13 @@ describe("get/qmd adapter", () => {
     }
   });
 
-  test("keeps exact file hits on the get/file baseline even for a QMD-backed endpoint", () => {
+  test("keeps exact file hits on the read/file baseline even for a QMD-backed endpoint", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-exact-"));
     const registryPath = join(root, "registry.toml");
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "docs/english.md"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "docs/english.md"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -659,7 +659,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand([
+      const result = executeReadCommand([
         "--endpoint",
         "fixture-qmd",
         "d4e5f6",
@@ -685,7 +685,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/missing-thing"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/missing-thing"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -708,7 +708,7 @@ describe("get/qmd adapter", () => {
     try {
       // A bare docid is an explicit provider shape (ADR 0017), so it still
       // enters the provider channel even when the executable is broken.
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "d4e5f6"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "d4e5f6"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: ["/definitely/not-a-real-qmd"],
@@ -729,7 +729,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "no-lines-qmd");
     registerAt(registryPath, "no-lines-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "no-lines-qmd", "d4e5f6"], {
+      const result = executeReadCommand(["--endpoint", "no-lines-qmd", "d4e5f6"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -747,7 +747,7 @@ describe("get/qmd adapter", () => {
     const service = createService(root, "file-notes");
     registerAt(registryPath, "file-notes", service);
     try {
-      const result = executeGetCommand(["--endpoint", "file-notes", "qmd://fixture-qmd/running-agents.md"], {
+      const result = executeReadCommand(["--endpoint", "file-notes", "qmd://fixture-qmd/running-agents.md"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -765,7 +765,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "provider-sigint-qmd");
     registerAt(registryPath, "provider-sigint-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "provider-sigint-qmd", "d4e5f6"], {
+      const result = executeReadCommand(["--endpoint", "provider-sigint-qmd", "d4e5f6"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -783,7 +783,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand([
+      const result = executeReadCommand([
         "--endpoint",
         "fixture-qmd",
         "d4e5f6",
@@ -807,7 +807,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/emptybody-ref"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/emptybody-ref"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -826,7 +826,7 @@ describe("get/qmd adapter", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/running-agents.md"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "qmd://fixture-qmd/running-agents.md"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: ["/definitely/not-a-real-qmd"],
@@ -846,7 +846,7 @@ describe("get/qmd adapter", () => {
     writeFileSync(join(root, "secret.md"), "secret\n", "utf8");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "../secret.md"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "../secret.md"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -859,13 +859,13 @@ describe("get/qmd adapter", () => {
     }
   });
 
-  test("reads an exact .mdx endpoint-local path through get/file on a QMD-backed endpoint", () => {
+  test("reads an exact .mdx endpoint-local path through read/file on a QMD-backed endpoint", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-qmd-mdx-"));
     const registryPath = join(root, "registry.toml");
     const service = createMdxService(root, "deepeval-docs");
     registerAt(registryPath, "deepeval-docs", service);
     try {
-      const result = executeGetCommand(["--endpoint", "deepeval-docs", "integrations/frameworks/openai-agents.mdx"], {
+      const result = executeReadCommand(["--endpoint", "deepeval-docs", "integrations/frameworks/openai-agents.mdx"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -873,7 +873,7 @@ describe("get/qmd adapter", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
       expect(result.stdout).toBe("# OpenAI Agents integration\n\nTracing via DeepEvalTracingProcessor.\n");
-      // Exact hit stays on the get/file baseline: qmd is never invoked.
+      // Exact hit stays on the read/file baseline: qmd is never invoked.
       expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -886,7 +886,7 @@ describe("get/qmd adapter", () => {
     const service = createConfigService(root, "openai-agents");
     registerAt(registryPath, "openai-agents", service);
     try {
-      const result = executeGetCommand(["--endpoint", "openai-agents", "config.md", "--lines", "1:80"], {
+      const result = executeReadCommand(["--endpoint", "openai-agents", "config.md", "--lines", "1:80"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -967,7 +967,7 @@ describe("docid handoff (ADR 0011)", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "d4e5f6"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "d4e5f6"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -987,7 +987,7 @@ describe("docid handoff (ADR 0011)", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "d4e5f6:2"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "d4e5f6:2"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -1005,7 +1005,7 @@ describe("docid handoff (ADR 0011)", () => {
     const service = createService(root, "file-notes");
     registerAt(registryPath, "file-notes", service);
     try {
-      const result = executeGetCommand(["--endpoint", "file-notes", "d4e5f6"], {
+      const result = executeReadCommand(["--endpoint", "file-notes", "d4e5f6"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -1026,7 +1026,7 @@ describe("docid handoff (ADR 0011)", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "d4e5f6:2", "--lines", "2"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "d4e5f6:2", "--lines", "2"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -1046,7 +1046,7 @@ describe("docid handoff (ADR 0011)", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["--endpoint", "fixture-qmd", "#d4e5f6:2", "--lines", "2"], {
+      const result = executeReadCommand(["--endpoint", "fixture-qmd", "#d4e5f6:2", "--lines", "2"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -1062,36 +1062,36 @@ describe("docid handoff (ADR 0011)", () => {
 
 describe("get ukp:// URI input (exact slot addressing)", () => {
   test("parses a ukp:// URI into endpoint, rel-path, and uri addressing", () => {
-    expect(parseGetArgs(["ukp://notes/docs/note.md"])).toEqual({
+    expect(parseReadArgs(["ukp://notes/docs/note.md"])).toEqual({
       endpoint: "notes",
       path: "docs/note.md",
       addressing: "uri",
     });
-    expect(parseGetArgs(["ukp://notes/docs/note.md#L2"]).lines).toEqual({ start: 2 });
+    expect(parseReadArgs(["ukp://notes/docs/note.md#L2"]).lines).toEqual({ start: 2 });
     // Opaque navigation fragments are ignored for reading (ADR 0014 rule 5).
-    expect(parseGetArgs(["ukp://notes/docs/note.md#recovery"]).lines).toBeUndefined();
+    expect(parseReadArgs(["ukp://notes/docs/note.md#recovery"]).lines).toBeUndefined();
   });
 
   test("rejects malformed ukp:// URI usage", () => {
-    expect(() => parseGetArgs(["ukp://notes"])).toThrow("non-empty endpoint-relative path");
-    expect(() => parseGetArgs(["ukp:///docs/note.md"])).toThrow("must name an endpoint");
-    expect(() => parseGetArgs(["ukp://notes/docs/note.md#L2", "--lines", "3"])).toThrow(
+    expect(() => parseReadArgs(["ukp://notes"])).toThrow("non-empty endpoint-relative path");
+    expect(() => parseReadArgs(["ukp:///docs/note.md"])).toThrow("must name an endpoint");
+    expect(() => parseReadArgs(["ukp://notes/docs/note.md#L2", "--lines", "3"])).toThrow(
       "already carries a line",
     );
-    expect(() => parseGetArgs(["--endpoint", "notes", "ukp://notes/docs/note.md"])).toThrow(
+    expect(() => parseReadArgs(["--endpoint", "notes", "ukp://notes/docs/note.md"])).toThrow(
       "carries its own endpoint",
     );
-    expect(() => parseGetArgs(["ukp://notes/docs/note.md#L0"])).toThrow("positive line number");
-    expect(() => parseGetArgs(["ukp://notes/docs/note.md#L99999999999999999999"])).toThrow(
+    expect(() => parseReadArgs(["ukp://notes/docs/note.md#L0"])).toThrow("positive line number");
+    expect(() => parseReadArgs(["ukp://notes/docs/note.md#L99999999999999999999"])).toThrow(
       "positive line number",
     );
-    expect(() => parseGetArgs(["ukp://notes\\docs\\note.md"])).toThrow(
+    expect(() => parseReadArgs(["ukp://notes\\docs\\note.md"])).toThrow(
       "'/' as the path separator",
     );
-    expect(() => parseGetArgs(["foo", "ukp://notes/docs/note.md"])).toThrow(
+    expect(() => parseReadArgs(["foo", "ukp://notes/docs/note.md"])).toThrow(
       "unexpected argument",
     );
-    expect(() => parseGetArgs(["ukp://notes/docs/note.md", "extra"])).toThrow(
+    expect(() => parseReadArgs(["ukp://notes/docs/note.md", "extra"])).toThrow(
       "unexpected argument",
     );
   });
@@ -1102,13 +1102,13 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const full = executeGetCommand(["ukp://notes/docs/note.md"], {
+      const full = executeReadCommand(["ukp://notes/docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(full).toEqual({ exitCode: 0, stdout: "one\ntwo\nthree\nfour\n", stderr: "" });
 
-      const window = executeGetCommand(["ukp://notes/docs/note.md#L2"], {
+      const window = executeReadCommand(["ukp://notes/docs/note.md#L2"], {
         currentDirectory: root,
         registryPath,
       });
@@ -1126,7 +1126,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     writeFileSync(join(service, "docs", "nope-similar.md"), "bait\n", "utf8");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["ukp://notes/docs/nope.md"], {
+      const result = executeReadCommand(["ukp://notes/docs/nope.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -1144,7 +1144,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["ukp://notes/docs"], {
+      const result = executeReadCommand(["ukp://notes/docs"], {
         currentDirectory: root,
         registryPath,
       });
@@ -1154,7 +1154,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
 
       // Path tier parity: the same directory-tail failure must be worded and
       // classified identically without a URI.
-      const pathTier = executeGetCommand(["--endpoint", "notes", "docs"], {
+      const pathTier = executeReadCommand(["--endpoint", "notes", "docs"], {
         currentDirectory: root,
         registryPath,
       });
@@ -1171,7 +1171,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["ukp://fixture-qmd/docs/absent.md"], {
+      const result = executeReadCommand(["ukp://fixture-qmd/docs/absent.md"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -1191,7 +1191,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     const service = createQmdBackedService(root, "fixture-qmd");
     registerAt(registryPath, "fixture-qmd", service);
     try {
-      const result = executeGetCommand(["ukp://fixture-qmd/qmd://running-agents.md"], {
+      const result = executeReadCommand(["ukp://fixture-qmd/qmd://running-agents.md"], {
         currentDirectory: root,
         registryPath,
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
@@ -1212,7 +1212,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["ukp://notes/docs/note.md#L9"], {
+      const result = executeReadCommand(["ukp://notes/docs/note.md#L9"], {
         currentDirectory: root,
         registryPath,
       });
@@ -1232,7 +1232,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["ukp://ghost/docs/note.md"], {
+      const result = executeReadCommand(["ukp://ghost/docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -1249,7 +1249,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["ukp://notes/docs/../docs/note.md"], {
+      const result = executeReadCommand(["ukp://notes/docs/../docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -1266,37 +1266,37 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
     // Markdown-legal spelling (`embedding%20practice.md`) and raw spelling
     // must hit the same file (D-059: decode is required for the embedding
     // loop, since CommonMark cannot carry a raw space in a link target).
-    expect(parseGetArgs(["ukp://notes/embedding%20practice.md"])).toEqual({
+    expect(parseReadArgs(["ukp://notes/embedding%20practice.md"])).toEqual({
       endpoint: "notes",
       path: "embedding practice.md",
       addressing: "uri",
     });
-    expect(parseGetArgs(["ukp://notes/embedding practice.md"])).toEqual({
+    expect(parseReadArgs(["ukp://notes/embedding practice.md"])).toEqual({
       endpoint: "notes",
       path: "embedding practice.md",
       addressing: "uri",
     });
     // Multi-byte UTF-8 escapes decode to the same target as raw CJK (IRI stance).
-    expect(parseGetArgs(["ukp://notes/%E4%B8%AD%E6%96%87.md"])).toEqual({
+    expect(parseReadArgs(["ukp://notes/%E4%B8%AD%E6%96%87.md"])).toEqual({
       endpoint: "notes",
       path: "中文.md",
       addressing: "uri",
     });
-    expect(parseGetArgs(["ukp://notes/中文.md"])).toEqual({
+    expect(parseReadArgs(["ukp://notes/中文.md"])).toEqual({
       endpoint: "notes",
       path: "中文.md",
       addressing: "uri",
     });
     // Fragment is decoded too; #L<n> recognition is unaffected.
-    expect(parseGetArgs(["ukp://notes/docs/note.md#L2"]).lines).toEqual({ start: 2 });
+    expect(parseReadArgs(["ukp://notes/docs/note.md#L2"]).lines).toEqual({ start: 2 });
   });
 
   test("keeps invalid percent sequences literal and lets %2F act as a separator", () => {
     // `%of` is not a hex triplet, so it stays literal. (Note the flip side,
     // pinned behavior: any `%xx` with hex digits decodes unconditionally —
     // e.g. `%be` in "100%best" is a valid escape.)
-    expect(parseGetArgs(["ukp://notes/50%off.md"]).path).toBe("50%off.md");
-    expect(parseGetArgs(["ukp://notes/do%2Fcs/note.md"])).toEqual({
+    expect(parseReadArgs(["ukp://notes/50%off.md"]).path).toBe("50%off.md");
+    expect(parseReadArgs(["ukp://notes/do%2Fcs/note.md"])).toEqual({
       // A decoded `%2F` becomes a separator character (D-059): unambiguous
       // because no filesystem allows `/` inside a name.
       endpoint: "notes",
@@ -1307,13 +1307,13 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
 
   test("decoder edge cases: trailing %, incomplete escape, invalid UTF-8", () => {
     // Trailing `%` and incomplete `%A` stay literal (D-059 lenient stance).
-    expect(parseGetArgs(["ukp://notes/100%"]).path).toBe("100%");
-    expect(parseGetArgs(["ukp://notes/100%A.md"]).path).toBe("100%A.md");
+    expect(parseReadArgs(["ukp://notes/100%"]).path).toBe("100%");
+    expect(parseReadArgs(["ukp://notes/100%A.md"]).path).toBe("100%A.md");
     // `%FF` is a valid escape but invalid UTF-8 → U+FFFD replacement char.
-    expect(parseGetArgs(["ukp://notes/bad%FF.md"]).path).toBe("bad\ufffd.md");
+    expect(parseReadArgs(["ukp://notes/bad%FF.md"]).path).toBe("bad\ufffd.md");
     // Consecutive valid escapes decode as one byte run: %E4 %B8 form an
     // incomplete UTF-8 sequence → a single U+FFFD, then literal `x`.
-    expect(parseGetArgs(["ukp://notes/%E4%B8x.md"]).path).toBe("\ufffdx.md");
+    expect(parseReadArgs(["ukp://notes/%E4%B8x.md"]).path).toBe("\ufffdx.md");
   });
 
   test("rejects an encoded traversal segment after decoding (containment holds)", () => {
@@ -1324,7 +1324,7 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
     const service = createService(root, "notes");
     registerAt(registryPath, "notes", service);
     try {
-      const result = executeGetCommand(["ukp://notes/docs/%2E%2E/docs/note.md"], {
+      const result = executeReadCommand(["ukp://notes/docs/%2E%2E/docs/note.md"], {
         currentDirectory: root,
         registryPath,
       });
@@ -1337,7 +1337,7 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
 
   test("recognizes the scheme case-insensitively but requires the hierarchical //", () => {
     // RFC 3986: scheme comparison is case-insensitive (ASCII).
-    expect(parseGetArgs(["UKP://notes/docs/note.md"])).toEqual({
+    expect(parseReadArgs(["UKP://notes/docs/note.md"])).toEqual({
       endpoint: "notes",
       path: "docs/note.md",
       addressing: "uri",
@@ -1345,7 +1345,7 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
     // Single-slash `ukp:/...` is not the hierarchical form: it is not a URI
     // input and falls back to the plain-reference path, which then demands
     // --endpoint (D-059).
-    expect(() => parseGetArgs(["ukp:/notes/docs/note.md"])).toThrow("read requires --endpoint");
+    expect(() => parseReadArgs(["ukp:/notes/docs/note.md"])).toThrow("read requires --endpoint");
   });
 
   test("reads a spaced filename through its percent-encoded markdown spelling", () => {
@@ -1355,13 +1355,13 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
     writeFileSync(join(service, "embedding practice.md"), "spaced\n", "utf8");
     registerAt(registryPath, "notes", service);
     try {
-      const encoded = executeGetCommand(["ukp://notes/embedding%20practice.md"], {
+      const encoded = executeReadCommand(["ukp://notes/embedding%20practice.md"], {
         currentDirectory: root,
         registryPath,
       });
       expect(encoded).toEqual({ exitCode: 0, stdout: "spaced\n", stderr: "" });
 
-      const raw = executeGetCommand(["ukp://notes/embedding practice.md"], {
+      const raw = executeReadCommand(["ukp://notes/embedding practice.md"], {
         currentDirectory: root,
         registryPath,
       });
