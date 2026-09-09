@@ -59,6 +59,24 @@ export function resolveNavVisibility(capability: ManifestCapability): NavVisibil
  * still walks everything so `[truncated: N]` totals stay exact. */
 export const NAV_MAX_ENTRIES = 2000;
 
+/** Budget on per-entry description reads (ADR 0018 / D-063): the expensive
+ * cost class gets a configurable cap. Configurable by precedent (VS Code
+ * maxResults, TS/VS Code "let the user decide what to skip"); loud by
+ * contract when hit (never a silent drop). Counts stay exact and unbounded —
+ * budgets are for expensive-and-droppable work, never cheap-and-load-bearing
+ * work. Default equals the entry cap, so the budget only binds when a
+ * Service deliberately lowers it. */
+export const NAV_DEFAULT_MAX_DESCRIPTION_FILES = NAV_MAX_ENTRIES;
+
+function resolveNavDescriptionBudget(capability: ManifestCapability): number {
+  const raw = (capability.config ?? {})["max_description_files"];
+  if (raw === undefined) return NAV_DEFAULT_MAX_DESCRIPTION_FILES;
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1) {
+    throw new NavProviderError("nav config 'max_description_files' must be a positive integer");
+  }
+  return raw;
+}
+
 // ---------------------------------------------------------------------------
 // .gitignore support (visibility follows the endpoint's own ignore files —
 // zero UKP-side configuration). Semantics are the git subset: comments,
@@ -209,10 +227,20 @@ export interface NavEntry {
   truncated?: boolean;
   /** Recursive `.md` total under a truncated folder (exclusions applied). */
   omittedMarkdownCount?: number;
+  /** Budget-hit entries only (ADR 0018): the entry IS listed (path came from
+   * the cheap scan), but its description read was skipped beyond the
+   * configurable description-read budget. Loud by contract — the entry
+   * marker plus the `description-budget-reached` diagnostic always appear
+   * together, never a silent drop. */
+  descriptionOmitted?: "budget";
 }
 
 export interface NavDiagnostic {
-  code: "unreadable-directory" | "unreadable-file" | "max-entries-reached";
+  code:
+    | "unreadable-directory"
+    | "unreadable-file"
+    | "max-entries-reached"
+    | "description-budget-reached";
   message: string;
 }
 
@@ -446,6 +474,7 @@ function buildNavResult(
   depth: number,
   endpoint: string,
   visibility: NavVisibility,
+  descriptionBudget: number,
 ): NavResult {
   const state: ScanState = { files: [], truncated: [], diagnostics: [] };
   // Ignore layers are inherited from the Service folder down to the route
@@ -453,7 +482,24 @@ function buildNavResult(
   const layers = buildInheritedLayers(serviceFolder, routeRootFolder);
   scanDirectory(serviceFolder, routeRootFolder, 0, depth, state, layers, visibility);
 
+  // Description extraction is the expensive cost class (ADR 0018): a full
+  // file read per entry. Beyond the configurable budget the entry stays
+  // listed (the path came from the cheap scan) but its description is
+  // omitted, flagged per-entry, and announced once by diagnostic — loud,
+  // never silent.
+  let descriptionsRead = 0;
+  let descriptionsOmitted = 0;
   const entries: NavEntry[] = state.files.map((file) => {
+    if (descriptionsRead >= descriptionBudget) {
+      descriptionsOmitted += 1;
+      return {
+        path: toRoutePath(serviceFolder, file),
+        kind: "file" as const,
+        description: null,
+        descriptionOmitted: "budget" as const,
+      };
+    }
+    descriptionsRead += 1;
     let description: string | null = null;
     try {
       description = extractDescription(readFileSync(file, "utf8"));
@@ -463,8 +509,16 @@ function buildNavResult(
         message: `unable to read markdown file ${toRoutePath(serviceFolder, file)}`,
       });
     }
-    return { path: toRoutePath(serviceFolder, file), kind: "file", description };
+    return { path: toRoutePath(serviceFolder, file), kind: "file" as const, description };
   });
+  if (descriptionsOmitted > 0) {
+    state.diagnostics.push({
+      code: "description-budget-reached",
+      message:
+        `descriptions omitted for ${descriptionsOmitted} entries beyond the description-read budget `
+        + `${descriptionBudget} (nav config 'max_description_files'; entries stay listed, counts stay exact)`,
+    });
+  }
 
   for (const truncated of state.truncated) {
     entries.push({
@@ -519,6 +573,8 @@ export function renderNavHuman(result: NavResult): string {
     if (entry.kind === "folder") {
       const line = `[truncated: ${entry.omittedMarkdownCount}] ${entry.path}`;
       lines.push(entry.description ? `${line} | ${entry.description}` : line);
+    } else if (entry.descriptionOmitted === "budget") {
+      lines.push(`${entry.path} | (description omitted: budget reached)`);
     } else {
       lines.push(entry.description ? `${entry.path} | ${entry.description}` : entry.path);
     }
@@ -624,10 +680,18 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
     depth,
     binding.name,
     resolveNavVisibility(resolved.capability),
+    resolveNavDescriptionBudget(resolved.capability),
   );
+  // Diagnostics go to stderr in BOTH render modes (read's channel discipline:
+  // stdout is the payload, stderr is the operational channel). Without this,
+  // a Human-mode budget hit would be silent — violating ADR 0018's loud
+  // contract. JSON keeps the diagnostics in the envelope too.
+  const diagnosticLines = result.diagnostics
+    .map((diagnostic) => `ukp nav: ${diagnostic.code}: ${diagnostic.message}`)
+    .join("\n");
   return {
     exitCode: 0,
     stdout: request.json ? renderNavJson(result) : renderNavHuman(result),
-    stderr: "",
+    stderr: diagnosticLines.length > 0 ? `${diagnosticLines}\n` : "",
   };
 }
