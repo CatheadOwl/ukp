@@ -10,7 +10,7 @@
  * A bare docid handoff key is a 6-hex content fingerprint — the first 6 chars of
  * QMD's content SHA-256 — optionally carrying a `:line` suffix (ADR 0011). QMD
  * emits the fingerprint with a leading `#` (`#abc123`); `search` strips it on
- * the surface so the token is verbatim-copyable, and `get` re-adds it before
+ * the surface so the token is verbatim-copyable, and `read` re-adds it before
  * constructing `qmd get #docid[:line]`. A leading `#` is a shell comment and
  * would silently truncate the reference (ISSUE-008), so it never appears on the
  * UKP surface.

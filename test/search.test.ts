@@ -10,7 +10,7 @@ import {
 import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import { executeHumanSearch } from "../src/capabilities/search.ts";
-import { executeGetCommand } from "../src/commands/read.ts";
+import { executeReadCommand } from "../src/commands/read.ts";
 import { parseSearchArgs } from "../src/commands/search.ts";
 import { registerAt } from "../src/registry.ts";
 
@@ -615,8 +615,8 @@ describe("search", () => {
         endpoint: "success",
         reference: "a1b2c3",
         line: 1,
-        status: "get_ready",
-        get_adapter: "qmd",
+        status: "read_ready",
+        read_adapter: "qmd",
       });
       expect(JSON.parse(readFileSync(envelope.endpoints[1].artifact, "utf8"))).toEqual([]);
       const noMatchReferencesArtifact = envelope.endpoints[1].references_artifact;
@@ -629,7 +629,7 @@ describe("search", () => {
     }
   }, 15_000);
 
-  test("writes UKP-owned get-ready references for safe QMD result locations", () => {
+  test("writes UKP-owned read-ready references for safe QMD result locations", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-references-"));
     const registryPath = join(root, "registry.toml");
     const artifactRoot = join(root, "artifacts");
@@ -674,30 +674,30 @@ describe("search", () => {
         endpoint: "collection-shaped",
         reference: "b2c3d4",
         line: 3,
-        status: "get_ready",
-        get_adapter: "qmd",
+        status: "read_ready",
+        read_adapter: "qmd",
       });
       expect(references[1]).toMatchObject({
         endpoint: "path-shaped",
         reference: "c3d4e5",
         line: 7,
-        status: "get_ready",
-        get_adapter: "qmd",
+        status: "read_ready",
+        read_adapter: "qmd",
       });
       expect(references[2]).toMatchObject({
         endpoint: "outside-result",
         reference: "d4e5f6",
         line: 2,
-        status: "get_ready",
-        get_adapter: "qmd",
+        status: "read_ready",
+        read_adapter: "qmd",
       });
       expect(references[2]).not.toHaveProperty("reason");
       expect(references[3]).toMatchObject({
         endpoint: "same-authority-external",
         reference: "e5f6a7",
         line: 4,
-        status: "get_ready",
-        get_adapter: "qmd",
+        status: "read_ready",
+        read_adapter: "qmd",
       });
       expect(references[3]).not.toHaveProperty("reason");
     } finally {
@@ -705,7 +705,7 @@ describe("search", () => {
     }
   }, 15_000);
 
-  test("prints get-ready docid handoff in human output", () => {
+  test("prints read-ready docid handoff in human output", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-search-human-docid-"));
     const registryPath = join(root, "registry.toml");
     const embedded = createService(root, "embedded-uri", "embedded-uri");
@@ -949,8 +949,8 @@ describe("search", () => {
       const envelope = JSON.parse(searchResult.stdout);
       const sidecar = JSON.parse(readFileSync(envelope.endpoints[0].references_artifact, "utf8"));
       const mapping = sidecar.results[0];
-      expect(mapping.status).toBe("get_ready");
-      expect(mapping.get_adapter).toBe("qmd");
+      expect(mapping.status).toBe("read_ready");
+      expect(mapping.read_adapter).toBe("qmd");
       // The handoff key is a bare 6-hex docid, not a verbatim path-shaped qmd://
       // URI: no scheme, no drive/anchor, no leading `#`.
       expect(mapping.reference).toBe("d4e5f6");
@@ -960,7 +960,7 @@ describe("search", () => {
 
       // The self-contained hint — `ukp read --endpoint <name> <docid>:<line>`
       // copied verbatim from search — must execute successfully.
-      const getResult = executeGetCommand([
+      const ReadResult = executeReadCommand([
         "--endpoint",
         "outside-result",
         `${mapping.reference}:${mapping.line}`,
@@ -969,9 +969,9 @@ describe("search", () => {
         registryPath,
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
-      expect(getResult.exitCode).toBe(0);
-      expect(getResult.stdout.length).toBeGreaterThan(0);
-      expect(getResult.stderr).toBe("");
+      expect(ReadResult.exitCode).toBe(0);
+      expect(ReadResult.stdout.length).toBeGreaterThan(0);
+      expect(ReadResult.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

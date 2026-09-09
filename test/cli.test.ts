@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import {
   COMMANDS,
   renderDiagnoseHelp,
-  renderGetHelp,
+  renderReadHelp,
   renderGuideHelp,
   renderHelp,
   renderInitHelp,
@@ -117,7 +117,7 @@ describe("CLI bootstrap", () => {
 
   test("read help documents endpoint selector and line ranges; the retired get spelling is rejected", () => {
     const output: string[] = [];
-    expect(renderGetHelp()).toContain("Usage: ukp read --endpoint <name> <reference>");
+    expect(renderReadHelp()).toContain("Usage: ukp read --endpoint <name> <reference>");
     expect(runCli(["read", "--help"], (message) => output.push(message))).toBe(0);
     const help = output.join("\n");
     expect(help).toContain("--endpoint <name>");
@@ -888,7 +888,7 @@ describe("CLI bootstrap", () => {
       expect(rendered).toContain("provider: qmd");
       expect(rendered).toContain("status: warning");
       expect(rendered).toContain("capability 'vsearch' is not implemented by this UKP build");
-      expect(rendered).toContain("capability: get (derived local baseline)");
+      expect(rendered).toContain("capability: read (derived local baseline)");
       expect(rendered).toContain("provider: file");
       expect(rendered).toContain("status: ok");
     } finally {

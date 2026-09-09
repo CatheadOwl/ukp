@@ -6,7 +6,7 @@ import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
 
-export interface GetRequest {
+export interface ReadRequest {
   /** Undefined only for an absolute filesystem reference, which the
    * capability maps against the Registry before any read (ADR-URI-001
    * tolerant tier); every other tier requires it. */
@@ -31,29 +31,29 @@ export interface LineRange {
   count?: number;
 }
 
-export interface GetContext {
+export interface ReadContext {
   currentDirectory: string;
   registryPath: string;
   qmdCommand?: readonly string[];
 }
 
-export interface GetResult {
+export interface ReadResult {
   exitCode: number;
   stdout: string;
   stderr: string;
 }
 
-export class GetUsageError extends Error {
+export class ReadUsageError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "GetUsageError";
+    this.name = "ReadUsageError";
   }
 }
 
 /** provider-unavailable classification for "no qmd executable at all" — the
  * read channel is absent, which is the same recovery class as a spawn
  * failure (install/verify qmd), never resource-missing. */
-function providerUnavailableNoExecutable(endpointName: string): GetResult {
+function providerUnavailableNoExecutable(endpointName: string): ReadResult {
   return {
     exitCode: 1,
     stdout: "",
@@ -64,7 +64,7 @@ function providerUnavailableNoExecutable(endpointName: string): GetResult {
 }
 
 function validateEndpointRelativePath(reference: string): string[] {
-  if (reference.length === 0) throw new GetUsageError("reference must be a non-empty endpoint-scoped reference");
+  if (reference.length === 0) throw new ReadUsageError("reference must be a non-empty endpoint-scoped reference");
   if (
     isAbsolute(reference)
     || win32.isAbsolute(reference)
@@ -72,15 +72,15 @@ function validateEndpointRelativePath(reference: string): string[] {
     || reference.startsWith("//")
     || reference.startsWith("\\\\")
   ) {
-    throw new GetUsageError("reference must be endpoint-scoped, not absolute");
+    throw new ReadUsageError("reference must be endpoint-scoped, not absolute");
   }
 
   const segments = reference.split(/[\\/]/);
   if (segments.some((segment) => segment.length === 0)) {
-    throw new GetUsageError("reference must not contain empty path segments");
+    throw new ReadUsageError("reference must not contain empty path segments");
   }
   if (segments.some((segment) => segment === "." || segment === "..")) {
-    throw new GetUsageError("reference must not contain '.' or '..' path segments");
+    throw new ReadUsageError("reference must not contain '.' or '..' path segments");
   }
   return segments;
 }
@@ -99,7 +99,7 @@ function resolveEndpointPath(serviceFolder: string, reference: string): string {
   const serviceReal = realpathSync(serviceFolder);
   const targetReal = realpathSync(targetPath);
   if (!isInsideService(serviceReal, targetReal)) {
-    throw new GetUsageError("reference must stay inside the selected Service folder when resolved as a file");
+    throw new ReadUsageError("reference must stay inside the selected Service folder when resolved as a file");
   }
   return targetReal;
 }
@@ -134,7 +134,7 @@ function resolveDocRelativeReference(fromRef: string, reference: string): string
     if (segment.length === 0 || segment === ".") continue;
     if (segment === "..") {
       if (segments.length === 0) {
-        throw new GetUsageError(
+        throw new ReadUsageError(
           `'${reference}' (from '${fromRef}') resolves outside the endpoint`,
         );
       }
@@ -144,7 +144,7 @@ function resolveDocRelativeReference(fromRef: string, reference: string): string
     segments.push(segment);
   }
   if (segments.length === 0) {
-    throw new GetUsageError(
+    throw new ReadUsageError(
       `'${reference}' (from '${fromRef}') resolves to the endpoint root, not a resource`,
     );
   }
@@ -193,14 +193,14 @@ function resolveAbsoluteReference(
   }
   if (matches.length === 0) {
     const names = registry.map((binding) => binding.name).join(", ");
-    throw new GetUsageError(
+    throw new ReadUsageError(
       `absolute reference '${reference}' matches no registered endpoint`
         + (names.length > 0 ? ` (registered: ${names})` : " (no endpoints registered)"),
     );
   }
   if (matches.length > 1) {
     const list = matches.map((match) => `${match.endpoint} (${match.route})`).join(", ");
-    throw new GetUsageError(
+    throw new ReadUsageError(
       `absolute reference '${reference}' matches multiple endpoints: ${list}; use 'ukp read --endpoint <name> <route>' instead`,
     );
   }
@@ -353,7 +353,7 @@ type LineRangeResult =
  * Slice `content` to the requested 1-based `--lines` window.
  *
  * Two out-of-range shapes are distinguished so the caller can enforce the
- * get/file exit contract, which must match get/qmd (where an empty provider
+ * read/file exit contract, which must match read/qmd (where an empty provider
  * body already fails with exit 1):
  * - `start` past the last line → `start-beyond-eof`; the caller errors (exit 1)
  *   and never surfaces a silently-empty success read.
@@ -389,9 +389,9 @@ function applyLineRange(content: string, range: LineRange | undefined): LineRang
 function readViaQmd(
   qmdCommand: readonly string[],
   serviceFolder: string,
-  request: GetRequest,
+  request: ReadRequest,
   endpointName: string,
-): GetResult {
+): ReadResult {
   const providerArgs = [
     "get",
     toQmdGetArgument(request.path, request.lines),
@@ -465,7 +465,7 @@ function readViaQmd(
   return { exitCode: 0, stdout: body, stderr: "" };
 }
 
-function readTargetWithLines(targetPath: string, request: GetRequest): GetResult {
+function readTargetWithLines(targetPath: string, request: ReadRequest): ReadResult {
   let content: string;
   try {
     content = readFileSync(targetPath, "utf8");
@@ -499,14 +499,14 @@ function readTargetWithLines(targetPath: string, request: GetRequest): GetResult
   return { exitCode: 0, stdout: rangeResult.content, stderr: "" };
 }
 
-export function executeGet(request: GetRequest, context: GetContext): GetResult {
+export function executeRead(request: ReadRequest, context: ReadContext): ReadResult {
   // A docid[:line] handoff key already carries an embedded line; a separate
-  // --lines range would double-specify (ADR 0011 / get-qmd-adapter). Strip any
+  // --lines range would double-specify (ADR 0011 / read-qmd-adapter). Strip any
   // leading `#` first so a hash-prefixed `#docid:line` is caught too, even
   // though `#` never appears on the UKP surface.
   const barePath = stripDocidHash(request.path);
   if (request.lines && isBareDocidReference(barePath) && barePath.includes(":")) {
-    throw new GetUsageError(
+    throw new ReadUsageError(
       "a docid[:line] reference already carries a line; do not also pass --lines",
     );
   }
@@ -522,10 +522,10 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
   let resolutionNote: string | undefined;
   if (request.addressing !== "uri" && isAbsoluteFilesystemReference(request.path)) {
     if (request.fromRef !== undefined) {
-      throw new GetUsageError("an absolute filesystem path cannot be combined with --from");
+      throw new ReadUsageError("an absolute filesystem path cannot be combined with --from");
     }
     if (request.endpoint !== undefined) {
-      throw new GetUsageError(
+      throw new ReadUsageError(
         "an absolute filesystem path carries its own endpoint (matched against registered endpoints); do not also pass --endpoint",
       );
     }
@@ -534,10 +534,10 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
     resolutionNote = `ukp read: absolute path matched endpoint '${mapped.endpoint}', route '${mapped.route}'`;
   } else if (request.fromRef !== undefined) {
     if (request.endpoint === undefined) {
-      throw new GetUsageError("--from requires --endpoint <name>");
+      throw new ReadUsageError("--from requires --endpoint <name>");
     }
     if (request.path.startsWith("qmd://") || isBareDocidReference(barePath)) {
-      throw new GetUsageError("--from applies to document-relative path references, not provider references");
+      throw new ReadUsageError("--from applies to document-relative path references, not provider references");
     }
     const resolved = resolveDocRelativeReference(request.fromRef, request.path);
     resolutionNote = `ukp read: resolved '${request.path}' from '${request.fromRef}' -> '${resolved}'`;
@@ -551,10 +551,10 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
 }
 
 function executeResolvedRead(
-  request: GetRequest,
-  context: GetContext,
+  request: ReadRequest,
+  context: ReadContext,
   registry: ReturnType<typeof readRegistry>,
-): GetResult {
+): ReadResult {
   if (request.endpoint === undefined) {
     return { exitCode: 1, stdout: "", stderr: "ukp read: no endpoint selected\n" };
   }
@@ -602,7 +602,7 @@ function executeResolvedRead(
     try {
       targetPath = resolveEndpointPath(service.folder, request.path);
     } catch (error) {
-      if (error instanceof GetUsageError) {
+      if (error instanceof ReadUsageError) {
         return { exitCode: 2, stdout: "", stderr: `ukp read: ${error.message}\n` };
       }
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
@@ -660,7 +660,7 @@ function executeResolvedRead(
   try {
     targetPath = resolveEndpointPath(service.folder, request.path);
   } catch (error) {
-    if (error instanceof GetUsageError) {
+    if (error instanceof ReadUsageError) {
       return { exitCode: 2, stdout: "", stderr: `ukp read: ${error.message}\n` };
     }
     // realpathSync throws ENOENT if path doesn't exist

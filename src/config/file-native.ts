@@ -1,9 +1,9 @@
 // ADR 0016: file-native capability set — the single table governing every
 // file-native capability. Three rules live here and nowhere else:
 //
-// 1. the set membership (`get`, `nav`, `propose`);
+// 1. the set membership (`read`, `nav`, `propose`);
 // 2. which members are derived defaults of every registered local Service
-//    (read-only, exposure within the get/file baseline) vs. which still
+//    (read-only, exposure within the read/file baseline) vs. which still
 //    require an explicit declaration (write-side: `propose`);
 // 3. which flat declaration keys each capability accepts directly under
 //    `[capabilities.<name>]` (normalized into `config` at Manifest load).
@@ -14,7 +14,7 @@
 
 import type { Manifest, ManifestCapability } from "./manifest.ts";
 
-export type FileNativeCapabilityName = "get" | "nav" | "propose";
+export type FileNativeCapabilityName = "read" | "nav" | "propose";
 
 export interface FileNativeCapabilitySpec {
   /** Derived default of every registered local Service (ADR 0016 rule 2):
@@ -27,11 +27,11 @@ export interface FileNativeCapabilitySpec {
 }
 
 export const FILE_NATIVE_CAPABILITIES: Readonly<Record<FileNativeCapabilityName, FileNativeCapabilitySpec>> = {
-  // `get` is in the set for uniformity (rule 1); its bare-declaration arm is
+  // `read` is in the set for uniformity (rule 1); its bare-declaration arm is
   // unreachable in practice because a declared [capabilities.get] is stripped
-  // as legacy before provider defaulting — get's derived baseline has no
+  // as legacy before provider defaulting — read's derived baseline has no
   // Manifest override surface at all (ADR 0007 / ADR 0016).
-  get: { derived: true, flatConfigKeys: [] },
+  read: { derived: true, flatConfigKeys: [] },
   nav: { derived: true, flatConfigKeys: ["exclude_files", "exclude_dirs"] },
   propose: { derived: false, flatConfigKeys: [] },
 };
