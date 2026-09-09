@@ -10,7 +10,7 @@ import {
 import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import { executeHumanSearch } from "../src/capabilities/search.ts";
-import { executeGetCommand } from "../src/commands/get.ts";
+import { executeGetCommand } from "../src/commands/read.ts";
 import { parseSearchArgs } from "../src/commands/search.ts";
 import { registerAt } from "../src/registry.ts";
 
