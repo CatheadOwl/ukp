@@ -312,6 +312,92 @@ describe("nav capability", () => {
     }
   });
 
+  test("description-read budget (ADR 0018): entries stay listed, omissions are loud", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-budget-"));
+    try {
+      const folder = join(root, "kb-service");
+      mkdirSync(join(folder, ".ukp"), { recursive: true });
+      writeFileSync(
+        join(folder, ".ukp", "service.toml"),
+        [
+          'name = "kb"',
+          "[capabilities.nav]",
+          'provider = "file"',
+          "[capabilities.nav.config]",
+          "max_description_files = 2",
+        ].join("\n") + "\n",
+      );
+      writeFiles(folder, [
+        { path: "a.md", description: "A" },
+        { path: "b.md", description: "B" },
+        { path: "c.md", description: "C" },
+        { path: "d.md", description: "D" },
+      ]);
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "kb", folder);
+      const context = { currentDirectory: root, registryPath };
+
+      const parsed = navJson({ endpoint: "kb", depth: 1 }, context);
+      // All four entries stay listed; first two carry descriptions, the rest
+      // are flagged — never silently dropped (ADR 0018 loud contract).
+      expect(parsed.entries).toEqual([
+        { path: "a.md", kind: "file", description: "A" },
+        { path: "b.md", kind: "file", description: "B" },
+        { path: "c.md", kind: "file", description: null, descriptionOmitted: "budget" },
+        { path: "d.md", kind: "file", description: null, descriptionOmitted: "budget" },
+      ]);
+      expect(parsed.diagnostics).toEqual([
+        {
+          code: "description-budget-reached",
+          message:
+            "descriptions omitted for 2 entries beyond the description-read budget 2 "
+            + "(nav config 'max_description_files'; entries stay listed, counts stay exact)",
+        },
+      ]);
+
+      // Human mode: budget-hit entries carry a visible marker
+      const human = executeNav({ endpoint: "kb", depth: 1, json: false }, context);
+      expect(human.exitCode).toBe(0);
+      expect(human.stdout).toContain("c.md | (description omitted: budget reached)");
+      expect(human.stdout).not.toContain("C\n");
+      // Diagnostics surface on stderr in BOTH modes (loud, read's channel discipline)
+      expect(human.stderr).toContain("description-budget-reached: descriptions omitted for 2 entries");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("invalid max_description_files fails as a provider error; default budget never binds", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-budget-invalid-"));
+    const defaultRoot = mkdtempSync(join(tmpdir(), "ukp-nav-budget-default-"));
+    try {
+      const folder = join(root, "kb-service");
+      mkdirSync(join(folder, ".ukp"), { recursive: true });
+      writeFileSync(
+        join(folder, ".ukp", "service.toml"),
+        'name = "kb"\n[capabilities.nav]\nprovider = "file"\n[capabilities.nav.config]\nmax_description_files = 0\n',
+      );
+      writeFiles(folder, [{ path: "a.md" }]);
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "kb", folder);
+      const result = executeNavCommand(["--endpoint", "kb"], { currentDirectory: root, registryPath });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("nav config 'max_description_files' must be a positive integer");
+
+      // Default (no config): small trees never hit the budget, zero diagnostics
+      const context = setup(defaultRoot, [
+        { path: "a.md", description: "A" },
+        { path: "b.md", description: "B" },
+      ], "kb-default");
+      const parsed = navJson({ endpoint: "kb-default" }, context);
+      expect(parsed.diagnostics).toEqual([]);
+      expect(parsed.entries.every((entry: { descriptionOmitted?: string }) => entry.descriptionOmitted === undefined)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(defaultRoot, { recursive: true, force: true });
+    }
+  });
+
   test("nav config can replace exclude_files and exclude_dirs wholesale", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
