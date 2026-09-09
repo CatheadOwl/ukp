@@ -8,7 +8,7 @@ import {
   executeDiagnoseCommand,
   type ProviderResolver,
 } from "./commands/diagnose.ts";
-import { executeGetCommand } from "./commands/get.ts";
+import { executeGetCommand } from "./commands/read.ts";
 import { executeGuideCommand } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
 import { executeInspectCommand } from "./commands/inspect.ts";
@@ -20,7 +20,7 @@ import { executeSearchCommand } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
 export { renderDiagnoseHelp } from "./commands/diagnose.ts";
-export { renderGetHelp } from "./commands/get.ts";
+export { renderGetHelp } from "./commands/read.ts";
 export { renderGuideHelp, renderServiceGuide, renderServiceQmdGuide, renderClientGuide, renderProposeGuide } from "./commands/guide.ts";
 export { renderInitHelp, renderInitServiceHelp } from "./commands/init.ts";
 export { renderInspectHelp } from "./commands/inspect.ts";

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { executeGetCommand, parseGetArgs } from "../src/commands/get.ts";
+import { executeGetCommand, parseGetArgs } from "../src/commands/read.ts";
 import { registerAt } from "../src/registry.ts";
 import { buildQmdInvocation, stripQmdHeader } from "../src/capabilities/qmd.ts";
 
