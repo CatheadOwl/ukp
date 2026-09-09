@@ -8,7 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { createArtifactRun } from "../artifacts.ts";
 import {
   loadManifest,
@@ -340,7 +340,7 @@ function executeHumanMode(
       };
     }
     if (providerOutput) {
-      output.push(renderResultUnits(providerOutput, endpoint.name)
+      output.push(renderResultUnits(providerOutput, endpoint.name, endpoint.folder!)
         ?? renderFallbackProviderBlock(providerOutput, endpoint));
     } else if (result.status === 0) {
       output.push("(no matches)");
@@ -380,6 +380,7 @@ interface QmdReferenceMapping {
   line?: number;
   status: "read_ready" | "provider_only";
   read_adapter?: "qmd";
+  ukp_uri?: string;
   reason?: string;
 }
 
@@ -417,6 +418,68 @@ function providerLocationOf(result: unknown): string {
 }
 
 /**
+ * Percent-encode a `ukp://` path segment for emission (ADR 0019; the decode
+ * side is pinned by D-059). Raw UTF-8 stays raw (grep-ability, IRI semantics);
+ * only characters that cannot round-trip through the hierarchical form raw are
+ * encoded: `%` (would be re-decoded on read), space, and the `#`/`?` delimiters.
+ */
+function encodeUkpUriSegment(segment: string): string {
+  return segment.replace(/[%#? ]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
+}
+
+function isAbsoluteLocationPath(location: string): boolean {
+  return /^([A-Za-z]:[\\/]|\\\\|\/)/.test(location);
+}
+
+/**
+ * Derive the endpoint-relative path of one QMD result location (ADR 0019).
+ *
+ * The provider location is either path-shaped (`qmd://<absolute path>` — the
+ * collection root is a filesystem path) or collection-shaped
+ * (`qmd://<collection>/<rel>`). Only a location that resolves *inside* the
+ * Service folder to an existing regular file yields a `ukp://` URI: the URI is
+ * a slot promise (`ukp read` resolves it exactly), so it must never be emitted
+ * for provider-managed or out-of-folder resources. Collection names are never
+ * assumed to equal endpoint names — the existence check, not name matching,
+ * decides.
+ */
+function endpointRelativePathOf(providerLocation: string, endpointFolder: string): string | undefined {
+  if (!providerLocation.startsWith("qmd://")) return undefined;
+  const rest = providerLocation.slice("qmd://".length);
+  let candidate: string;
+  if (isAbsoluteLocationPath(rest)) {
+    const rel = relative(resolve(endpointFolder), resolve(rest));
+    // Cross-drive / UNC↔drive targets: `relative()` returns the absolute
+    // target itself, which never starts with `..` — reject explicitly so the
+    // containment boundary cannot be bypassed (ADR 0019 emission rule).
+    if (isAbsoluteLocationPath(rel)) return undefined;
+    candidate = rel.split(/[\\/]/).join("/");
+  } else {
+    const firstSlash = rest.indexOf("/");
+    if (firstSlash <= 0) return undefined;
+    candidate = rest.slice(firstSlash + 1).split(/[\\/]/).join("/");
+  }
+  if (candidate === "" || candidate.split("/").includes("..")) return undefined;
+  const absolute = resolve(endpointFolder, ...candidate.split("/"));
+  const finalRelative = relative(resolve(endpointFolder), absolute);
+  if (isAbsoluteLocationPath(finalRelative) || finalRelative.startsWith("..")) return undefined;
+  let stat;
+  try {
+    stat = statSync(absolute);
+  } catch {
+    return undefined;
+  }
+  if (!stat.isFile()) return undefined;
+  return candidate;
+}
+
+function ukpUriOf(providerLocation: string, endpointName: string, endpointFolder: string): string | undefined {
+  const relPath = endpointRelativePathOf(providerLocation, endpointFolder);
+  if (!relPath) return undefined;
+  return `ukp://${endpointName}/${relPath.split("/").map(encodeUkpUriSegment).join("/")}`;
+}
+
+/**
  * Map one QMD search result to a UKP read-ready reference (ADR 0011).
  *
  * QMD-indexed results carry a stable `docid` content fingerprint. `search`
@@ -425,14 +488,20 @@ function providerLocationOf(result: unknown): string {
  * and path become display-only provenance (`provider_location`). A result with
  * no usable docid has no UKP read route and is `provider_only`.
  */
-function mapQmdResultToReference(endpointName: string, result: unknown): QmdReferenceMapping {
+function mapQmdResultToReference(
+  endpointName: string,
+  endpointFolder: string,
+  result: unknown,
+): QmdReferenceMapping {
   const providerLocation = providerLocationOf(result);
+  const ukpUri = ukpUriOf(providerLocation, endpointName, endpointFolder);
   const docid = docidOf(result);
   if (!docid) {
     return {
       provider_location: providerLocation,
       endpoint: endpointName,
       status: "provider_only",
+      ...(ukpUri ? { ukp_uri: ukpUri } : {}),
       reason: "qmd result has no usable docid",
     };
   }
@@ -443,6 +512,7 @@ function mapQmdResultToReference(endpointName: string, result: unknown): QmdRefe
     ...maybeLine(lineOf(result)),
     status: "read_ready",
     read_adapter: "qmd",
+    ...(ukpUri ? { ukp_uri: ukpUri } : {}),
   };
 }
 
@@ -487,10 +557,16 @@ function isFileHeadBanner(snippet: string, line: number | undefined): boolean {
  * stays in the `--json` reference sidecar). A result with no usable docid has no
  * get route and says so in plain words.
  */
-function renderResultUnit(unitIndex: number, endpointName: string, result: unknown): string {
+function renderResultUnit(
+  unitIndex: number,
+  endpointName: string,
+  endpointFolder: string,
+  result: unknown,
+): string {
   const providerLocation = providerLocationOf(result);
   const docid = docidOf(result);
   const line = lineOf(result);
+  const ukpUri = ukpUriOf(providerLocation, endpointName, endpointFolder);
   const title = rawTitleOf(result);
   const base = basenameOf(providerLocation);
   const location = base ? (line ? `${base}:${line}` : base) : "";
@@ -510,6 +586,7 @@ function renderResultUnit(unitIndex: number, endpointName: string, result: unkno
   } else {
     lines.push(`   (no direct read — provider-managed result)`);
   }
+  if (ukpUri) lines.push(`   uri: ${ukpUri}`);
   return lines.join("\n");
 }
 
@@ -521,7 +598,7 @@ function renderResultUnit(unitIndex: number, endpointName: string, result: unkno
  * empty array renders `(no matches)`. Units are separated by a blank line so
  * each `N.` block reads as one self-contained chunk even with multi-line excerpts.
  */
-function renderResultUnits(providerOutput: string, endpointName: string): string | null {
+function renderResultUnits(providerOutput: string, endpointName: string, endpointFolder: string): string | null {
   let nativeResults: unknown;
   try {
     nativeResults = JSON.parse(providerOutput);
@@ -531,7 +608,7 @@ function renderResultUnits(providerOutput: string, endpointName: string): string
   if (!Array.isArray(nativeResults)) return null;
   if (nativeResults.length === 0) return "(no matches)";
   return nativeResults
-    .map((result, index) => renderResultUnit(index + 1, endpointName, result))
+    .map((result, index) => renderResultUnit(index + 1, endpointName, endpointFolder, result))
     .join("\n\n");
 }
 
@@ -559,7 +636,11 @@ function renderFallbackProviderBlock(providerOutput: string, endpoint: PlannedEn
   return lines.join("\n");
 }
 
-function buildQmdReferenceSidecar(endpointName: string, sourceArtifact: string): QmdReferenceSidecar {
+function buildQmdReferenceSidecar(
+  endpointName: string,
+  endpointFolder: string,
+  sourceArtifact: string,
+): QmdReferenceSidecar {
   if (statSync(sourceArtifact).size > 1024 * 1024) {
     return {
       schema: "ukp.search.references.v1",
@@ -578,17 +659,18 @@ function buildQmdReferenceSidecar(endpointName: string, sourceArtifact: string):
     source_artifact: sourceArtifact,
     results: nativeResults.map((result, index) => ({
       index,
-      ...mapQmdResultToReference(endpointName, result),
+      ...mapQmdResultToReference(endpointName, endpointFolder, result),
     })),
   };
 }
 
 function writeQmdReferenceSidecar(
   endpointName: string,
+  endpointFolder: string,
   sourceArtifact: string,
   sidecarPath: string,
 ): void {
-  const sidecar = buildQmdReferenceSidecar(endpointName, sourceArtifact);
+  const sidecar = buildQmdReferenceSidecar(endpointName, endpointFolder, sourceArtifact);
   writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
@@ -712,7 +794,7 @@ function executeJsonMode(
       succeeded = true;
       let hasReferenceSidecar = false;
       try {
-        writeQmdReferenceSidecar(endpoint.name, artifact, referencesArtifact);
+        writeQmdReferenceSidecar(endpoint.name, endpoint.folder!, artifact, referencesArtifact);
         hasReferenceSidecar = true;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);

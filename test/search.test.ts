@@ -683,6 +683,7 @@ describe("search", () => {
         line: 7,
         status: "read_ready",
         read_adapter: "qmd",
+        ukp_uri: "ukp://path-shaped/docs/path-note.md",
       });
       expect(references[2]).toMatchObject({
         endpoint: "outside-result",
@@ -691,6 +692,12 @@ describe("search", () => {
         status: "read_ready",
         read_adapter: "qmd",
       });
+      // The path-shaped location resolves outside the Service folder
+      // (root/outside.md): no uri may be emitted — including the cross-drive
+      // case, where `path.relative` returns the absolute target instead of a
+      // `..`-prefixed path (guarded by `isAbsoluteLocationPath` on the
+      // relative result in `endpointRelativePathOf`).
+      expect(references[2]).not.toHaveProperty("ukp_uri");
       expect(references[2]).not.toHaveProperty("reason");
       expect(references[3]).toMatchObject({
         endpoint: "same-authority-external",
@@ -972,6 +979,81 @@ describe("search", () => {
       expect(ReadResult.exitCode).toBe(0);
       expect(ReadResult.stdout.length).toBeGreaterThan(0);
       expect(ReadResult.stderr).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("emits ukp_uri dual-key output for safely mappable results (ADR 0019)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-dual-key-"));
+    const registryPath = join(root, "registry.toml");
+    const artifactRoot = join(root, "artifacts");
+    const collectionShaped = createService(root, "collection-shaped", "collection-shaped");
+    // The default fixture branch emits qmd://fixture-qmd/documents/cad-notes.md,
+    // which does NOT exist inside this Service folder: no uri may be emitted.
+    const unmapped = createService(root, "unmapped-location", "unmapped-location");
+    mkdirSync(join(collectionShaped, "docs"), { recursive: true });
+    writeFileSync(
+      join(collectionShaped, "docs", "collection-note.md"),
+      "# Collection note\n\nalpha\nbeta\ngamma\n",
+      "utf8",
+    );
+    registerAt(registryPath, "collection-shaped", collectionShaped);
+    registerAt(registryPath, "unmapped-location", unmapped);
+    try {
+      const human = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "-c",
+        "collection-shaped",
+        "-c",
+        "unmapped-location",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(human.exitCode).toBe(0);
+      // Dual-key result unit: session handoff line + durable slot line.
+      expect(human.stdout).toContain("read: ukp read --endpoint collection-shaped b2c3d4:3");
+      expect(human.stdout).toContain("uri: ukp://collection-shaped/docs/collection-note.md");
+      // A location that does not resolve to an endpoint-local file gets no uri.
+      expect(human.stdout).not.toContain("uri: ukp://unmapped-location/");
+
+      const json = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--json",
+        "-c",
+        "collection-shaped",
+        "-c",
+        "unmapped-location",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+        artifactRoot,
+        artifactRunId: "dual-key-run",
+      });
+      expect(json.exitCode).toBe(0);
+      const envelope = JSON.parse(json.stdout);
+      const mapped = JSON.parse(
+        readFileSync(envelope.endpoints[0].references_artifact, "utf8"),
+      ).results[0];
+      expect(mapped.ukp_uri).toBe("ukp://collection-shaped/docs/collection-note.md");
+      const unmappedResult = JSON.parse(
+        readFileSync(envelope.endpoints[1].references_artifact, "utf8"),
+      ).results[0];
+      expect(unmappedResult).not.toHaveProperty("ukp_uri");
+
+      // Round-trip: the emitted uri, copied verbatim, reads the endpoint-local
+      // file through the exact slot route (get/file semantics, ADR 0017).
+      const readResult = executeReadCommand([mapped.ukp_uri], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(readResult.exitCode).toBe(0);
+      expect(readResult.stdout).toContain("# Collection note");
+      expect(readResult.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
