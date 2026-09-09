@@ -14,8 +14,12 @@ export interface GetRequest {
   path: string;
   lines?: LineRange;
   /** "uri" = exact slot addressing (ukp:// input, ADR 0014): the path must
-   * resolve exactly; no fuzzy fallback and no provider delegation on miss. */
-  addressing?: "uri";
+   * resolve exactly; no fuzzy fallback and no provider delegation on miss.
+   * "absolute" = Registry-mapped absolute path (ADR-URI-001): same exact
+   * intent — a miss fails fast with resource-missing and never enters the
+   * filesystem candidate scan (which on large endpoints is pathologically
+   * slow; BB-006 Run 2 evidence: 118s no-output on a miss). */
+  addressing?: "uri" | "absolute";
   /** Document-relative context (ADR-URI-001 tolerant tier): the
    * endpoint-relative route of the source document the reference was copied
    * from. `path` is then resolved against that document's directory. */
@@ -211,6 +215,14 @@ function normalizeFilename(name: string): string {
   return withoutExt.toLowerCase().replace(/[-_]/g, "");
 }
 
+/** Budget for the human-shorthand candidate scan. The scan is advisory only
+ * (Did-you-mean), so it is bounded: beyond this many files scanned it stops
+ * with whatever it has collected. The walk itself is cheap — the per-file
+ * name filter below rejects non-matching entries before ANY filesystem
+ * syscall (realpathSync per file on a large endpoint was the BB-006 Run 2
+ * pathology: 118s on a miss), so this budget is a safety net, not the fix. */
+const CANDIDATE_SCAN_FILE_BUDGET = 20000;
+
 function findFilesBySuffix(serviceFolder: string, suffix: string): {
   serviceReal: string;
   suffixMatches: string[];
@@ -227,8 +239,10 @@ function findFilesBySuffix(serviceFolder: string, suffix: string): {
   // For fuzzy matching, also normalize the path prefix (all segments except the last)
   const pathPrefix = suffixSegments.slice(0, -1).join("/");
   const normalizedPathPrefix = pathPrefix.replace(/\\/g, "/").toLowerCase().replace(/[-_]/g, "");
+  let filesScanned = 0;
 
   function scan(currentPath: string): void {
+    if (filesScanned > CANDIDATE_SCAN_FILE_BUDGET) return;
     let entries;
     try {
       entries = readdirSync(currentPath, { withFileTypes: true });
@@ -277,11 +291,21 @@ function findFilesBySuffix(serviceFolder: string, suffix: string): {
         visitedDirs.add(dirReal);
         scan(canonicalPath);
       } else if (isFile) {
+        filesScanned += 1;
+        // Cheap name filter BEFORE any per-file syscall: both match checks
+        // below are gated on the entry name (exact or normalized), so a
+        // non-matching name can skip realpathSync/relative entirely. On a
+        // large endpoint this is the difference between a cheap readdir walk
+        // and a per-file realpath storm (BB-006 Run 2: 118s miss).
+        const nameExact = entry.name === targetFileName;
+        if (!nameExact && normalizeFilename(entry.name) !== normalizedTargetName) {
+          continue;
+        }
         const fileReal = isSymlink ? canonicalPath : realpathSync(canonicalPath);
         const relPath = relative(serviceReal, fileReal).replace(/\\/g, "/");
 
         // Check 1: Exact suffix match (filename exact, path fuzzy)
-        if (entry.name === targetFileName) {
+        if (nameExact) {
           if (relPath === normalizedSuffix || relPath.endsWith("/" + normalizedSuffix)) {
             if (isInsideService(serviceReal, fileReal)) {
               suffixMatches.add(fileReal);
@@ -292,8 +316,7 @@ function findFilesBySuffix(serviceFolder: string, suffix: string): {
 
         // Check 2: Name fuzzy match (filename fuzzy with -/_ normalization, ignoring extension)
         // Also check path prefix if the user specified one
-        const normalizedName = normalizeFilename(entry.name);
-        if (normalizedName === normalizedTargetName) {
+        if (normalizeFilename(entry.name) === normalizedTargetName) {
           // If user specified a path prefix (e.g., "subdir/file.md"), verify it matches
           if (normalizedPathPrefix) {
             const fileDir = relative(serviceReal, isSymlink ? canonicalPath : realpathSync(join(canonicalPath, "..")))
@@ -507,7 +530,7 @@ export function executeGet(request: GetRequest, context: GetContext): GetResult 
       );
     }
     const mapped = resolveAbsoluteReference(request.path, registry);
-    request = { ...request, endpoint: mapped.endpoint, path: mapped.route };
+    request = { ...request, endpoint: mapped.endpoint, path: mapped.route, addressing: "absolute" };
     resolutionNote = `ukp read: absolute path matched endpoint '${mapped.endpoint}', route '${mapped.route}'`;
   } else if (request.fromRef !== undefined) {
     if (request.endpoint === undefined) {
@@ -642,6 +665,20 @@ function executeResolvedRead(
     }
     // realpathSync throws ENOENT if path doesn't exist
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      // Absolute-tier miss (ADR-URI-001): the input carried exact intent (a
+      // Registry-mapped absolute path), so there is no human-shorthand to
+      // recover from — fail fast with resource-missing and never enter the
+      // candidate scan (BB-006 Run 2 evidence: scanning a large external
+      // endpoint on such a miss took 118s with zero output).
+      if (request.addressing === "absolute") {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr:
+            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}'`
+            + ` (absolute paths address files exactly; the mapped route does not exist — the target may live one level deeper, e.g. under src/)\n`,
+        };
+      }
       // ADR 0017: read is file-native — a plain-path miss is resource-missing
       // on every endpoint; the provider is never entered from a miss. On a
       // QMD-backed endpoint the filesystem scan is advisory only (candidate

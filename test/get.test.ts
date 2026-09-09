@@ -249,13 +249,14 @@ describe("get", () => {
       expect(hit.stderr).toContain("absolute path matched endpoint 'notes', route 'docs/note.md'");
 
       // non-existing target inside the Service folder still maps (lexical containment)
+      // and fails fast: absolute tier = exact intent, no candidate scan
       const missing = executeGetCommand([resolve(service, "docs", "missing.md")], {
         currentDirectory: root,
         registryPath,
       });
       expect(missing.exitCode).toBe(1);
       expect(missing.stderr).toContain("route 'docs/missing.md'");
-      expect(missing.stderr).toContain("was not found");
+      expect(missing.stderr).toContain("absolute paths address files exactly");
 
       // outside every registered endpoint → usage error naming the registry
       writeFileSync(join(root, "secret.md"), "secret\n", "utf8");
