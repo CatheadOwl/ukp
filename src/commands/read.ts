@@ -95,7 +95,7 @@ function parseReadCommand(args: readonly string[]): {
 const UKP_URI_PREFIX_RE = /^[uU][kK][pP]:\/\//;
 
 /**
- * Percent-decode a `%XX`-escaped string into its UTF-8 form (G3 pin, D-059).
+ * Percent-decode a `%XX`-escaped string into its UTF-8 form.
  *
  * WHATWG-URL-style lenient decoding applied per component (endpoint /
  * rel-path / fragment): every valid `%XX` triplet contributes one byte to a
@@ -137,7 +137,7 @@ function percentDecodeUtf8(component: string): string {
  * Parse a `ukp://<endpoint>/<rel-path>[#fragment]` URI (ADR 0014 target form)
  * into a ReadRequest with exact slot addressing.
  *
- * Encoding stance (G3 pin, D-059): UTF-8/IRI semantics — raw UTF-8 is legal
+ * Encoding stance: UTF-8/IRI semantics — raw UTF-8 is legal
  * as-is; `%XX` triplets are percent-decoded per component (see
  * percentDecodeUtf8). Case stance: exact compare, no case folding and no
  * canonicalization (RFC 8089 precedent) — platform case-sensitivity
@@ -161,7 +161,7 @@ function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }):
     throw new ReadUsageError("ukp:// URI uses '/' as the path separator: ukp://<endpoint>/<rel-path>");
   }
   // No slash: the whole remainder is the endpoint with an empty rel-path.
-  // Percent-decoding is applied per component after the split (D-059): `/`
+  // Percent-decoding is applied per component after the split: `/`
   // and `#` are always literal delimiters at split time; a decoded `%2F`
   // becomes a separator character downstream, which is unambiguous because
   // no filesystem allows `/` inside a name.

@@ -1,6 +1,6 @@
 /**
  * Deterministic large-tree fixture generator for the miss-path/scan
- * performance audit (workunits/ukp_uri/TODO/20260909-miss-path-scan-performance-audit.md).
+ * performance audit.
  *
  * Usage: bun run ukp/test/fixtures/generate-large-tree.ts <target-dir> [fileCount] [fanout]
  *

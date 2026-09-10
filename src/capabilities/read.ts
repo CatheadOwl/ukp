@@ -805,7 +805,7 @@ function executeResolvedRead(
       // QMD-backed endpoint the filesystem scan is advisory only (candidate
       // list for human shorthand recovery); it never resolves the read, so
       // provider collection/ignore visibility is never bypassed by a silent
-      // hit (ISSUE-007). Pure file-backed endpoints keep the file layer's
+      // hit. Pure file-backed endpoints keep the file layer's
       // own suffix/fuzzy resolution, whose visibility root is the Service
       // folder itself.
       if (qmdBacked) {

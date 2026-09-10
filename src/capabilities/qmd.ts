@@ -12,7 +12,7 @@
  * emits the fingerprint with a leading `#` (`#abc123`); `search` strips it on
  * the surface so the token is verbatim-copyable, and `read` re-adds it before
  * constructing `qmd get #docid[:line]`. A leading `#` is a shell comment and
- * would silently truncate the reference (ISSUE-008), so it never appears on the
+ * would silently truncate the reference, so it never appears on the
  * UKP surface.
  */
 export function isBareDocidReference(reference: string): boolean {
@@ -55,7 +55,7 @@ export function defaultQmdCommand(): string[] | undefined {
   if (lower.endsWith(".ps1")) {
     return [Bun.which("powershell.exe") ?? "powershell.exe", "-NoProfile", "-File", executable];
   }
-  // ISSUE-011: npm's global bin shims on Windows (qmd.cmd) are batch scripts,
+  // npm's global bin shims on Windows (qmd.cmd) are batch scripts,
   // not executable images — CreateProcess cannot start them directly and
   // spawnSync returns result.error. Route them through cmd.exe, same wrapper
   // precedent as the .ps1 branch above. The wrapper prefix is detected by
@@ -110,7 +110,7 @@ function isCmdWrapper(command: readonly string[]): boolean {
  * invocation.
  *
  * For a plain command the provider arguments are appended verbatim. For a
- * cmd.exe wrapper (ISSUE-011) the whole call after `/c` must become ONE argv
+ * cmd.exe wrapper the whole call after `/c` must become ONE argv
  * entry carrying the canonical cmd pattern: every element quoted with
  * internal quotes doubled, the whole payload wrapped in one extra outer
  * quote pair, spawned with `windowsVerbatimArguments: true` so the runtime

@@ -17,7 +17,7 @@ import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { acquireLock, LockBusyError, releaseLock } from "../fslock.ts";
 
-// D-030 slug profile (1–63 chars, strict lowercase ASCII slug) shares the
+// The slug profile (1–63 chars, strict lowercase ASCII slug) shares the
 // endpoint-name grammar, so the Manifest pattern is reused deliberately.
 export const PROPOSE_SLUG = ENDPOINT_NAME;
 
@@ -216,7 +216,7 @@ export interface ProposeUpsertContext {
 }
 
 // The file-provider upsert: sibling lock, in-lock re-read, three-state
-// classification, temp-file + atomic replace (D-032 family discipline).
+// classification, temp-file + atomic replace discipline.
 export function proposeUpsert(
   serviceFolder: string,
   capability: ManifestCapability,

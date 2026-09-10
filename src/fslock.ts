@@ -56,7 +56,7 @@ function reclaimStaleLock(lockPath: string): boolean {
   }
 }
 
-// D-032-family sibling lock: exclusive create with owner metadata, stale
+// Write-discipline sibling lock: exclusive create with owner metadata, stale
 // reclamation (same host, >10min old, dead pid), bounded retry.
 export function acquireLock(lockPath: string): number {
   const deadline = Date.now() + 5000;

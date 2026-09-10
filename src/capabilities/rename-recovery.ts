@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { buildQmdInvocation, defaultQmdCommand, providerTimeoutMs } from "./qmd.ts";
 import { endpointRelativePathOf, providerLocationOf } from "./search.ts";
 
-// ADR 0020 / D-066: read-time layered rename recovery. This module owns the
+// ADR 0020: read-time layered rename recovery. This module owns the
 // miss-path descent (L1 git-derived -> L2 search re-anchor -> exhausted) and
 // the ukp-pin three-valued verification. It never resolves a read by itself —
 // the caller (read capability) still owns the final file read and the miss
