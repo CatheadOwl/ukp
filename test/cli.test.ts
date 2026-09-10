@@ -132,6 +132,14 @@ describe("CLI bootstrap", () => {
     expect(errors.join("\n")).toContain("unknown command 'get'");
   });
 
+  test("ukp move does not exist (Q4 retirement): recovery adds no command surface", () => {
+    const errors: string[] = [];
+    expect(runCli(["move", "-c", "notes", "docs/a.md", "docs/b.md"], undefined, (message) => errors.push(message))).toBe(2);
+    expect(errors.join("\n")).toContain("unknown command 'move'");
+    // The help surface stays clean of a move entry.
+    expect(renderHelp()).not.toContain("\n  move");
+  });
+
   test("inspect help documents endpoint selectors and exits successfully", () => {
     const output: string[] = [];
     expect(renderInspectHelp()).toContain("Usage: ukp inspect");

@@ -585,7 +585,7 @@ function createConfigService(root: string, endpointName: string): string {
   return service;
 }
 
-function readQmdInvocation(service: string): { reference?: string; noLineNumbers?: boolean } {
+function readQmdInvocation(service: string): { commandName?: string; reference?: string; noLineNumbers?: boolean } {
   return JSON.parse(readFileSync(join(service, "qmd-fixture-invocation.json"), "utf8"));
 }
 
@@ -602,14 +602,16 @@ describe("read/qmd adapter", () => {
         qmdCommand: [nodeExecutable, qmdFixtureExecutable],
       });
       // ADR 0017: shape-based dispatch — a plain-path miss never enters the
-      // provider; it fails as resource-missing with the file layer's
-      // candidate list (advisory only, never a silent weak-read hit).
+      // provider for a read; it fails as resource-missing with the file
+      // layer's candidate list (advisory only, never a silent weak-read hit).
+      // ADR 0020: the miss path may invoke an advisory L2 search recall; a
+      // provider get (read delegation) is still forbidden.
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("resource-missing 'running_agents.md' in endpoint 'fixture-qmd'");
       expect(result.stderr).toContain("Did you mean");
       expect(result.stderr).toContain("docs/ja/running_agents.md");
       expect(result.stdout).toBe("");
-      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+      expect(readQmdInvocation(service).commandName).toBe("search");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -901,7 +903,9 @@ describe("read/qmd adapter", () => {
       expect(result.stderr).toContain("docs/config.md");
       expect(result.stderr).toContain("docs/ja/config.md");
       expect(result.stdout).toBe("");
-      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+      // ADR 0020: advisory L2 search recall on the miss is allowed; a
+      // provider get (read delegation) remains forbidden.
+      expect(readQmdInvocation(service).commandName).toBe("search");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1178,8 +1182,10 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
       });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("resource-missing 'docs/absent.md'");
-      // Exact slot addressing: no provider invocation on a URI miss.
-      expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
+      // Exact slot addressing: no provider read delegation on a URI miss
+      // (ADR 0017). The ADR 0020 L2 recall may invoke an advisory search;
+      // a get invocation is still forbidden.
+      expect(readQmdInvocation(service).commandName).toBe("search");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
