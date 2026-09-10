@@ -77,7 +77,7 @@ you.
 | `ukp register` / `ukp unregister --endpoint <name>` / `ukp list` | Manages Host Registry endpoint bindings. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp search` | Runs lexical search; `--recursive` expands direct authority/context dependencies. |
-| `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. |
+| `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
 | `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
 | `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
 

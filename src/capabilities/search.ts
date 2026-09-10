@@ -420,7 +420,9 @@ function lineOf(result: unknown): number | undefined {
   return Number.isSafeInteger(line) && (line as number) > 0 ? (line as number) : undefined;
 }
 
-function providerLocationOf(result: unknown): string {
+/** Exported for the rename-recovery L2 re-anchor (ADR 0020): extracts the
+ * provider location (`uri`/`file` field) of one parsed QMD result object. */
+export function providerLocationOf(result: unknown): string {
   if (typeof result !== "object" || result === null) return "";
   const record = result as { uri?: unknown; file?: unknown };
   if (typeof record.uri === "string") return record.uri;
@@ -455,7 +457,10 @@ function isAbsoluteLocationPath(location: string): boolean {
  * not name matching, decides (lexical containment plus a realpath pass so
  * symlink escapes cannot yield an unreadable slot, mirroring the read hit path).
  */
-function endpointRelativePathOf(providerLocation: string, endpointFolder: string): string | undefined {
+/** Exported for the rename-recovery L2 re-anchor (ADR 0020): maps a provider
+ * location to an endpoint-relative route when it safely resolves inside the
+ * Service folder to an existing regular file. */
+export function endpointRelativePathOf(providerLocation: string, endpointFolder: string): string | undefined {
   if (!providerLocation.startsWith("qmd://")) return undefined;
   const rest = providerLocation.slice("qmd://".length);
   let candidate: string;

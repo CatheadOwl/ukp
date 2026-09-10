@@ -5,6 +5,7 @@ import { loadManifest } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, providerTimeoutMs, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
+import { isValidPin, pinFromSourceDocument, recoverRenamedResource, type RecoveryCandidate } from "./rename-recovery.ts";
 
 export interface ReadRequest {
   /** Undefined only for an absolute filesystem reference, which the
@@ -24,6 +25,14 @@ export interface ReadRequest {
    * endpoint-relative route of the source document the reference was copied
    * from. `path` is then resolved against that document's directory. */
   fromRef?: string;
+  /** Consumer-pinned content hash (`sha256-<64 hex>`, ADR 0020 / spec
+   * read-rename-recovery): the ukp-pin verification key for the miss-path
+   * recovery descent. Absent = stale-unknown verification. */
+  pin?: string;
+  /** The reference exactly as the caller wrote it before tolerant-tier
+   * rewriting — used to locate the same-line ukp-pin annotation in the
+   * --from source document (Q1 spelling). */
+  sourceReference?: string;
 }
 
 export interface LineRange {
@@ -41,6 +50,18 @@ export interface ReadResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** Rename-recovery metadata (ADR 0020 / spec read-rename-recovery) for the
+   * JSON failure envelope: which layers were attempted, whether a recovered
+   * route was read, and advisory candidates on exhaustion. Human output does
+   * not render this structurally — the echo/warnings already carry it. */
+  recovery?: {
+    attempted: string[];
+    outcome: "recovered" | "exhausted";
+    recoveredTo?: string;
+    layer?: string;
+    verification?: string;
+    candidates?: RecoveryCandidate[];
+  };
 }
 
 export class ReadUsageError extends Error {
@@ -484,6 +505,69 @@ function readViaQmd(
   return { exitCode: 0, stdout: body, stderr: "" };
 }
 
+/**
+ * Miss-path rename recovery (ADR 0020 / spec read-rename-recovery): run the
+ * layered descent for a slot miss and, on recovery, read the proposed route
+ * with the same line-window contract. Returns either the recovered read
+ * (echo + warnings prepended on stderr, `recovery` metadata attached) or a
+ * marker the miss site merges into its existing resource-missing wording
+ * (plus advisory candidates). Provider shapes never enter here (spec:
+ * recovery is a file-slot concern); the L2 search layer runs only when the
+ * endpoint declares a qmd search capability, and its absence is silent.
+ */
+function attemptRenameRecovery(
+  request: ReadRequest,
+  endpointName: string,
+  serviceFolder: string,
+  qmdCommand: readonly string[] | undefined,
+  pin: string | undefined,
+): { kind: "recovered"; result: ReadResult } | { kind: "exhausted"; recovery: NonNullable<ReadResult["recovery"]> } {
+  const outcome = recoverRenamedResource({
+    route: request.path,
+    endpointName,
+    serviceFolder,
+    ...(pin !== undefined ? { pin } : {}),
+    ...(qmdCommand !== undefined ? { qmdCommand } : {}),
+  });
+  const metadata = {
+    attempted: outcome.attempted,
+    outcome: outcome.status,
+    ...(outcome.recoveredRoute !== undefined ? { recoveredTo: outcome.recoveredRoute } : {}),
+    ...(outcome.layer !== undefined ? { layer: outcome.layer } : {}),
+    ...(outcome.verification !== undefined ? { verification: outcome.verification } : {}),
+    ...(outcome.candidates.length > 0 ? { candidates: outcome.candidates } : {}),
+  };
+  if (outcome.status === "recovered" && outcome.recoveredRoute !== undefined) {
+    try {
+      const targetPath = resolveEndpointPath(serviceFolder, outcome.recoveredRoute);
+      const read = readTargetWithLines(targetPath, { ...request, path: outcome.recoveredRoute });
+      if (read.exitCode === 0) {
+        const echo =
+          `ukp read: recovered: '${request.path}' moved to '${outcome.recoveredRoute}' (${outcome.layer === "search-reanchor" ? "search re-anchor" : "git history"})\n`;
+        const warnings = outcome.warnings.map((line) => `ukp read: warning: ${line}\n`).join("");
+        return { kind: "recovered", result: { ...read, stderr: `${echo}${warnings}${read.stderr}`, recovery: metadata } };
+      }
+      // The proposed route failed its own read (e.g. start-beyond-eof): the
+      // recovery found the resource but the read contract still governs —
+      // surface that failure rather than hiding behind resource-missing.
+      return { kind: "recovered", result: { ...read, recovery: metadata } };
+    } catch {
+      // Proposed route vanished or escaped containment mid-recovery: fall
+      // through to exhaustion (recorded below with the attempted layers).
+    }
+  }
+  return { kind: "exhausted", recovery: metadata };
+}
+
+/** Advisory recovery candidates appended to a resource-missing miss (spec
+ * read-rename-recovery): pin-rejected and search-recalled routes the consumer
+ * may confirm manually. Empty input renders nothing. */
+function formatRecoveryCandidates(candidates: readonly RecoveryCandidate[] | undefined): string {
+  if (!candidates || candidates.length === 0) return "";
+  const lines = candidates.map((candidate) => `  - ${candidate.path} (recovery candidate, ${candidate.verified})`);
+  return `Rename recovery candidates:\n${lines.join("\n")}\n`;
+}
+
 function readTargetWithLines(targetPath: string, request: ReadRequest): ReadResult {
   let content: string;
   try {
@@ -560,7 +644,8 @@ export function executeRead(request: ReadRequest, context: ReadContext): ReadRes
     }
     const resolved = resolveDocRelativeReference(request.fromRef, request.path);
     resolutionNote = `ukp read: resolved '${request.path}' from '${request.fromRef}' -> '${resolved}'`;
-    request = { ...request, path: resolved };
+    // Keep the verbatim reference for same-line ukp-pin extraction (Q1).
+    request = { ...request, path: resolved, sourceReference: request.path };
   }
 
   const result = executeResolvedRead(request, context, registry);
@@ -597,6 +682,13 @@ function executeResolvedRead(
     };
   }
 
+  // ukp-pin from the --from source document (Q1 same-line spelling): the
+  // consumer's verification key travels with the reference, not the command.
+  let pin = request.pin;
+  if (pin === undefined && request.fromRef !== undefined && request.sourceReference !== undefined) {
+    pin = pinFromSourceDocument(request.fromRef, request.sourceReference, service.folder);
+  }
+
   // QMD-backed route is derived from the declared search provider; there is no
   // explicit get capability in the current Manifest. ADR 0017: QMD visibility
   // governs only the explicit provider tiers (bare docid, qmd://), never the
@@ -625,11 +717,17 @@ function executeResolvedRead(
         return { exitCode: 2, stdout: "", stderr: `ukp read: ${error.message}\n` };
       }
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        // ADR 0020 miss-path recovery: the URI slot missed, so descend the
+        // layered stack (git-derived -> search re-anchor) before classifying.
+        const recovered = attemptRenameRecovery(request, binding.name, service.folder, qmdCommand, pin);
+        if (recovered.kind === "recovered") return recovered.result;
         return {
           exitCode: 1,
           stdout: "",
           stderr:
-            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}' (ukp:// addresses a slot exactly; no fuzzy resolution)\n`,
+            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}' (ukp:// addresses a slot exactly; no fuzzy resolution)\n`
+            + formatRecoveryCandidates(recovered.recovery.candidates),
+          recovery: recovered.recovery,
         };
       }
       throw error;
@@ -690,12 +788,16 @@ function executeResolvedRead(
       // candidate scan (BB-006 Run 2 evidence: scanning a large external
       // endpoint on such a miss took 118s with zero output).
       if (request.addressing === "absolute") {
+        const recovered = attemptRenameRecovery(request, binding.name, service.folder, qmdCommand, pin);
+        if (recovered.kind === "recovered") return recovered.result;
         return {
           exitCode: 1,
           stdout: "",
           stderr:
             `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}'`
-            + ` (absolute paths address files exactly; the mapped route does not exist — the target may live one level deeper, e.g. under src/)\n`,
+            + ` (absolute paths address files exactly; the mapped route does not exist — the target may live one level deeper, e.g. under src/)\n`
+            + formatRecoveryCandidates(recovered.recovery.candidates),
+          recovery: recovered.recovery,
         };
       }
       // ADR 0017: read is file-native — a plain-path miss is resource-missing
@@ -707,6 +809,8 @@ function executeResolvedRead(
       // own suffix/fuzzy resolution, whose visibility root is the Service
       // folder itself.
       if (qmdBacked) {
+        const recovered = attemptRenameRecovery(request, binding.name, service.folder, qmdCommand, pin);
+        if (recovered.kind === "recovered") return recovered.result;
         const { serviceReal, suffixMatches, nameFuzzyMatches } = findFilesBySuffix(service.folder, request.path);
         const candidates = [...suffixMatches, ...nameFuzzyMatches]
           .map((m) => `  - ${relative(serviceReal, m).replace(/\\/g, "/")}`);
@@ -724,7 +828,9 @@ function executeResolvedRead(
             + `${shapeHint}.\n`
             + (candidates.length > 0
               ? `Did you mean:\n${candidates.join("\n")}\n`
-              : ""),
+              : "")
+            + formatRecoveryCandidates(recovered.recovery.candidates),
+          recovery: recovered.recovery,
         };
       }
       // Pure file-backed: filesystem fuzzy fallback (visibility root is the
@@ -754,10 +860,15 @@ function executeResolvedRead(
           stderr: `ukp read: no exact match for '${request.path}' in endpoint '${binding.name}'.\nDid you mean:\n${matchList}\n`,
         };
       } else {
+        const recovered = attemptRenameRecovery(request, binding.name, service.folder, undefined, pin);
+        if (recovered.kind === "recovered") return recovered.result;
         return {
           exitCode: 1,
           stdout: "",
-          stderr: `ukp read: resource '${request.path}' was not found in endpoint '${binding.name}'\n`,
+          stderr:
+            `ukp read: resource '${request.path}' was not found in endpoint '${binding.name}'\n`
+            + formatRecoveryCandidates(recovered.recovery.candidates),
+          recovery: recovered.recovery,
         };
       }
     } else {
