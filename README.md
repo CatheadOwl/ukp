@@ -8,8 +8,7 @@ reading, and refreshing knowledge without memorizing physical paths or
 provider-specific commands.
 
 > [!NOTE]
-> UKP is the current public MVP CLI. It is not a stable 1.0 protocol, and it
-> does not publish the private planning workspace used to build it.
+> UKP is the current public MVP CLI. It is not a stable 1.0 protocol.
 
 ## Why UKP
 
@@ -34,6 +33,45 @@ Use UKP when:
 - Refresh provider-owned indexes through a stable UKP command.
 - Give agents JSON output and provider-native artifacts when they need
   machine-readable handoff.
+
+## Install
+
+```bash
+npm install -g @catheadowl/ukp
+ukp --version
+ukp guide service
+```
+
+For one-off execution from the npm registry:
+
+```bash
+npx @catheadowl/ukp --version
+pnpm dlx @catheadowl/ukp --version
+bunx @catheadowl/ukp --version
+bunx @catheadowl/ukp guide service
+```
+
+For local development from a checkout:
+
+```bash
+bun install
+bun run src/cli.ts --version
+bun run src/cli.ts guide service
+```
+
+Requirements:
+
+- Bun `1.3.14` or newer in the verified baseline family. The package is
+  published through npm, but the CLI currently runs on Bun.
+- QMD on `PATH` for `search/qmd`, `read/qmd`, and `refresh/qmd`. QMD is an
+  external tool maintained as a separate project; it is required for the
+  QMD-backed search, read, and refresh capabilities, which reach it through
+  UKP's provider path. See QMD's own release channel and documentation for
+  installation.
+- Node/npm for package dry-runs and publishing workflows.
+
+UKP can be installed without QMD, but QMD-backed capabilities will report as
+unavailable until the `qmd` executable is available.
 
 ## First Run
 
@@ -70,8 +108,9 @@ you.
 |---|---|
 | `ukp version` / `ukp --version` / `ukp -V` | Shows the package version. |
 | `ukp guide service` | Shows the provider-agnostic Service setup path. |
-| `ukp guide service qmd` | Shows provider-owned setup for the current QMD provider. |
+| `ukp guide service qmd` | Shows provider-owned setup for the QMD provider. |
 | `ukp guide client` | Shows how a workspace uses registered Services by default. |
+| `ukp guide propose` | Shows the propose quickstart: submitting idempotent change proposals to a Service. |
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp register` / `ukp unregister --endpoint <name>` / `ukp list` | Manages Host Registry endpoint bindings. |
@@ -80,6 +119,7 @@ you.
 | `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
 | `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
 | `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
+| `ukp propose` | Creates a proposal file in a target endpoint's proposal folder, dispatching via the file provider; resubmitting the same id updates the same proposal (created/unchanged/updated, revision bump). |
 
 `--endpoint <name>` is the canonical endpoint selector. `-c <name>` remains a
 compatibility alias. `-g` explicitly selects the full local Host Registry for
@@ -103,52 +143,12 @@ commands that support global scope.
 - automatic artifact browsing, cleanup, or "select result N" references;
 - standalone binary distribution.
 
-## Install
-
-After the first public package is published:
-
-```bash
-bun --version
-npm install -g @catheadowl/ukp
-ukp --version
-ukp guide service
-```
-
-For one-off execution from the npm registry:
-
-```bash
-npx @catheadowl/ukp --version
-pnpm dlx @catheadowl/ukp --version
-bunx @catheadowl/ukp --version
-bunx @catheadowl/ukp guide service
-```
-
-For local development from a checkout:
-
-```bash
-bun install
-bun run src/cli.ts --version
-bun run src/cli.ts guide service
-```
-
-Requirements:
-
-- Bun `1.3.14` or newer in the verified baseline family. The package is
-  published through npm, but the CLI currently runs on Bun.
-- QMD on `PATH` for `search/qmd`, `read/qmd`, and `refresh/qmd`.
-- Node/npm for package dry-runs and publishing workflows.
-
-UKP can be installed without QMD, but QMD-backed capabilities will report as
-unavailable until the `qmd` executable is available.
-
 ## Development
 
-```bash
-bun install --frozen-lockfile
-bun test
-bun run typecheck
-npm pack --dry-run --json
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
+
+- Repository: https://github.com/CatheadOwl/ukp
+- Issues: https://github.com/CatheadOwl/ukp/issues
 
 The npm package is intentionally allowlisted. The public tarball should contain
 runtime source, README, package metadata, lock/config files, and the project

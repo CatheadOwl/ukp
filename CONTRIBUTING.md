@@ -13,12 +13,13 @@ bun run typecheck
 npm pack --dry-run --json
 ```
 
-Release maintainers also run private release preflight checks from the meta
-workspace before publishing.
+Release maintainers run additional release preflight checks before
+publishing; see the release process.
 
 ## Boundaries
 
-- Do not publish or depend on the private meta workspace.
+- Do not publish or depend on any private development material outside this
+  repository.
 - Keep QMD collection, index, ranking, and maintenance internals provider-owned.
 - Do not add Remote, `rg`, `vsearch`, API Search, full Client Scope, or
   standalone binary distribution unless that scope has been explicitly accepted.

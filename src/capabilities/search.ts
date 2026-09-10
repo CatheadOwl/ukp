@@ -292,7 +292,7 @@ function commandFor(endpoint: PlannedEndpoint, parsed: ParsedSearch, json: boole
   ];
   if (json) providerArgs.push("--format", "json");
   // The query is arbitrary user text: route through buildQmdInvocation so a
-  // cmd.exe shim wrapper (ISSUE-011) never lets cmd re-parse it.
+  // cmd.exe shim wrapper never lets cmd re-parse it.
   return buildQmdInvocation(endpoint.command!, providerArgs);
 }
 
@@ -431,8 +431,8 @@ export function providerLocationOf(result: unknown): string {
 }
 
 /**
- * Percent-encode a `ukp://` path segment for emission (ADR 0019; the decode
- * side is pinned by D-059). Raw UTF-8 stays raw (grep-ability, IRI semantics);
+ * Percent-encode a `ukp://` path segment for emission (ADR 0019; the read
+ * side percent-decodes symmetrically). Raw UTF-8 stays raw (grep-ability, IRI semantics);
  * only characters that cannot round-trip through the hierarchical form raw are
  * encoded: `%` (would be re-decoded on read), space, and the `#`/`?` delimiters.
  */

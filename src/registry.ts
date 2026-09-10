@@ -39,7 +39,10 @@ export class RegistryError extends Error {
 
 export class RegistryBusyError extends RegistryError {
   constructor(path: string) {
-    super(`registry_busy: ${path}`);
+    super(
+      `registry_busy: ${path} (another ukp process holds the registry lock; ` +
+        `stale locks are reclaimed automatically — close other ukp commands or retry shortly)`,
+    );
     this.name = "RegistryBusyError";
   }
 }

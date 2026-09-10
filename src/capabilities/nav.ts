@@ -5,9 +5,9 @@ import { resolveFileNativeCapability, unsupportedFileNativeProviderMessage } fro
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 
-// Nav capability (W1, workunits/ukp_nav): UKP-native file provider that
+// Nav capability: UKP-native file provider that
 // enumerates the Markdown structure of one endpoint. The design stance is
-// provider-owned visibility (D-047 / ADR-0009 spirit): the exclusion rules
+// provider-owned visibility: the exclusion rules
 // below are the file provider's own visibility contract — the caller can
 // never override them from the command surface (path/depth/format only).
 
@@ -59,7 +59,7 @@ export function resolveNavVisibility(capability: ManifestCapability): NavVisibil
  * still walks everything so `[truncated: N]` totals stay exact. */
 export const NAV_MAX_ENTRIES = 2000;
 
-/** Budget on per-entry description reads (ADR 0018 / D-063): the expensive
+/** Budget on per-entry description reads (ADR 0018): the expensive
  * cost class gets a configurable cap. Configurable by precedent (VS Code
  * maxResults, TS/VS Code "let the user decide what to skip"); loud by
  * contract when hit (never a silent drop). Counts stay exact and unbounded —
@@ -640,8 +640,8 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
   }
 
   // Route root: the optional path must resolve to a directory inside the
-  // Service folder. Exact addressing only — no fuzzy candidates (D-047
-  // spirit): a miss fails precisely instead of guessing.
+  // Service folder. Exact addressing only — no fuzzy candidates: a miss
+  // fails precisely instead of guessing.
   let routeRootFolder = service.folder;
   let root = ".";
   if (request.path !== undefined) {

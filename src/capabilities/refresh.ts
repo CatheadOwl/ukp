@@ -207,7 +207,7 @@ function commandFor(endpoint: Extract<PlannedEndpoint, { status: "executable" }>
   args: string[];
   verbatim: boolean;
 } {
-  // Uniform provider plumbing (ISSUE-011): a cmd.exe shim wrapper must get
+  // Uniform provider plumbing: a cmd.exe shim wrapper must get
   // the whole call as one cmd-escaped /c payload.
   return buildQmdInvocation(endpoint.command, ["update"]);
 }

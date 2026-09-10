@@ -31,7 +31,7 @@ export { renderNavHelp } from "./commands/nav.ts";
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
   ["read", "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)"],
-  // `get` was renamed to `read` (D-062); with no external users the old
+  // `get` was renamed to `read`; with no external users the old
   // spelling was removed outright instead of kept as an alias.
   ["guide", "show short operational guides"],
   ["init", "initialize UKP-owned files"],

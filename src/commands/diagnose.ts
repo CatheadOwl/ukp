@@ -50,6 +50,10 @@ export class DiagnoseUsageError extends Error {
   }
 }
 
+// Provider registration point for this UKP build: every provider that can
+// back a capability must have its availability check here. Adding a provider
+// means (1) a branch in this resolver and (2) a capability adapter under
+// capabilities/ that the command layer dispatches to.
 export function defaultProviderResolver(provider: string, capability = "search"): ProviderCheck {
   if (isFileNativeCapability(capability)) {
     // Only the UKP-native file provider exists for the file-native set;
