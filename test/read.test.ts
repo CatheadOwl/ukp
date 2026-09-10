@@ -1370,4 +1370,83 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Zero-output hang guard (miss-path-scan audit): a provider that never
+  // responds must land in a classified provider-timeout failure, not silence.
+  test("classifies a hung provider as provider-timeout instead of hanging", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-read-hang-"));
+    const registryPath = join(root, "registry.toml");
+    // Folder name "provider-hang" drives the fixture's sleep branch. The
+    // docid tier routes through the QMD adapter, which keys on the search
+    // capability's provider (qmdBacked) — declare both.
+    const service = join(root, "provider-hang");
+    mkdirSync(join(service, ".ukp"), { recursive: true });
+    writeFileSync(
+      join(service, ".ukp", "service.toml"),
+      "name = \"provider-hang\"\n\n[capabilities.search]\nprovider = \"qmd\"\n\n[capabilities.read]\nprovider = \"qmd\"\n",
+      "utf8",
+    );
+    registerAt(registryPath, "provider-hang", service);
+    const previous = process.env.UKP_PROVIDER_TIMEOUT_MS;
+    process.env.UKP_PROVIDER_TIMEOUT_MS = "1000";
+    try {
+      const started = Date.now();
+      const result = executeReadCommand(["--endpoint", "provider-hang", "abc123"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, qmdFixtureExecutable],
+      });
+      expect(Date.now() - started).toBeLessThan(15_000);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("provider-timeout");
+    } finally {
+      if (previous === undefined) delete process.env.UKP_PROVIDER_TIMEOUT_MS;
+      else process.env.UKP_PROVIDER_TIMEOUT_MS = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  // CANDIDATE_SCAN_FILE_BUDGET trigger branch (miss-path-scan audit): with the
+  // budget overridden small, the advisory scan must stop after the budget —
+  // order-independent because every directory holds exactly one matching file,
+  // so exactly budget+1 directories can be walked before the gate closes.
+  test("candidate scan respects UKP_CANDIDATE_SCAN_FILE_BUDGET", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-read-budget-"));
+    const registryPath = join(root, "registry.toml");
+    const service = join(root, "budget-fx");
+    mkdirSync(join(service, ".ukp"), { recursive: true });
+    writeFileSync(
+      join(service, ".ukp", "service.toml"),
+      "name = \"budget-fx\"\n\n[capabilities.read]\nprovider = \"file\"\n",
+      "utf8",
+    );
+    for (let i = 1; i <= 5; i++) {
+      mkdirSync(join(service, `d${i}`), { recursive: true });
+      writeFileSync(join(service, `d${i}`, "missing-note.md"), "match\n", "utf8");
+    }
+    registerAt(registryPath, "budget-fx", service);
+    const previous = process.env.UKP_CANDIDATE_SCAN_FILE_BUDGET;
+    process.env.UKP_CANDIDATE_SCAN_FILE_BUDGET = "2";
+    try {
+      const result = executeReadCommand(["--endpoint", "budget-fx", "missing-note.md"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      // Budget 2: the walk stops once the running file count passes it, so
+      // 2–3 of the five directories' matches reach the candidate list
+      // (order-dependent edge) — never all five (budget ignored) and never a
+      // single auto-resolved match (walk unbounded would still be multiple;
+      // a single match can only happen if the scan stopped too early —
+      // covered by exit code + list shape below).
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("multiple resources match");
+      const suggestions = result.stderr.split("\n").filter((line) => line.includes("missing-note.md"));
+      expect(suggestions.length).toBeGreaterThanOrEqual(2);
+      expect(suggestions.length).toBeLessThanOrEqual(3);
+    } finally {
+      if (previous === undefined) delete process.env.UKP_CANDIDATE_SCAN_FILE_BUDGET;
+      else process.env.UKP_CANDIDATE_SCAN_FILE_BUDGET = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

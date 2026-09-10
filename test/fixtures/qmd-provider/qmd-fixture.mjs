@@ -52,6 +52,12 @@ if (shouldCancel) {
   process.exit(130);
 }
 
+// Zero-output hang guard fixture branch: a provider that never responds. The
+// caller's spawnSync timeout (UKP_PROVIDER_TIMEOUT_MS) kills this with SIGTERM.
+if (serviceFolder.includes("provider-hang")) {
+  await new Promise((resolve) => setTimeout(resolve, 30_000));
+}
+
 if (isGet) {
   if (serviceFolder.includes("no-lines")) {
     process.stderr.write("qmd: unknown option '--no-line-numbers'\n");

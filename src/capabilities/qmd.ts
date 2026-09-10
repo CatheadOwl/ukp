@@ -69,6 +69,34 @@ export function defaultQmdCommand(): string[] | undefined {
   return [executable];
 }
 
+function envTimeoutMs(name: string, fallbackMs: number): number {
+  const raw = process.env[name];
+  if (raw !== undefined && /^\d+$/.test(raw) && Number(raw) >= 1_000) return Number(raw);
+  return fallbackMs;
+}
+
+/**
+ * Zero-output hang guard (miss-path-scan performance audit, 2026-09-10): every
+ * provider spawn must carry a timeout so a hung provider lands in a classified
+ * failure instead of silence — agent consumers have zero tolerance for
+ * unresponsive commands (BB-004/BB-006 measured two 120s timeouts → detour).
+ * `UKP_PROVIDER_TIMEOUT_MS` overrides for tests and slow machines; minimum
+ * 1s, default 60s. spawnSync kills with SIGTERM on expiry — callers classify
+ * `signal === "SIGTERM"` alongside their failure branches.
+ */
+export function providerTimeoutMs(): number {
+  return envTimeoutMs("UKP_PROVIDER_TIMEOUT_MS", 60_000);
+}
+
+/**
+ * Refresh runs `qmd update`, which may legitimately index a large corpus —
+ * its ceiling is correspondingly higher (default 600s, overridable via
+ * `UKP_REFRESH_TIMEOUT_MS`).
+ */
+export function refreshTimeoutMs(): number {
+  return envTimeoutMs("UKP_REFRESH_TIMEOUT_MS", 600_000);
+}
+
 /** Detect a defaultQmdCommand cmd.exe wrapper prefix (…, "/c", <exe>). */
 function isCmdWrapper(command: readonly string[]): boolean {
   if (command.length < 5) return false;
