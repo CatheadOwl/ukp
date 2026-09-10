@@ -148,12 +148,6 @@ function createServiceManifest(
   const folder = resolveServiceFolder(currentDirectory);
   const ukpDirectory = join(folder, ".ukp");
   const manifestPath = join(ukpDirectory, "service.toml");
-  const clientConfigPath = join(ukpDirectory, "client.toml");
-  if (existsSync(clientConfigPath)) {
-    throw new Error(
-      `Folder is already a Client workspace: ${clientConfigPath}. Remove the Client Config before initializing a Service.`,
-    );
-  }
   const { name, nameSource, dependencies } = validateInitServiceOptions(folder, options);
   if (existsSync(manifestPath)) {
     throw new Error(`Service Manifest already exists: ${manifestPath}`);
