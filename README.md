@@ -3,9 +3,9 @@
 Local-first Unified Knowledge Plane CLI for named knowledge endpoints.
 
 UKP turns folders into services that can be addressed by name. That gives
-humans and agents one stable command surface for inspecting, searching,
-reading, and refreshing knowledge without memorizing physical paths or
-provider-specific commands.
+humans and agents one stable command surface for inspecting, navigating,
+reading, searching, and refreshing knowledge without memorizing physical
+paths or provider-specific commands.
 
 > [!NOTE]
 > UKP is the current public MVP CLI. It is not a stable 1.0 protocol.
@@ -27,10 +27,14 @@ Use UKP when:
 
 - Register local folders as named knowledge endpoints.
 - Inspect what a command will touch before running it.
+- Navigate the Markdown structure of an endpoint—folders, descriptions,
+  depth—with zero provider dependency.
+- Read endpoint-scoped references through `read/file`; QMD-backed `read/qmd`
+  is optional. `read` and `nav` are derived defaults of every registered
+  local Service.
 - Search one endpoint, a workspace default scope, the whole local Registry, or
-  direct authority/context dependencies with explicit recursion.
-- Read endpoint-scoped references through `read/file` or QMD-backed `read/qmd`.
-- Refresh provider-owned indexes through a stable UKP command.
+  direct authority/context dependencies with explicit recursion (QMD-backed).
+- Refresh provider-owned indexes through a stable UKP command (QMD-backed).
 - Give agents JSON output and provider-native artifacts when they need
   machine-readable handoff.
 
@@ -131,7 +135,7 @@ commands that support global scope.
 - TOML Service Manifest, Host Registry, and Client Config;
 - onboarding, diagnosis, registration, inspection, search, read, and refresh
   command surface;
-- QMD-backed `search`, `get`, and `refresh`;
+- QMD-backed `search`, `read`, and `refresh`;
 - agent-oriented JSON output and artifacts;
 - explicit recursive search over direct authority/context dependencies.
 
