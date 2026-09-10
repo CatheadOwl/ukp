@@ -4,6 +4,7 @@ import {
   existsSync,
   openSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -18,7 +19,7 @@ import {
 } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { buildQmdInvocation, defaultQmdCommand, isDocidBody, stripDocidHash } from "./qmd.ts";
+import { buildQmdInvocation, defaultQmdCommand, isDocidBody, providerTimeoutMs, stripDocidHash } from "./qmd.ts";
 
 export interface SearchRequest {
   query: string;
@@ -329,8 +330,18 @@ function executeHumanMode(
       windowsHide: true,
       windowsVerbatimArguments: command.verbatim,
       maxBuffer: 64 * 1024 * 1024,
+      timeout: providerTimeoutMs(),
     });
     const providerOutput = (result.stdout ?? "").trimEnd();
+    if (result.signal === "SIGTERM") {
+      // Zero-output hang guard: a timed-out provider is a classified failure,
+      // never silence (see qmd.ts providerTimeoutMs).
+      failed = true;
+      warnings.push(
+        `endpoint '${endpoint.name}' provider timed out after ${providerTimeoutMs() / 1000}s (set UKP_PROVIDER_TIMEOUT_MS to adjust)`,
+      );
+      continue;
+    }
     if (result.signal === "SIGINT") {
       warnings.push(`endpoint '${endpoint.name}' provider cancelled`);
       return {
@@ -440,8 +451,9 @@ function isAbsoluteLocationPath(location: string): boolean {
  * Service folder to an existing regular file yields a `ukp://` URI: the URI is
  * a slot promise (`ukp read` resolves it exactly), so it must never be emitted
  * for provider-managed or out-of-folder resources. Collection names are never
- * assumed to equal endpoint names — the existence check, not name matching,
- * decides.
+ * assumed to equal endpoint names — the resolved-containment + existence check,
+ * not name matching, decides (lexical containment plus a realpath pass so
+ * symlink escapes cannot yield an unreadable slot, mirroring the read hit path).
  */
 function endpointRelativePathOf(providerLocation: string, endpointFolder: string): string | undefined {
   if (!providerLocation.startsWith("qmd://")) return undefined;
@@ -463,9 +475,22 @@ function endpointRelativePathOf(providerLocation: string, endpointFolder: string
   const absolute = resolve(endpointFolder, ...candidate.split("/"));
   const finalRelative = relative(resolve(endpointFolder), absolute);
   if (isAbsoluteLocationPath(finalRelative) || finalRelative.startsWith("..")) return undefined;
+  // Resolved containment, aligned with the read hit path (G5 defect closure):
+  // a folder-internal symlink escaping the Service folder passes the lexical
+  // checks above but must not yield a URI the exact slot route would refuse.
+  let resolved: string;
+  let resolvedFolder: string;
+  try {
+    resolved = realpathSync(absolute);
+    resolvedFolder = realpathSync(endpointFolder);
+  } catch {
+    return undefined;
+  }
+  const resolvedRelative = relative(resolvedFolder, resolved);
+  if (isAbsoluteLocationPath(resolvedRelative) || resolvedRelative.startsWith("..")) return undefined;
   let stat;
   try {
-    stat = statSync(absolute);
+    stat = statSync(resolved);
   } catch {
     return undefined;
   }
@@ -728,11 +753,32 @@ function executeJsonMode(
         stdio: ["ignore", stdoutFd, stderrFd],
         windowsHide: true,
         windowsVerbatimArguments: command.verbatim,
+        timeout: providerTimeoutMs(),
       });
       closeSync(stdoutFd);
       stdoutFd = undefined;
       closeSync(stderrFd);
       stderrFd = undefined;
+
+      if (result.signal === "SIGTERM") {
+        // Zero-output hang guard: classified failure + error artifact, never
+        // silence (see qmd.ts providerTimeoutMs).
+        failed = true;
+        appendErrorArtifact(errorArtifact, `provider timed out after ${providerTimeoutMs() / 1000}s`);
+        const message = `endpoint '${endpoint.name}' provider timed out`;
+        warnings.push(message);
+        endpoints.push({
+          name: endpoint.name,
+          provider: endpoint.provider,
+          status: "failed",
+          artifact,
+          format: "qmd-json",
+          error_artifact: errorArtifact,
+          message,
+          ...(endpoint.traversal ?? {}),
+        });
+        continue;
+      }
 
       if (result.signal === "SIGINT") {
         cancelled = true;

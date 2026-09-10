@@ -3,7 +3,7 @@ import { loadClientConfig, findNearestClientConfig } from "../config/client.ts";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
-import { buildQmdInvocation, defaultQmdCommand } from "./qmd.ts";
+import { buildQmdInvocation, defaultQmdCommand, refreshTimeoutMs } from "./qmd.ts";
 
 export interface RefreshOptions {
   explicitEndpoints?: string[];
@@ -238,10 +238,23 @@ export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): 
       windowsHide: true,
       windowsVerbatimArguments: command.verbatim,
       maxBuffer: 64 * 1024 * 1024,
+      timeout: refreshTimeoutMs(),
     });
 
     const providerOutput = (result.stdout ?? "").trimEnd();
     const providerError = (result.stderr ?? "").trimEnd() || result.error?.message;
+
+    if (result.signal === "SIGTERM") {
+      // Zero-output hang guard: `qmd update` on a large corpus is slow but
+      // bounded; beyond the ceiling it is a classified failure, not silence.
+      failed = true;
+      output.push("status: failed");
+      warnings.push(
+        `endpoint '${endpoint.name}' provider timed out after ${refreshTimeoutMs() / 1000}s (set UKP_REFRESH_TIMEOUT_MS to adjust)`,
+      );
+      output.push(`error: provider timed out after ${refreshTimeoutMs() / 1000}s`);
+      continue;
+    }
 
     if (result.signal === "SIGINT" || result.status === 130) {
       warnings.push(`endpoint '${endpoint.name}' provider cancelled`);

@@ -1058,4 +1058,35 @@ describe("search", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 15_000);
+
+  // Zero-output hang guard (miss-path-scan audit): a provider that never
+  // responds must land in a classified timeout failure with a warning —
+  // never silence.
+  test("classifies a hung provider as a timeout failure with a warning", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-hang-"));
+    const registryPath = join(root, "registry.toml");
+    // Folder name "provider-hang" drives the fixture's sleep branch.
+    const service = createService(root, "provider-hang", "provider-hang");
+    registerAt(registryPath, "provider-hang", service);
+    const previous = process.env.UKP_PROVIDER_TIMEOUT_MS;
+    process.env.UKP_PROVIDER_TIMEOUT_MS = "1000";
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "--endpoint",
+        "provider-hang",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("provider timed out");
+      expect(result.stderr).toContain("UKP_PROVIDER_TIMEOUT_MS");
+    } finally {
+      if (previous === undefined) delete process.env.UKP_PROVIDER_TIMEOUT_MS;
+      else process.env.UKP_PROVIDER_TIMEOUT_MS = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

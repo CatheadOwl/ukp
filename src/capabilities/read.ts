@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
+import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, providerTimeoutMs, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
 
 export interface ReadRequest {
   /** Undefined only for an absolute filesystem reference, which the
@@ -220,8 +220,14 @@ function normalizeFilename(name: string): string {
  * with whatever it has collected. The walk itself is cheap — the per-file
  * name filter below rejects non-matching entries before ANY filesystem
  * syscall (realpathSync per file on a large endpoint was the BB-006 Run 2
- * pathology: 118s on a miss), so this budget is a safety net, not the fix. */
-const CANDIDATE_SCAN_FILE_BUDGET = 20000;
+ * pathology: 118s on a miss), so this budget is a safety net, not the fix.
+ * `UKP_CANDIDATE_SCAN_FILE_BUDGET` overrides (min 1) so the trigger branch
+ * is testable without materializing 20k files. */
+function candidateScanFileBudget(): number {
+  const raw = process.env.UKP_CANDIDATE_SCAN_FILE_BUDGET;
+  if (raw !== undefined && /^\d+$/.test(raw) && Number(raw) >= 1) return Number(raw);
+  return 20_000;
+}
 
 function findFilesBySuffix(serviceFolder: string, suffix: string): {
   serviceReal: string;
@@ -242,7 +248,7 @@ function findFilesBySuffix(serviceFolder: string, suffix: string): {
   let filesScanned = 0;
 
   function scan(currentPath: string): void {
-    if (filesScanned > CANDIDATE_SCAN_FILE_BUDGET) return;
+    if (filesScanned > candidateScanFileBudget()) return;
     let entries;
     try {
       entries = readdirSync(currentPath, { withFileTypes: true });
@@ -404,7 +410,20 @@ function readViaQmd(
     windowsHide: true,
     windowsVerbatimArguments: invocation.verbatim,
     maxBuffer: 64 * 1024 * 1024,
+    timeout: providerTimeoutMs(),
   });
+
+  if (result.signal === "SIGTERM") {
+    // Zero-output hang audit: a provider that never responds must land in a
+    // classified failure, not silence. spawnSync kills with SIGTERM on timeout.
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr:
+        `ukp read: provider-timeout: the QMD read channel for endpoint '${endpointName}' did not respond within ${providerTimeoutMs() / 1000}s.\n`
+        + `Verify the qmd installation or set UKP_PROVIDER_TIMEOUT_MS, then retry.\n`,
+    };
+  }
 
   if (result.error) {
     // provider-unavailable, not resource-missing: the read channel itself
