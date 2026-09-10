@@ -184,25 +184,36 @@ export function recoverRenamedResource(request: RecoveryRequest): RecoveryOutcom
   if (git.newRoute !== undefined) {
     attempted.push("git-derived");
     const verified = readPinVerified(git.newRoute, request);
-    if (verified === "match" || request.pin === undefined) {
-      if (request.pin === undefined) {
-        warnings.push("recovered without verification (no ukp-pin for this reference)");
-      } else if (git.editedAfterMove) {
-        warnings.push("content changed after the move (pin stale); trusting the git rename mapping");
-      }
+    if (verified === "match") {
+      // The pin verifies the CURRENT content of the mapped target: nothing
+      // is stale, even when edits followed the rename (dogfood 2026-09-10:
+      // a match + editedAfterMove warning was noise — the pin was computed
+      // after those edits and fully covers what is being read).
       return {
         status: "recovered",
         recoveredRoute: git.newRoute,
         layer: "git-history",
-        verification: request.pin === undefined ? "stale-unknown" : "match",
+        verification: "match",
+        warnings,
+        candidates,
+        attempted,
+      };
+    }
+    if (request.pin === undefined) {
+      warnings.push("recovered without verification (no ukp-pin for this reference)");
+      return {
+        status: "recovered",
+        recoveredRoute: git.newRoute,
+        layer: "git-history",
+        verification: "stale-unknown",
         warnings,
         candidates,
         attempted,
       };
     }
     if (git.editedAfterMove) {
-      // Three-valued check, third value: pin drifted because the target was
-      // edited after the rename — the mapping itself is authoritative.
+      // Three-valued check, third value: the mismatch is explained by edits
+      // after the rename — the mapping itself is authoritative.
       warnings.push("content changed after the move (pin stale); trusting the git rename mapping");
       return {
         status: "recovered",
