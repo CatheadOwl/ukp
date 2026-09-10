@@ -1,5 +1,6 @@
 import { Command, CommanderError } from "commander";
-import { ENDPOINT_NAME } from "../config/manifest.ts";
+import { ENDPOINT_NAME, loadManifest } from "../config/manifest.ts";
+import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
 import { readRegistry, registerAt, unregisterAt } from "../registry.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
@@ -96,8 +97,36 @@ export function executeRegisterCommand(
   }
 }
 
+// Derived file-native capabilities (read/nav today) exist on every registered
+// endpoint without a declaration (ADR 0016 rule 2); they are stated once in
+// the header instead of being repeated on every row. Everything else a
+// Service declares (search, refresh, propose, ...) is per-endpoint news and
+// gets its own column.
+const DEFAULT_CAPABILITIES = (Object.keys(FILE_NATIVE_CAPABILITIES) as Array<keyof typeof FILE_NATIVE_CAPABILITIES>)
+  .filter((name) => FILE_NATIVE_CAPABILITIES[name].derived)
+  .sort();
+
+function renderListRow(endpoint: { name: string; path: string }): { line: string; warning?: string } {
+  let service;
+  try {
+    service = loadManifest(endpoint.path);
+  } catch (error) {
+    // One-line headline only: an inventory warning must stay scannable even
+    // when the underlying ManifestError carries a full zod schema dump.
+    const headline = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+    return {
+      line: `${endpoint.name}\t${endpoint.path}\t(unavailable)`,
+      warning: `endpoint '${endpoint.name}' capabilities unavailable: ${headline}`,
+    };
+  }
+  const extras = Object.keys(service.manifest.capabilities)
+    .filter((name) => !(isFileNativeCapability(name) && FILE_NATIVE_CAPABILITIES[name].derived))
+    .sort();
+  return { line: `${endpoint.name}\t${endpoint.path}\t${extras.length > 0 ? extras.join(",") : "-"}` };
+}
+
 export function executeListCommand(args: readonly string[], context: InventoryCommandContext): InventoryCommandResult {
-  const command = createCommand("list", "List registered endpoint bindings.");
+  const command = createCommand("list", "List registered endpoint bindings and capabilities.");
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
   }
@@ -107,12 +136,23 @@ export function executeListCommand(args: readonly string[], context: InventoryCo
       throw new InventoryUsageError("list takes no arguments");
     }
     const endpoints = readRegistry(context.registryPath);
+    if (endpoints.length === 0) {
+      return { exitCode: 0, stdout: "No endpoints registered.", stderr: "" };
+    }
+    const warnings: string[] = [];
+    const rows = endpoints.map((endpoint) => {
+      const rendered = renderListRow(endpoint);
+      if (rendered.warning) warnings.push(rendered.warning);
+      return rendered.line;
+    });
+    const stdout = [
+      `capabilities on every endpoint: ${DEFAULT_CAPABILITIES.join(", ")} (derived file-native); additional declared capabilities per endpoint:`,
+      ...rows,
+    ].join("\n");
     return {
       exitCode: 0,
-      stdout: endpoints.length === 0
-        ? "No endpoints registered."
-        : endpoints.map((endpoint) => `${endpoint.name}\t${endpoint.path}`).join("\n"),
-      stderr: "",
+      stdout,
+      stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
     };
   } catch (error) {
     if (error instanceof InventoryUsageError) {

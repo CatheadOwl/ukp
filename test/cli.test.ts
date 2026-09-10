@@ -396,18 +396,19 @@ describe("CLI bootstrap", () => {
     }
   });
 
-  test("init service refuses a folder that already has a Client Config", () => {
-    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-client-role-"));
-    const errors: string[] = [];
+  test("init service coexists with an existing Client Config in the same folder", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-dual-role-"));
+    const output: string[] = [];
     mkdirSync(join(root, ".ukp"));
     writeFileSync(join(root, ".ukp", "client.toml"), 'default_endpoints = ["docs"]\n');
     try {
-      expect(runCli(["init", "service"], undefined, (message) => errors.push(message), {
+      expect(runCli(["init", "service", "--name", "dual-role"], (message) => output.push(message), undefined, {
         currentDirectory: root,
         registryPath: join(root, "registry.toml"),
-      })).toBe(1);
-      expect(errors.join("\n")).toContain("already a Client workspace");
-      expect(existsSync(join(root, ".ukp", "service.toml"))).toBe(false);
+      })).toBe(0);
+      expect(existsSync(join(root, ".ukp", "service.toml"))).toBe(true);
+      expect(readFileSync(join(root, ".ukp", "client.toml"), "utf8"))
+        .toBe('default_endpoints = ["docs"]\n');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -422,7 +423,7 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("default_endpoints");
     expect(guide).toContain("scope: explicit / global / client-config / registry-fallback");
     expect(guide).toContain("provider path (ukp guide service)");
-    expect(guide).toContain("cannot coexist in the same folder");
+    expect(guide).toContain("may hold both roles at once (dual-role)");
     expect(guide).toContain("does not fall back to the Registry");
     expect(guide).toContain("ukp register does not edit .ukp/client.toml");
   });
@@ -1017,6 +1018,8 @@ describe("CLI bootstrap", () => {
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(output.join("\n")).toContain("fixture-qmd");
     expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
+    expect(output.join("\n")).toContain("capabilities on every endpoint: nav, read");
+    expect(output.join("\n")).toMatch(/fixture-qmd\t.*\trefresh,search/);
     expect(readFileSync(registryPath, "utf8")).not.toContain("description");
     expect(runCli(["unregister", "fixture-qmd"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);

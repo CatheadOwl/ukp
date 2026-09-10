@@ -135,13 +135,14 @@ describe("Service Manifest and diagnose", () => {
     }
   });
 
-  test("rejects a folder that declares both Service and Client roles", () => {
-    const root = mkdtempSync(join(tmpdir(), "ukp-test-role-conflict-"));
+  test("a folder may hold both Service and Client roles; the Manifest loads", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-dual-role-"));
     mkdirSync(join(root, ".ukp"));
-    writeFileSync(join(root, ".ukp", "service.toml"), "[capabilities.search]\nprovider = \"qmd\"\n");
+    writeFileSync(join(root, ".ukp", "service.toml"), "name = \"dual-role\"\n\n[capabilities.search]\nprovider = \"qmd\"\n");
     writeFileSync(join(root, ".ukp", "client.toml"), "default_endpoints = [\"docs\"]\n");
     try {
-      expect(() => loadManifest(root)).toThrow("Folder role conflict");
+      const loaded = loadManifest(root);
+      expect(loaded.manifest.capabilities.search?.provider).toBe("qmd");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

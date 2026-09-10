@@ -4,7 +4,7 @@ Goal: use registered Services from a workspace by default, without naming an end
 
 Model:
 - Client path is separate from the provider path: it uses Services; it does not declare one.
-- One folder has one UKP role: .ukp/client.toml and .ukp/service.toml cannot coexist in the same folder.
+- A folder may hold both roles at once (dual-role): a Service folder may also carry its own .ukp/client.toml to set its default scope. Each file is read independently.
 - A workspace .ukp/client.toml default_endpoints list selects which registered endpoints you mean when no selector is given.
 - UKP walks up from the current directory to find the nearest .ukp/client.toml.
 - Client Config stores endpoint names only; bindings live in the Host Registry.
