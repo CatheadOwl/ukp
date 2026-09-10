@@ -177,6 +177,15 @@ function parseUkpUri(uri: string, flags: { endpoint?: string; lines?: string }):
       throw new ReadUsageError("ukp:// #L fragment must be a positive line number");
     }
     lines = { start };
+  } else if (fragment !== undefined && /^L\d/.test(fragment)) {
+    // G4 pin (fail-loud): a digit right after `L` commits to line-window intent,
+    // so a malformed window (`#L67:5`, `#L12x`) is a usage error — silently
+    // reading the whole document would hide the typo. Heading-style fragments
+    // (`#Lifecycle`, `#L-pipeline`) keep opaque semantics: `L` + non-digit was
+    // never a line window.
+    throw new ReadUsageError(
+      `ukp:// #L fragment looks like a malformed line window: '${fragment}' (use #L<line> or a plain heading anchor)`,
+    );
   }
   // Non-`#L` fragments are opaque navigation hints (ADR 0014 rule 5): ignored
   // for reading; a broken path invalidates the fragment, never the reverse.

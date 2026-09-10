@@ -1371,6 +1371,29 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
     }
   });
 
+  // G4 pin (fail-loud): `L` + digit commits to line-window intent, so a
+  // malformed window is a usage error; heading-style fragments stay opaque.
+  test("#L malformed line windows fail loud while heading fragments stay opaque", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-read-fragment-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "frag");
+    registerAt(registryPath, "frag", service);
+    try {
+      // Malformed windows (dogfood round-2 evidence: `#L67:5` silently read
+      // the whole document): now usage errors.
+      expect(() => parseReadArgs(["ukp://frag/docs/note.md#L67:5"])).toThrow("malformed line window");
+      expect(() => parseReadArgs(["ukp://frag/docs/note.md#L12x"])).toThrow("malformed line window");
+      // Heading-style fragments starting with L keep opaque semantics.
+      const opaque = executeReadCommand(["ukp://frag/docs/note.md#Lifecycle"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(opaque).toEqual({ exitCode: 0, stdout: "one\ntwo\nthree\nfour\n", stderr: "" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // Zero-output hang guard (miss-path-scan audit): a provider that never
   // responds must land in a classified provider-timeout failure, not silence.
   test("classifies a hung provider as provider-timeout instead of hanging", () => {

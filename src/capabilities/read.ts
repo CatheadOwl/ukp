@@ -710,14 +710,21 @@ function executeResolvedRead(
         const { serviceReal, suffixMatches, nameFuzzyMatches } = findFilesBySuffix(service.folder, request.path);
         const candidates = [...suffixMatches, ...nameFuzzyMatches]
           .map((m) => `  - ${relative(serviceReal, m).replace(/\\/g, "/")}`);
+        // Shape-tailored miss wording (BB-006 evidence): never mention docid/
+        // qmd:// here — a file-surface consumer misread that parenthetical as
+        // a hint and detoured into a docid miss. Discovery pointers only.
+        const shapeHint = request.path.includes("/")
+          ? `Browse the endpoint with 'ukp nav --endpoint ${binding.name}'`
+          : `For a document-relative reference use '--from <route>', or browse with 'ukp nav --endpoint ${binding.name}'`;
         return {
           exitCode: 1,
           stdout: "",
           stderr:
-            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}' (plain paths address files exactly; provider reads use a bare docid handoff key or qmd://)`
+            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}' (plain paths and ukp:// URIs address files exactly; no fuzzy resolution)\n`
+            + `${shapeHint}.\n`
             + (candidates.length > 0
-              ? `\nDid you mean:\n${candidates.join("\n")}\n`
-              : "\n"),
+              ? `Did you mean:\n${candidates.join("\n")}\n`
+              : ""),
         };
       }
       // Pure file-backed: filesystem fuzzy fallback (visibility root is the
