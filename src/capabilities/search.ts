@@ -19,6 +19,7 @@ import {
 } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
+import { isAbsoluteShapedPath, isInsideRealRoot } from "../path-safety.ts";
 import { buildQmdInvocation, defaultQmdCommand, isDocidBody, providerTimeoutMs, stripDocidHash } from "./qmd.ts";
 
 export interface SearchRequest {
@@ -529,10 +530,6 @@ function encodeUkpUriSegment(segment: string): string {
   return segment.replace(/[%#? ]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
 }
 
-function isAbsoluteLocationPath(location: string): boolean {
-  return /^([A-Za-z]:[\\/]|\\\\|\/)/.test(location);
-}
-
 /**
  * Derive the endpoint-relative path of one QMD result location (ADR 0019).
  *
@@ -553,12 +550,12 @@ export function endpointRelativePathOf(providerLocation: string, endpointFolder:
   if (!providerLocation.startsWith("qmd://")) return undefined;
   const rest = providerLocation.slice("qmd://".length);
   let candidate: string;
-  if (isAbsoluteLocationPath(rest)) {
+  if (isAbsoluteShapedPath(rest)) {
     const rel = relative(resolve(endpointFolder), resolve(rest));
     // Cross-drive / UNC↔drive targets: `relative()` returns the absolute
     // target itself, which never starts with `..` — reject explicitly so the
     // containment boundary cannot be bypassed (ADR 0019 emission rule).
-    if (isAbsoluteLocationPath(rel)) return undefined;
+    if (isAbsoluteShapedPath(rel)) return undefined;
     candidate = rel.split(/[\\/]/).join("/");
   } else {
     const firstSlash = rest.indexOf("/");
@@ -567,8 +564,7 @@ export function endpointRelativePathOf(providerLocation: string, endpointFolder:
   }
   if (candidate === "" || candidate.split("/").includes("..")) return undefined;
   const absolute = resolve(endpointFolder, ...candidate.split("/"));
-  const finalRelative = relative(resolve(endpointFolder), absolute);
-  if (isAbsoluteLocationPath(finalRelative) || finalRelative.startsWith("..")) return undefined;
+  if (!isInsideRealRoot(resolve(endpointFolder), absolute)) return undefined;
   // Resolved containment, aligned with the read hit path (G5 defect closure):
   // a folder-internal symlink escaping the Service folder passes the lexical
   // checks above but must not yield a URI the exact slot route would refuse.
@@ -580,8 +576,7 @@ export function endpointRelativePathOf(providerLocation: string, endpointFolder:
   } catch {
     return undefined;
   }
-  const resolvedRelative = relative(resolvedFolder, resolved);
-  if (isAbsoluteLocationPath(resolvedRelative) || resolvedRelative.startsWith("..")) return undefined;
+  if (!isInsideRealRoot(resolvedFolder, resolved)) return undefined;
   let stat;
   try {
     stat = statSync(resolved);

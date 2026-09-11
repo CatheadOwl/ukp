@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { loadManifest } from "../config/manifest.ts";
 import { resolveExternalToolCapability, EXTERNAL_PROVIDER } from "../config/external-tool.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
+import { isInsideRealRoot } from "../path-safety.ts";
 
 // rg capability (ADR-RG-001..004, workunits/ukp_rg): an independent atomic
 // capability parallel to `search` — base lexical search over the endpoint's
@@ -219,6 +222,27 @@ function toUkpUri(endpointName: string, path: string): string {
   return `ukp://${endpointName}/${rel.split("/").map(encodeUkpUriSegment).join("/")}`;
 }
 
+/** ADR 0019 emission rule (ADR 0023 / D-073, spec §3): the URI is a slot
+ * promise, so it is emitted only when the match path safely resolves inside
+ * the Service folder — resolved containment, same stance as search's
+ * provider-location mapping. A miss silently drops the `ukp_uri` field
+ * (the match and its `path` stay): rg output is tool output, not user
+ * error. Output-side filtering is the second line of defense; the
+ * passthrough allowlist (no path operands) is the first. */
+function ukpUriIfInside(endpointFolder: string, endpointName: string, path: string): string | undefined {
+  const absolute = resolve(endpointFolder, ...path.replace(/\\/g, "/").split("/"));
+  let folderReal: string;
+  let targetReal: string;
+  try {
+    folderReal = realpathSync(endpointFolder);
+    targetReal = realpathSync(absolute);
+  } catch {
+    return undefined;
+  }
+  if (!isInsideRealRoot(folderReal, targetReal)) return undefined;
+  return toUkpUri(endpointName, path);
+}
+
 interface RgJsonEvent {
   type?: string;
   data?: {
@@ -350,7 +374,8 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
         const firstLine = text.split(/\r?\n/)[0] ?? "";
         if (firstLine.length > 0) entry.text = firstLine.length > 240 ? `${firstLine.slice(0, 240)}...` : firstLine;
       }
-      entry.ukp_uri = toUkpUri(endpoint.name, entry.path);
+      const uri = ukpUriIfInside(endpoint.folder, endpoint.name, entry.path);
+      if (uri !== undefined) entry.ukp_uri = uri;
       matches.push(entry);
     }
     if (matches.length === 0 && !truncated) {

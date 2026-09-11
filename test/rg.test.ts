@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -248,6 +248,42 @@ describe("ukp rg command surface", () => {
       const result = executeRgCommand(["--endpoint", "kb", "needle"], context);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("a.md:1");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // ADR 0023 / spec §3 + T7: a match path resolving outside the Service
+  // folder (symlink escape) silently drops its ukp_uri — the match and its
+  // path stay, no warning, endpoint status unchanged. Tool output is not a
+  // user error (search/ADR 0019 stance); the passthrough allowlist is the
+  // first line of defense, this output-side filter the second.
+  test("drops ukp_uri for a symlink escape but keeps the match (ADR 0019 emission rule)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-containment-"));
+    try {
+      const service = createService(root, "kb");
+      writeFiles(service, [{ path: "inside.md", content: "needle inside\n" }]);
+      writeFileSync(join(root, "outside.md"), "needle outside\n");
+      try {
+        symlinkSync(join(root, "outside.md"), join(service, "escape.md"), "file");
+      } catch {
+        return; // Skip if the platform does not allow symlinks (read precedent)
+      }
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "kb", service);
+      const context: RgContext = { currentDirectory: root, registryPath, rgCommand };
+      const result = executeRgCommand(["--endpoint", "kb", "needle", "--json"], context);
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(result.stdout);
+      expect(envelope.endpoints[0].status).toBe("succeeded");
+      expect(envelope.warnings).toEqual([]);
+      const byPath = new Map<string, { path: string; ukp_uri?: string }>(
+        envelope.endpoints[0].matches.map((m: { path: string }) => [m.path, m]),
+      );
+      expect(byPath.get("inside.md")?.ukp_uri).toBe("ukp://kb/inside.md");
+      // The escaped match survives with its path but carries no slot promise.
+      expect(byPath.get("escape.md")).toBeDefined();
+      expect(byPath.get("escape.md")).not.toHaveProperty("ukp_uri");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

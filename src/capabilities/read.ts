@@ -6,6 +6,7 @@ import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, providerTimeoutMs, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
 import { isValidPin, pinFromSourceDocument, recoverRenamedResource, type RecoveryCandidate } from "./rename-recovery.ts";
+import { isInsideRealRoot, splitEndpointRelativeSegments } from "../path-safety.ts";
 
 export interface ReadRequest {
   /** Undefined only for an absolute filesystem reference, which the
@@ -145,31 +146,18 @@ function providerUnavailableNoExecutable(endpointName: string): ReadOutcome {
 
 function validateEndpointRelativePath(reference: string): string[] {
   if (reference.length === 0) throw new ReadUsageError("reference must be a non-empty endpoint-scoped reference");
-  if (
-    isAbsolute(reference)
-    || win32.isAbsolute(reference)
-    || /^[A-Za-z]:/.test(reference)
-    || reference.startsWith("//")
-    || reference.startsWith("\\\\")
-  ) {
-    throw new ReadUsageError("reference must be endpoint-scoped, not absolute");
-  }
-
-  const segments = reference.split(/[\\/]/);
-  if (segments.some((segment) => segment.length === 0)) {
-    throw new ReadUsageError("reference must not contain empty path segments");
-  }
-  if (segments.some((segment) => segment === "." || segment === "..")) {
+  // Path-safety primitive (ADR 0023): verdicts shared, error wording local.
+  const result = splitEndpointRelativeSegments(reference);
+  if (!result.ok) {
+    if (result.reason === "absolute") {
+      throw new ReadUsageError("reference must be endpoint-scoped, not absolute");
+    }
+    if (result.reason === "empty-segment") {
+      throw new ReadUsageError("reference must not contain empty path segments");
+    }
     throw new ReadUsageError("reference must not contain '.' or '..' path segments");
   }
-  return segments;
-}
-
-function isInsideService(serviceReal: string, targetReal: string): boolean {
-  const rel = relative(serviceReal, targetReal);
-  // rel === "" means target is the service folder itself (not a file inside it)
-  // Check ".." segment boundary: rel.startsWith("..") but not "..literal"
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return result.segments;
 }
 
 function resolveEndpointPath(serviceFolder: string, reference: string): string {
@@ -178,7 +166,7 @@ function resolveEndpointPath(serviceFolder: string, reference: string): string {
   // Single containment check via realpath: catches both lexical and symlink escapes
   const serviceReal = realpathSync(serviceFolder);
   const targetReal = realpathSync(targetPath);
-  if (!isInsideService(serviceReal, targetReal)) {
+  if (!isInsideRealRoot(serviceReal, targetReal)) {
     throw new ReadUsageError("reference must stay inside the selected Service folder when resolved as a file");
   }
   return targetReal;
@@ -265,7 +253,7 @@ function resolveAbsoluteReference(
     } catch {
       target = resolve(reference);
     }
-    if (!isInsideService(serviceReal, target)) continue;
+    if (!isInsideRealRoot(serviceReal, target)) continue;
     matches.push({
       endpoint: binding.name,
       route: relative(serviceReal, target).replace(/\\/g, "/"),
@@ -345,7 +333,7 @@ function findFilesBySuffix(serviceFolder: string, suffix: string): {
         isSymlink = true;
         try {
           canonicalPath = realpathSync(fullPath);
-          if (!isInsideService(serviceReal, canonicalPath)) {
+          if (!isInsideRealRoot(serviceReal, canonicalPath)) {
             continue;
           }
         } catch {
@@ -393,7 +381,7 @@ function findFilesBySuffix(serviceFolder: string, suffix: string): {
         // Check 1: Exact suffix match (filename exact, path fuzzy)
         if (nameExact) {
           if (relPath === normalizedSuffix || relPath.endsWith("/" + normalizedSuffix)) {
-            if (isInsideService(serviceReal, fileReal)) {
+            if (isInsideRealRoot(serviceReal, fileReal)) {
               suffixMatches.add(fileReal);
               continue;
             }
@@ -414,7 +402,7 @@ function findFilesBySuffix(serviceFolder: string, suffix: string): {
               continue; // Path prefix doesn't match, skip
             }
           }
-          if (isInsideService(serviceReal, fileReal)) {
+          if (isInsideRealRoot(serviceReal, fileReal)) {
             nameFuzzyMatches.add(fileReal);
           }
         }
