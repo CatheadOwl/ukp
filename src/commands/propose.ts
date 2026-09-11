@@ -1,15 +1,52 @@
 import { Command, CommanderError } from "commander";
 import {
-  executePropose,
+  runPropose,
+  renderProposeHuman,
+  renderProposeJson,
   ProposeProviderError,
   ProposeUsageError,
   type ProposeContext,
+  type ProposeErrorClass,
   type ProposeRequest,
-  type ProposeCommandResult,
 } from "../capabilities/propose.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+
+/** CLI-owned command result shape (ADR 0021). */
+export interface ProposeCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Error-class → exit-code mapping (ADR 0021). */
+const PROPOSE_EXIT_BY_ERROR_CLASS: Record<ProposeErrorClass, number> = {
+  "no-endpoint": 1,
+  "endpoint-name-mismatch": 1,
+  "capability-undeclared": 1,
+  "submission-file-unreadable": 1,
+};
+
+/** CLI composition of the structured outcome (ADR 0021); kept as the test
+ * entry so suites exercise the exact adapter path the bin takes. */
+export function executePropose(request: ProposeRequest, context: ProposeContext): ProposeCommandResult {
+  const outcome = runPropose(request, context);
+  if (!outcome.ok) {
+    return {
+      exitCode: PROPOSE_EXIT_BY_ERROR_CLASS[outcome.failure.errorClass],
+      stdout: "",
+      stderr: `ukp propose: ${outcome.failure.message}\n`,
+    };
+  }
+  return {
+    exitCode: 0,
+    stdout: request.json
+      ? renderProposeJson(request.endpoint, outcome.result)
+      : renderProposeHuman(outcome.result),
+    stderr: "",
+  };
+}
 
 function createProposeCommand(): Command {
   return new Command("ukp propose")

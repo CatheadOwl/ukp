@@ -2,8 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { executeRefresh, type RefreshContext } from "../src/capabilities/refresh.ts";
-import { executeRefreshCommand, parseRefreshArgs } from "../src/commands/refresh.ts";
+import { executeRefresh, executeRefreshCommand, parseRefreshArgs, type RefreshContext } from "../src/commands/refresh.ts";
 import { registerAt } from "../src/registry.ts";
 
 const fixtureExecutable = join(import.meta.dir, "fixtures", "qmd-provider", "qmd-fixture.mjs");

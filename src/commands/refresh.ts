@@ -1,13 +1,31 @@
 import { Command, CommanderError } from "commander";
 import {
-  executeRefresh,
+  runRefresh,
+  renderRefreshHuman,
   RefreshUsageError,
   type ParsedRefresh,
+  type RefreshAggregateStatus,
   type RefreshContext,
-  type RefreshResult,
 } from "../capabilities/refresh.ts";
+
+export type { RefreshContext } from "../capabilities/refresh.ts";
 import { ScopeError } from "../scope.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+
+/** CLI-owned command result shape (ADR 0021). */
+export interface RefreshCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Aggregate classification → exit code (ADR 0021). */
+const REFRESH_EXIT_BY_AGGREGATE: Record<RefreshAggregateStatus, number> = {
+  "succeeded": 0,
+  "failed": 1,
+  "no-success": 1,
+  "cancelled": 130,
+};
 
 function collectValues(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -88,7 +106,19 @@ export function parseRefreshArgs(args: readonly string[]): ParsedRefresh {
   };
 }
 
-export function executeRefreshCommand(args: readonly string[], context: RefreshContext): RefreshResult {
+/** CLI composition of the structured outcome (ADR 0021); kept as the test
+ * entry so suites exercise the exact adapter path the bin takes. */
+export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): RefreshCommandResult {
+  const result = runRefresh(parsed, context);
+  const view = renderRefreshHuman(result);
+  return {
+    exitCode: REFRESH_EXIT_BY_AGGREGATE[result.aggregate],
+    stdout: view.body,
+    stderr: view.diagnostics,
+  };
+}
+
+export function executeRefreshCommand(args: readonly string[], context: RefreshContext): RefreshCommandResult {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderRefreshHelp(), stderr: "" };
   }
