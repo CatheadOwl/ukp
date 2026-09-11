@@ -1,16 +1,53 @@
 import { Command, CommanderError } from "commander";
 import {
-  executeRead,
+  runRead,
+  renderReadHuman,
+  projectReadEnvelope,
   ReadUsageError,
   isAbsoluteFilesystemReference,
   type ReadContext,
+  type ReadErrorClass,
+  type ReadOutcome,
+  type ReadRecoveryMeta,
   type ReadRequest,
-  type ReadResult,
   type LineRange,
 } from "../capabilities/read.ts";
 import { isValidPin } from "../capabilities/rename-recovery.ts";
 import { ScopeError } from "../scope.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+
+/** CLI-owned command result shape (ADR 0021). `recovery` exposes the
+ * structured rename-recovery metadata alongside the channels so programmatic
+ * consumers of the adapter need not re-parse stderr. */
+export interface ReadCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  recovery?: ReadRecoveryMeta;
+}
+
+/** Error-class → exit-code mapping (ADR 0021): the capability classifies,
+ * the adapter decides process semantics. Inline tier-validation usage
+ * failures keep the bare exit-2 rendering; parse-layer usage errors render
+ * the usage block via the catch path. */
+const READ_EXIT_BY_ERROR_CLASS: Record<ReadErrorClass, number> = {
+  "no-endpoint": 1,
+  "endpoint-name-mismatch": 1,
+  "provider-unavailable": 1,
+  "provider-timeout": 1,
+  "provider-cancelled": 130,
+  "provider-incompatible": 1,
+  "provider-no-content": 1,
+  "resource-missing": 1,
+  "qmd-route-unavailable": 1,
+  "resource-disappeared": 1,
+  "resource-is-directory": 1,
+  "start-beyond-eof": 1,
+  "ambiguous-match": 1,
+  "no-exact-match": 1,
+  "resource-not-found": 1,
+  "usage-error": 2,
+};
 
 function createReadCommand(): Command {
   return new Command("ukp read")
@@ -296,55 +333,50 @@ function parseReadWithFormat(args: readonly string[]): { request: ReadRequest; f
 /** `--format json` (spec read-rename-recovery): failures emit a structured
  * envelope on stdout (class + message + recovery metadata); success keeps the
  * body on stdout and puts a small envelope on stderr. Human mode is the
- * default and unchanged. */
-function renderJsonEnvelope(request: ReadRequest, result: ReadResult): ReadResult {
-  if (result.exitCode === 0) {
-    const envelope = {
-      ok: true,
-      endpoint: request.endpoint,
-      reference: request.path,
-      ...(result.recovery?.recoveredTo !== undefined ? { recovered_to: result.recovery.recoveredTo } : {}),
+ * default and unchanged. The envelope is projected from the structured
+ * outcome — the class is data, never regex-extracted from rendered text. */
+function renderJsonOutput(request: ReadRequest, outcome: ReadOutcome): ReadCommandResult {
+  const human = renderReadHuman(outcome);
+  const envelope = projectReadEnvelope(request, outcome);
+  const exitCode = outcome.ok
+    ? 0
+    : READ_EXIT_BY_ERROR_CLASS[outcome.failure.errorClass];
+  const recovery = outcome.ok ? outcome.result.recovery : outcome.failure.recovery;
+  if (outcome.ok) {
+    return {
+      exitCode,
+      stdout: human.body,
+      stderr: `${JSON.stringify(envelope)}\n${human.diagnostics}`,
+      ...(recovery !== undefined ? { recovery } : {}),
     };
-    return { ...result, stderr: `${JSON.stringify(envelope)}\n${result.stderr}` };
   }
-  const classMatch = /ukp read: (resource-missing|provider-unavailable|provider-timeout)/.exec(result.stderr);
-  const errorClass = result.exitCode === 2
-    ? "usage-error"
-    : classMatch ? classMatch[1] : "error";
-  const firstLine = result.stderr.split(/\r?\n/).find((line) => line.trim().length > 0) ?? "";
-  const envelope = {
-    ok: false,
-    endpoint: request.endpoint,
-    reference: request.path,
-    error: {
-      class: errorClass,
-      message: firstLine.replace(/^ukp read: /, ""),
-      ...(result.recovery !== undefined
-        ? {
-            recovery: {
-              attempted: result.recovery.attempted,
-              outcome: result.recovery.outcome,
-              ...(result.recovery.recoveredTo !== undefined ? { recovered_to: result.recovery.recoveredTo } : {}),
-              ...(result.recovery.candidates !== undefined ? { candidates: result.recovery.candidates } : {}),
-            },
-          }
-        : {}),
-    },
-  };
   // Failure envelope replaces the human stdout (which is empty on failure);
   // stderr keeps its diagnostics verbatim.
-  return { ...result, stdout: `${JSON.stringify(envelope, null, 2)}\n` };
+  return {
+    exitCode,
+    stdout: `${JSON.stringify(envelope, null, 2)}\n`,
+    stderr: human.diagnostics,
+    ...(recovery !== undefined ? { recovery } : {}),
+  };
 }
 
-export function executeReadCommand(args: readonly string[], context: ReadContext): ReadResult {
+export function executeReadCommand(args: readonly string[], context: ReadContext): ReadCommandResult {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderReadHelp(), stderr: "" };
   }
 
   try {
     const { request, format } = parseReadWithFormat(args);
-    const result = executeRead(request, context);
-    return format === "json" ? renderJsonEnvelope(request, result) : result;
+    const outcome = runRead(request, context);
+    if (format === "json") return renderJsonOutput(request, outcome);
+    const human = renderReadHuman(outcome);
+    const recovery = outcome.ok ? outcome.result.recovery : outcome.failure.recovery;
+    return {
+      exitCode: outcome.ok ? 0 : READ_EXIT_BY_ERROR_CLASS[outcome.failure.errorClass],
+      stdout: human.body,
+      stderr: human.diagnostics,
+      ...(recovery !== undefined ? { recovery } : {}),
+    };
   } catch (error) {
     if (error instanceof ReadUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderReadUsageError(error.message) };

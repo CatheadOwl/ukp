@@ -46,23 +46,76 @@ export interface ReadContext {
   qmdCommand?: readonly string[];
 }
 
-export interface ReadResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-  /** Rename-recovery metadata (ADR 0020 / spec read-rename-recovery) for the
-   * JSON failure envelope: which layers were attempted, whether a recovered
-   * route was read, and advisory candidates on exhaustion. Human output does
-   * not render this structurally — the echo/warnings already carry it. */
-  recovery?: {
-    attempted: string[];
-    outcome: "recovered" | "exhausted";
-    recoveredTo?: string;
-    layer?: string;
-    verification?: string;
-    candidates?: RecoveryCandidate[];
-  };
+/** Tolerant-addressing resolution provenance (ADR-URI-001): the factual echo
+ * of the request rewrite. Structured so a non-CLI surface can hand the
+ * consumer back the canonical endpoint+route instead of parsing stderr. */
+export interface ReadResolution {
+  kind: "absolute-mapped" | "doc-relative";
+  /** Factual echo body without the `ukp read:` prefix. */
+  note: string;
 }
+
+/** Rename-recovery metadata (ADR 0020 / spec read-rename-recovery). `from`
+ * carries the original route so the success echo is renderable from data. */
+export interface ReadRecoveryMeta {
+  from: string;
+  attempted: string[];
+  outcome: "recovered" | "exhausted";
+  recoveredTo?: string;
+  layer?: string;
+  verification?: string;
+  candidates?: RecoveryCandidate[];
+}
+
+/** ADR 0021 error classification — lifted from the word-level taxonomy that
+ * already lived in the stderr wording (`provider-unavailable:`,
+ * `resource-missing:`, `provider-timeout`, ...). Exit codes are adapter
+ * renderings of these classes. */
+export type ReadErrorClass =
+  | "no-endpoint"
+  | "endpoint-name-mismatch"
+  | "provider-unavailable"
+  | "provider-timeout"
+  | "provider-cancelled"
+  | "provider-incompatible"
+  | "provider-no-content"
+  | "resource-missing"
+  | "qmd-route-unavailable"
+  | "resource-disappeared"
+  | "resource-is-directory"
+  | "start-beyond-eof"
+  | "ambiguous-match"
+  | "no-exact-match"
+  | "resource-not-found"
+  /** Inline tier-validation failures (containment escape, lexical path
+   * violations re-checked at execution): exit 2 with a bare message, unlike
+   * parse-layer usage errors which render the usage block. */
+  | "usage-error";
+
+export interface ReadFailure {
+  errorClass: ReadErrorClass;
+  /** Factual message body — no `ukp read:` prefix (the adapter adds it once,
+   * on the first line). May be multi-line; embedded recovery-hint wording is
+   * known debt of the same class as search warnings (envelope/byte
+   * compatibility first). */
+  message: string;
+  recovery?: ReadRecoveryMeta;
+  resolution?: ReadResolution;
+}
+
+/** ADR 0021 payload-type success: the resource body IS the contract (stdout
+ * purity); echoes, recovery metadata, and warnings are sideband fields. */
+export interface ReadSuccess {
+  content: string;
+  recovery?: ReadRecoveryMeta;
+  /** Recovery-descent warnings (factual lines; adapter prefixes each). */
+  recoveryWarnings: string[];
+  resolution?: ReadResolution;
+}
+
+export type ReadOutcome =
+  | { ok: true; result: ReadSuccess }
+  | { ok: false; failure: ReadFailure };
 
 export class ReadUsageError extends Error {
   constructor(message: string) {
@@ -71,17 +124,23 @@ export class ReadUsageError extends Error {
   }
 }
 
+function readFailure(
+  errorClass: ReadErrorClass,
+  message: string,
+  recovery?: ReadRecoveryMeta,
+): ReadOutcome {
+  return { ok: false, failure: recovery ? { errorClass, message, recovery } : { errorClass, message } };
+}
+
 /** provider-unavailable classification for "no qmd executable at all" — the
  * read channel is absent, which is the same recovery class as a spawn
  * failure (install/verify qmd), never resource-missing. */
-function providerUnavailableNoExecutable(endpointName: string): ReadResult {
-  return {
-    exitCode: 1,
-    stdout: "",
-    stderr:
-      `ukp read: provider-unavailable: the QMD read channel for endpoint '${endpointName}' has no usable qmd executable.\n`
-      + `Browse the endpoint with 'ukp nav --endpoint ${endpointName}' or install qmd, then retry.\n`,
-  };
+function providerUnavailableNoExecutable(endpointName: string): ReadOutcome {
+  return readFailure(
+    "provider-unavailable",
+    `provider-unavailable: the QMD read channel for endpoint '${endpointName}' has no usable qmd executable.\n`
+      + `Browse the endpoint with 'ukp nav --endpoint ${endpointName}' or install qmd, then retry.`,
+  );
 }
 
 function validateEndpointRelativePath(reference: string): string[] {
@@ -418,7 +477,7 @@ function readViaQmd(
   serviceFolder: string,
   request: ReadRequest,
   endpointName: string,
-): ReadResult {
+): ReadOutcome {
   const providerArgs = [
     "get",
     toQmdGetArgument(request.path, request.lines),
@@ -437,13 +496,11 @@ function readViaQmd(
   if (result.signal === "SIGTERM") {
     // Zero-output hang audit: a provider that never responds must land in a
     // classified failure, not silence. spawnSync kills with SIGTERM on timeout.
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr:
-        `ukp read: provider-timeout: the QMD read channel for endpoint '${endpointName}' did not respond within ${providerTimeoutMs() / 1000}s.\n`
-        + `Verify the qmd installation or set UKP_PROVIDER_TIMEOUT_MS, then retry.\n`,
-    };
+    return readFailure(
+      "provider-timeout",
+      `provider-timeout: the QMD read channel for endpoint '${endpointName}' did not respond within ${providerTimeoutMs() / 1000}s.\n`
+        + `Verify the qmd installation or set UKP_PROVIDER_TIMEOUT_MS, then retry.`,
+    );
   }
 
   if (result.error) {
@@ -452,16 +509,14 @@ function readViaQmd(
     // form). The two classes drive completely different recovery actions, so
     // the wording must classify and point at recovery paths.
     const detail = result.error instanceof Error ? result.error.message : String(result.error);
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr:
-        `ukp read: provider-unavailable: the QMD read channel for endpoint '${endpointName}' could not start (${detail}).\n`
-        + `Browse the endpoint with 'ukp nav --endpoint ${endpointName}' or verify the qmd installation, then retry.\n`,
-    };
+    return readFailure(
+      "provider-unavailable",
+      `provider-unavailable: the QMD read channel for endpoint '${endpointName}' could not start (${detail}).\n`
+        + `Browse the endpoint with 'ukp nav --endpoint ${endpointName}' or verify the qmd installation, then retry.`,
+    );
   }
   if (result.signal === "SIGINT" || result.status === 130) {
-    return { exitCode: 130, stdout: "", stderr: "ukp read: provider cancelled\n" };
+    return readFailure("provider-cancelled", "provider cancelled");
   }
   if (result.status !== 0) {
     // Provider stderr detail keeps at most the first non-empty line — a
@@ -475,34 +530,30 @@ function readViaQmd(
       || rawProviderError.includes("unknown option")
       || rawProviderError.includes("unknown flag")
     ) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: "ukp read: qmd build does not support '--no-line-numbers'; provider incompatible\n",
-      };
+      return readFailure(
+        "provider-incompatible",
+        "qmd build does not support '--no-line-numbers'; provider incompatible",
+      );
     }
     const providerError = rawProviderError
       .split(/\r?\n/)
       .map((line) => line.trim())
       .find((line) => line.length > 0);
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr:
-        `ukp read: resource-missing: '${request.path}' could not be resolved by the provider in endpoint '${endpointName}'\n`
-        + (providerError ? `(provider: ${providerError})\n` : ""),
-    };
+    return readFailure(
+      "resource-missing",
+      `resource-missing: '${request.path}' could not be resolved by the provider in endpoint '${endpointName}'`
+        + (providerError ? `\n(provider: ${providerError})` : ""),
+    );
   }
 
   const body = stripQmdHeader(result.stdout ?? "");
   if (body.length === 0) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp read: provider returned no content for '${request.path}' in endpoint '${endpointName}'\n`,
-    };
+    return readFailure(
+      "provider-no-content",
+      `provider returned no content for '${request.path}' in endpoint '${endpointName}'`,
+    );
   }
-  return { exitCode: 0, stdout: body, stderr: "" };
+  return { ok: true, result: { content: body, recoveryWarnings: [] } };
 }
 
 /**
@@ -521,7 +572,7 @@ function attemptRenameRecovery(
   serviceFolder: string,
   qmdCommand: readonly string[] | undefined,
   pin: string | undefined,
-): { kind: "recovered"; result: ReadResult } | { kind: "exhausted"; recovery: NonNullable<ReadResult["recovery"]> } {
+): { kind: "recovered"; outcome: ReadOutcome } | { kind: "exhausted"; recovery: ReadRecoveryMeta } {
   const outcome = recoverRenamedResource({
     route: request.path,
     endpointName,
@@ -529,7 +580,8 @@ function attemptRenameRecovery(
     ...(pin !== undefined ? { pin } : {}),
     ...(qmdCommand !== undefined ? { qmdCommand } : {}),
   });
-  const metadata = {
+  const recovery: ReadRecoveryMeta = {
+    from: request.path,
     attempted: outcome.attempted,
     outcome: outcome.status,
     ...(outcome.recoveredRoute !== undefined ? { recoveredTo: outcome.recoveredRoute } : {}),
@@ -541,22 +593,23 @@ function attemptRenameRecovery(
     try {
       const targetPath = resolveEndpointPath(serviceFolder, outcome.recoveredRoute);
       const read = readTargetWithLines(targetPath, { ...request, path: outcome.recoveredRoute });
-      if (read.exitCode === 0) {
-        const echo =
-          `ukp read: recovered: '${request.path}' moved to '${outcome.recoveredRoute}' (${outcome.layer === "search-reanchor" ? "search re-anchor" : "git history"})\n`;
-        const warnings = outcome.warnings.map((line) => `ukp read: warning: ${line}\n`).join("");
-        return { kind: "recovered", result: { ...read, stderr: `${echo}${warnings}${read.stderr}`, recovery: metadata } };
+      if (read.ok) {
+        // Success sideband: echo + warnings render from structured fields.
+        return {
+          kind: "recovered",
+          outcome: { ok: true, result: { ...read.result, recovery, recoveryWarnings: outcome.warnings } },
+        };
       }
       // The proposed route failed its own read (e.g. start-beyond-eof): the
       // recovery found the resource but the read contract still governs —
       // surface that failure rather than hiding behind resource-missing.
-      return { kind: "recovered", result: { ...read, recovery: metadata } };
+      return { kind: "recovered", outcome: { ...read, failure: { ...read.failure, recovery } } };
     } catch {
       // Proposed route vanished or escaped containment mid-recovery: fall
       // through to exhaustion (recorded below with the attempted layers).
     }
   }
-  return { kind: "exhausted", recovery: metadata };
+  return { kind: "exhausted", recovery };
 }
 
 /** Advisory recovery candidates appended to a resource-missing miss (spec
@@ -568,23 +621,22 @@ function formatRecoveryCandidates(candidates: readonly RecoveryCandidate[] | und
   return `Rename recovery candidates:\n${lines.join("\n")}\n`;
 }
 
-function readTargetWithLines(targetPath: string, request: ReadRequest): ReadResult {
+function readTargetWithLines(targetPath: string, request: ReadRequest): ReadOutcome {
   let content: string;
   try {
     content = readFileSync(targetPath, "utf8");
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return { exitCode: 1, stdout: "", stderr: `ukp read: resource disappeared during lookup\n` };
+      return readFailure("resource-disappeared", "resource disappeared during lookup");
     }
     // A directory tail resolves as a path but is not a readable resource; the
     // failure must state that in product terms instead of leaking the Node
     // errno (`EISDIR: illegal operation on a directory, read`) as the surface.
     if (error instanceof Error && "code" in error && error.code === "EISDIR") {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `ukp read: '${request.path}' is a directory, not a readable resource\n`,
-      };
+      return readFailure(
+        "resource-is-directory",
+        `'${request.path}' is a directory, not a readable resource`,
+      );
     }
     throw error;
   }
@@ -592,17 +644,19 @@ function readTargetWithLines(targetPath: string, request: ReadRequest): ReadResu
   if (rangeResult.kind === "start-beyond-eof") {
     // Word by input origin: a URI #L<line> fragment never mentions --lines.
     const origin = request.addressing === "uri" ? "line window start" : "--lines start";
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr:
-        `ukp read: ${origin} ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)\n`,
-    };
+    return readFailure(
+      "start-beyond-eof",
+      `${origin} ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)`,
+    );
   }
-  return { exitCode: 0, stdout: rangeResult.content, stderr: "" };
+  return { ok: true, result: { content: rangeResult.content, recoveryWarnings: [] } };
 }
 
-export function executeRead(request: ReadRequest, context: ReadContext): ReadResult {
+/** ADR 0021 core entry: runs the read capability and returns the structured
+ * outcome. Parse-layer usage errors and scope/manifest failures still throw
+ * typed errors for the surface adapter to map; execution-tier usage
+ * violations classify as `usage-error` failures (exit-2 class). */
+export function runRead(request: ReadRequest, context: ReadContext): ReadOutcome {
   // A docid[:line] handoff key already carries an embedded line; a separate
   // --lines range would double-specify (ADR 0011 / read-qmd-adapter). Strip any
   // leading `#` first so a hash-prefixed `#docid:line` is caught too, even
@@ -618,11 +672,12 @@ export function executeRead(request: ReadRequest, context: ReadContext): ReadRes
   // is the product's job, never a shape the agent must pre-normalize. Two
   // explicit tiers — an absolute filesystem path mapped against the Registry
   // (endpoint inferred), and a document-relative reference resolved against
-  // --from. Both rewrite the request to the canonical endpoint+route and echo
-  // the mapping on stderr (stdout stays body-only); both fail loud as usage
+  // --from. Both rewrite the request to the canonical endpoint+route and
+  // record the mapping as structured resolution provenance (echoed on stderr
+  // by the adapter; stdout stays body-only); both fail loud as usage
   // errors, never silently delegating (the weak-reference lesson, ADR 0017).
   const registry = readRegistry(context.registryPath);
-  let resolutionNote: string | undefined;
+  let resolution: ReadResolution | undefined;
   if (request.addressing !== "uri" && isAbsoluteFilesystemReference(request.path)) {
     if (request.fromRef !== undefined) {
       throw new ReadUsageError("an absolute filesystem path cannot be combined with --from");
@@ -634,7 +689,10 @@ export function executeRead(request: ReadRequest, context: ReadContext): ReadRes
     }
     const mapped = resolveAbsoluteReference(request.path, registry);
     request = { ...request, endpoint: mapped.endpoint, path: mapped.route, addressing: "absolute" };
-    resolutionNote = `ukp read: absolute path matched endpoint '${mapped.endpoint}', route '${mapped.route}'`;
+    resolution = {
+      kind: "absolute-mapped",
+      note: `absolute path matched endpoint '${mapped.endpoint}', route '${mapped.route}'`,
+    };
   } else if (request.fromRef !== undefined) {
     if (request.endpoint === undefined) {
       throw new ReadUsageError("--from requires --endpoint <name>");
@@ -643,24 +701,28 @@ export function executeRead(request: ReadRequest, context: ReadContext): ReadRes
       throw new ReadUsageError("--from applies to document-relative path references, not provider references");
     }
     const resolved = resolveDocRelativeReference(request.fromRef, request.path);
-    resolutionNote = `ukp read: resolved '${request.path}' from '${request.fromRef}' -> '${resolved}'`;
+    resolution = {
+      kind: "doc-relative",
+      note: `resolved '${request.path}' from '${request.fromRef}' -> '${resolved}'`,
+    };
     // Keep the verbatim reference for same-line ukp-pin extraction (Q1).
     request = { ...request, path: resolved, sourceReference: request.path };
   }
 
-  const result = executeResolvedRead(request, context, registry);
-  return resolutionNote === undefined
-    ? result
-    : { ...result, stderr: `${resolutionNote}\n${result.stderr}` };
+  const outcome = executeResolvedRead(request, context, registry);
+  if (resolution === undefined) return outcome;
+  return outcome.ok
+    ? { ok: true, result: { ...outcome.result, resolution } }
+    : { ok: false, failure: { ...outcome.failure, resolution } };
 }
 
 function executeResolvedRead(
   request: ReadRequest,
   context: ReadContext,
   registry: ReturnType<typeof readRegistry>,
-): ReadResult {
+): ReadOutcome {
   if (request.endpoint === undefined) {
-    return { exitCode: 1, stdout: "", stderr: "ukp read: no endpoint selected\n" };
+    return readFailure("no-endpoint", "no endpoint selected");
   }
   const scope = resolveScope({
     currentDirectory: context.currentDirectory,
@@ -670,16 +732,15 @@ function executeResolvedRead(
   });
   const [binding] = scope.bindings;
   if (!binding) {
-    return { exitCode: 1, stdout: "", stderr: "ukp read: no endpoint selected\n" };
+    return readFailure("no-endpoint", "no endpoint selected");
   }
 
   const service = loadManifest(binding.path);
   if (service.effectiveName !== binding.name) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp read: endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'\n`,
-    };
+    return readFailure(
+      "endpoint-name-mismatch",
+      `endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'`,
+    );
   }
 
   // ukp-pin from the --from source document (Q1 same-line spelling): the
@@ -714,21 +775,19 @@ function executeResolvedRead(
       targetPath = resolveEndpointPath(service.folder, request.path);
     } catch (error) {
       if (error instanceof ReadUsageError) {
-        return { exitCode: 2, stdout: "", stderr: `ukp read: ${error.message}\n` };
+        return readFailure("usage-error", error.message);
       }
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         // ADR 0020 miss-path recovery: the URI slot missed, so descend the
         // layered stack (git-derived -> search re-anchor) before classifying.
         const recovered = attemptRenameRecovery(request, binding.name, service.folder, qmdCommand, pin);
-        if (recovered.kind === "recovered") return recovered.result;
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr:
-            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}' (ukp:// addresses a slot exactly; no fuzzy resolution)\n`
-            + formatRecoveryCandidates(recovered.recovery.candidates),
-          recovery: recovered.recovery,
-        };
+        if (recovered.kind === "recovered") return recovered.outcome;
+        return readFailure(
+          "resource-missing",
+          `resource-missing '${request.path}' in endpoint '${binding.name}' (ukp:// addresses a slot exactly; no fuzzy resolution)\n`
+            + formatRecoveryCandidates(recovered.recovery.candidates).trimEnd(),
+          recovered.recovery,
+        );
       }
       throw error;
     }
@@ -740,11 +799,10 @@ function executeResolvedRead(
   // empty segment is never misread as a file-path usage error.
   if (request.path.startsWith("qmd://")) {
     if (!qmdBacked) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `ukp read: qmd:// references require a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
-      };
+      return readFailure(
+        "qmd-route-unavailable",
+        `qmd:// references require a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route`,
+      );
     }
     if (!qmdCommand) {
       return providerUnavailableNoExecutable(binding.name);
@@ -761,11 +819,10 @@ function executeResolvedRead(
   const barePath = stripDocidHash(request.path);
   if (isBareDocidReference(barePath)) {
     if (!qmdBacked) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `ukp read: a docid[:line] reference requires a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route\n`,
-      };
+      return readFailure(
+        "qmd-route-unavailable",
+        `a docid[:line] reference requires a QMD-backed endpoint; endpoint '${binding.name}' has no QMD get route`,
+      );
     }
     if (!qmdCommand) {
       return providerUnavailableNoExecutable(binding.name);
@@ -778,7 +835,7 @@ function executeResolvedRead(
     targetPath = resolveEndpointPath(service.folder, request.path);
   } catch (error) {
     if (error instanceof ReadUsageError) {
-      return { exitCode: 2, stdout: "", stderr: `ukp read: ${error.message}\n` };
+      return readFailure("usage-error", error.message);
     }
     // realpathSync throws ENOENT if path doesn't exist
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
@@ -789,16 +846,14 @@ function executeResolvedRead(
       // endpoint on such a miss took 118s with zero output).
       if (request.addressing === "absolute") {
         const recovered = attemptRenameRecovery(request, binding.name, service.folder, qmdCommand, pin);
-        if (recovered.kind === "recovered") return recovered.result;
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr:
-            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}'`
+        if (recovered.kind === "recovered") return recovered.outcome;
+        return readFailure(
+          "resource-missing",
+          `resource-missing '${request.path}' in endpoint '${binding.name}'`
             + ` (absolute paths address files exactly; the mapped route does not exist — the target may live one level deeper, e.g. under src/)\n`
-            + formatRecoveryCandidates(recovered.recovery.candidates),
-          recovery: recovered.recovery,
-        };
+            + formatRecoveryCandidates(recovered.recovery.candidates).trimEnd(),
+          recovered.recovery,
+        );
       }
       // ADR 0017: read is file-native — a plain-path miss is resource-missing
       // on every endpoint; the provider is never entered from a miss. On a
@@ -810,7 +865,7 @@ function executeResolvedRead(
       // folder itself.
       if (qmdBacked) {
         const recovered = attemptRenameRecovery(request, binding.name, service.folder, qmdCommand, pin);
-        if (recovered.kind === "recovered") return recovered.result;
+        if (recovered.kind === "recovered") return recovered.outcome;
         const { serviceReal, suffixMatches, nameFuzzyMatches } = findFilesBySuffix(service.folder, request.path);
         const candidates = [...suffixMatches, ...nameFuzzyMatches]
           .map((m) => `  - ${relative(serviceReal, m).replace(/\\/g, "/")}`);
@@ -820,18 +875,18 @@ function executeResolvedRead(
         const shapeHint = request.path.includes("/")
           ? `Browse the endpoint with 'ukp nav --endpoint ${binding.name}'`
           : `For a document-relative reference use '--from <route>', or browse with 'ukp nav --endpoint ${binding.name}'`;
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr:
-            `ukp read: resource-missing '${request.path}' in endpoint '${binding.name}' (plain paths and ukp:// URIs address files exactly; no fuzzy resolution)\n`
-            + `${shapeHint}.\n`
+        return readFailure(
+          "resource-missing",
+          `resource-missing '${request.path}' in endpoint '${binding.name}' (plain paths and ukp:// URIs address files exactly; no fuzzy resolution)\n`
+            + `${shapeHint}.`
             + (candidates.length > 0
-              ? `Did you mean:\n${candidates.join("\n")}\n`
+              ? `\nDid you mean:\n${candidates.join("\n")}`
               : "")
-            + formatRecoveryCandidates(recovered.recovery.candidates),
-          recovery: recovered.recovery,
-        };
+            + (recovered.recovery.candidates && recovered.recovery.candidates.length > 0
+              ? `\n${formatRecoveryCandidates(recovered.recovery.candidates).trimEnd()}`
+              : ""),
+          recovered.recovery,
+        );
       }
       // Pure file-backed: filesystem fuzzy fallback (visibility root is the
       // Service folder itself).
@@ -844,32 +899,30 @@ function executeResolvedRead(
         const matchList = suffixMatches
           .map((m) => `  - ${relative(serviceReal, m).replace(/\\/g, "/")}`)
           .join("\n");
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr: `ukp read: multiple resources match '${request.path}' in endpoint '${binding.name}':\n${matchList}\nUse a more specific path.\n`,
-        };
+        return readFailure(
+          "ambiguous-match",
+          `multiple resources match '${request.path}' in endpoint '${binding.name}':\n${matchList}\nUse a more specific path.`,
+        );
       } else if (nameFuzzyMatches.length > 0) {
         // Name fuzzy match (filename fuzzy): always show candidates
         const matchList = nameFuzzyMatches
           .map((m) => `  - ${relative(serviceReal, m).replace(/\\/g, "/")}`)
           .join("\n");
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr: `ukp read: no exact match for '${request.path}' in endpoint '${binding.name}'.\nDid you mean:\n${matchList}\n`,
-        };
+        return readFailure(
+          "no-exact-match",
+          `no exact match for '${request.path}' in endpoint '${binding.name}'.\nDid you mean:\n${matchList}`,
+        );
       } else {
         const recovered = attemptRenameRecovery(request, binding.name, service.folder, undefined, pin);
-        if (recovered.kind === "recovered") return recovered.result;
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr:
-            `ukp read: resource '${request.path}' was not found in endpoint '${binding.name}'\n`
-            + formatRecoveryCandidates(recovered.recovery.candidates),
-          recovery: recovered.recovery,
-        };
+        if (recovered.kind === "recovered") return recovered.outcome;
+        return readFailure(
+          "resource-not-found",
+          `resource '${request.path}' was not found in endpoint '${binding.name}'`
+            + (recovered.recovery.candidates && recovered.recovery.candidates.length > 0
+              ? `\n${formatRecoveryCandidates(recovered.recovery.candidates).trimEnd()}`
+              : ""),
+          recovered.recovery,
+        );
       }
     } else {
       throw error;
@@ -877,4 +930,114 @@ function executeResolvedRead(
   }
 
   return readTargetWithLines(targetPath, request);
+}
+
+// ---------------------------------------------------------------------------
+// Presentation (ADR 0021 two-stage form). read is a payload-type capability:
+// stdout is the resource body itself; every echo/warning/diagnostic is a
+// sideband rendered onto stderr by the shared render below. Adapters must
+// consume these — never re-parse rendered text (the old --format json path
+// regex-extracted the error class out of stderr; the class is data now).
+// ---------------------------------------------------------------------------
+
+/** Success sideband lines: resolution echo, recovery echo, then recovery
+ * warnings — composed from structured fields, `ukp read:` prefixes added
+ * here (CLI wording, not capability data). */
+function renderReadSideband(result: ReadSuccess): string {
+  const parts: string[] = [];
+  if (result.resolution !== undefined) {
+    parts.push(`ukp read: ${result.resolution.note}`);
+  }
+  if (result.recovery?.outcome === "recovered" && result.recovery.recoveredTo !== undefined) {
+    const layerLabel = result.recovery.layer === "search-reanchor" ? "search re-anchor" : "git history";
+    parts.push(`ukp read: recovered: '${result.recovery.from}' moved to '${result.recovery.recoveredTo}' (${layerLabel})`);
+  }
+  for (const warning of result.recoveryWarnings) {
+    parts.push(`ukp read: warning: ${warning}`);
+  }
+  return parts.map((part) => `${part}\n`).join("");
+}
+
+/** Human rendering of an outcome, in surface-neutral terms: `body` is the
+ * payload (the CLI prints it on stdout), `diagnostics` is the sideband
+ * (echoes/warnings/failure message — the CLI prints it on stderr). Channel
+ * assignment belongs to adapters, so the presentation view stays
+ * surface-neutral. */
+export interface ReadHumanView {
+  body: string;
+  diagnostics: string;
+}
+
+export function renderReadHuman(outcome: ReadOutcome): ReadHumanView {
+  if (outcome.ok) {
+    return { body: outcome.result.content, diagnostics: renderReadSideband(outcome.result) };
+  }
+  const failure = outcome.failure;
+  const prefix = failure.resolution !== undefined ? `ukp read: ${failure.resolution.note}\n` : "";
+  const message = failure.message.endsWith("\n") ? failure.message : `${failure.message}\n`;
+  return { body: "", diagnostics: `${prefix}ukp read: ${message}` };
+}
+
+/** `--format json` envelope (spec read-rename-recovery). Failure class is
+ * data (`failure.errorClass`); only the three word-level classes that the
+ * published envelope vocabulary defines surface as-is, `usage-error` keeps
+ * its name, everything else maps to `error` — identical to the envelope the
+ * text-regex extraction produced. */
+export interface ReadEnvelope {
+  ok: boolean;
+  endpoint?: string;
+  reference: string;
+  recovered_to?: string;
+  error?: {
+    class: string;
+    message: string;
+    recovery?: {
+      attempted: string[];
+      outcome: string;
+      recovered_to?: string;
+      candidates?: RecoveryCandidate[];
+    };
+  };
+}
+
+export function projectReadEnvelope(request: ReadRequest, outcome: ReadOutcome): ReadEnvelope {
+  if (outcome.ok) {
+    return {
+      ok: true,
+      ...(request.endpoint !== undefined ? { endpoint: request.endpoint } : {}),
+      reference: request.path,
+      ...(outcome.result.recovery?.recoveredTo !== undefined
+        ? { recovered_to: outcome.result.recovery.recoveredTo }
+        : {}),
+    };
+  }
+  const failure = outcome.failure;
+  const wordLevel = failure.errorClass === "resource-missing"
+    || failure.errorClass === "provider-unavailable"
+    || failure.errorClass === "provider-timeout";
+  const errorClass = failure.errorClass === "usage-error"
+    ? "usage-error"
+    : wordLevel
+      ? failure.errorClass
+      : "error";
+  const firstLine = failure.message.split(/\r?\n/).find((line) => line.trim().length > 0) ?? "";
+  return {
+    ok: false,
+    ...(request.endpoint !== undefined ? { endpoint: request.endpoint } : {}),
+    reference: request.path,
+    error: {
+      class: errorClass,
+      message: firstLine,
+      ...(failure.recovery !== undefined
+        ? {
+          recovery: {
+            attempted: failure.recovery.attempted,
+            outcome: failure.recovery.outcome,
+            ...(failure.recovery.recoveredTo !== undefined ? { recovered_to: failure.recovery.recoveredTo } : {}),
+            ...(failure.recovery.candidates !== undefined ? { candidates: failure.recovery.candidates } : {}),
+          },
+        }
+        : {}),
+    },
+  };
 }
