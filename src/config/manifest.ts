@@ -2,6 +2,7 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { parse } from "smol-toml";
 import { z } from "zod";
+import { isExternalToolCapability, EXTERNAL_PROVIDER } from "./external-tool.ts";
 import { isFileNativeCapability, normalizeFileNativeFlatKeys } from "./file-native.ts";
 
 export const ENDPOINT_NAME = /^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -163,18 +164,27 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
   if (manifest.dependencies?.some((dependency) => dependency.endpoint === effectiveName)) {
     throw new ManifestError(`Service Manifest dependency cannot target the Service itself: '${effectiveName}'`);
   }
-  // Capability-level provider defaults (ADR 0016 rule 1): a bare
-  // `[capabilities.<name>]` declaration for a file-native capability means
-  // the UKP-native file provider — the common case needs zero configuration.
-  // Every other capability still fails fast at load when `provider` is
-  // missing (a typo must not degrade into a runtime "(none)" warning).
+  // Capability-level provider defaults (ADR 0016 rule 1 / ADR-RG-003): a
+  // bare `[capabilities.<name>]` declaration means the UKP-native file
+  // provider for file-native capabilities, the external-tool base tier for
+  // external-tool capabilities. Every other capability fails fast at load
+  // when `provider` is missing (a typo must not degrade into a runtime
+  // "(none)" warning); an external-tool capability with a different provider
+  // is a hard error (the tier does not plugin alternative tools).
   for (const [name, declaration] of Object.entries(manifest.capabilities)) {
     if (declaration.provider === undefined) {
       if (isFileNativeCapability(name)) {
         manifest.capabilities[name] = { ...declaration, provider: "file" };
+      } else if (isExternalToolCapability(name)) {
+        manifest.capabilities[name] = { ...declaration, provider: EXTERNAL_PROVIDER };
       } else {
         throw new ManifestError(`[capabilities.${name}] must declare a provider`);
       }
+    } else if (isExternalToolCapability(name) && declaration.provider !== EXTERNAL_PROVIDER) {
+      throw new ManifestError(
+        `[capabilities.${name}] provider must be '${EXTERNAL_PROVIDER}' or omitted `
+        + `(external-tool base tier: the declaration only overrides config)`,
+      );
     }
   }
   return { folder, manifestPath, manifest, effectiveName, nameSource };

@@ -24,9 +24,16 @@ describe("Service Manifest and diagnose", () => {
       supported: provider === "qmd",
       reason: provider === "qmd" ? undefined : "unsupported",
     }));
-    // search + refresh from the Manifest; get and nav as derived-local defaults
-    expect(report.capabilities).toHaveLength(4);
+    // search + refresh from the Manifest; get and nav as derived-local
+    // defaults; rg as the external-tool base tier (ADR-RG-003)
+    expect(report.capabilities).toHaveLength(5);
     expect(report.capabilities.filter((capability) => capability.source === "manifest")).toHaveLength(2);
+    expect(report.capabilities.some((capability) =>
+      capability.name === "rg"
+      && capability.provider === "external"
+      && capability.source === "base-tier"
+      && capability.status === "warning"
+    )).toBe(true);
     expect(report.capabilities.some((capability) =>
       capability.name === "read"
       && capability.provider === "file"
