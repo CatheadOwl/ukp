@@ -1,9 +1,10 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, win32 } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { loadManifest, type ManifestCapability } from "../config/manifest.ts";
 import { resolveFileNativeCapability, unsupportedFileNativeProviderMessage } from "../config/file-native.ts";
 import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
+import { isInsideRealRoot, splitEndpointRelativeSegments } from "../path-safety.ts";
 
 // Nav capability: UKP-native file provider that
 // enumerates the Markdown structure of one endpoint. The design stance is
@@ -563,23 +564,18 @@ function buildNavResult(
  * parser and the capability): endpoint-relative, no empty / `.` / `..`
  * segments. Existence and containment are checked later at execution. */
 export function validateNavRoutePath(routePath: string): string[] {
-  if (
-    isAbsolute(routePath)
-    || win32.isAbsolute(routePath)
-    || /^[A-Za-z]:/.test(routePath)
-    || routePath.startsWith("//")
-    || routePath.startsWith("\\\\")
-  ) {
-    throw new NavUsageError("path must be endpoint-relative, not absolute");
-  }
-  const segments = routePath.split(/[\\/]/);
-  if (segments.some((segment) => segment.length === 0)) {
-    throw new NavUsageError("path must not contain empty path segments");
-  }
-  if (segments.some((segment) => segment === "." || segment === "..")) {
+  // Path-safety primitive (ADR 0023): verdicts shared, error wording local.
+  const result = splitEndpointRelativeSegments(routePath);
+  if (!result.ok) {
+    if (result.reason === "absolute") {
+      throw new NavUsageError("path must be endpoint-relative, not absolute");
+    }
+    if (result.reason === "empty-segment") {
+      throw new NavUsageError("path must not contain empty path segments");
+    }
     throw new NavUsageError("path must not contain '.' or '..' path segments");
   }
-  return segments;
+  return result.segments;
 }
 
 /** Presentation projection (ADR 0021 two-stage form): the structured,
@@ -706,7 +702,7 @@ export function runNav(request: NavRequest, context: NavContext): NavOutcome {
       };
     }
     const rel = relative(serviceReal, targetReal);
-    if (rel.startsWith("..") || isAbsolute(rel)) {
+    if (!isInsideRealRoot(serviceReal, targetReal, { allowRoot: true })) {
       throw new NavUsageError("path must stay inside the selected Service folder");
     }
     if (!statSync(targetReal).isDirectory()) {
