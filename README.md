@@ -122,6 +122,7 @@ you.
 | `ukp search` | Runs lexical search; `--recursive` expands direct authority/context dependencies. |
 | `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
 | `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
+| `ukp rg` | Runs base lexical search (ripgrep) across endpoints — available on every registered endpoint by default (a missing rg binary degrades to a skip, never a fault); results are shaped into `read`-ready `ukp://` references; `--count` lists per-file counts; `--` passes rg flags through on an allowlist. |
 | `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
 | `ukp propose` | Creates a proposal file in a target endpoint's proposal folder, dispatching via the file provider; resubmitting the same id updates the same proposal (created/unchanged/updated, revision bump). |
 

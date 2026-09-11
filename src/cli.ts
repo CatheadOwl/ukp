@@ -9,6 +9,7 @@ import {
   type ProviderResolver,
 } from "./commands/diagnose.ts";
 import { executeReadCommand } from "./commands/read.ts";
+import { executeRgCommand } from "./commands/rg.ts";
 import { executeGuideCommand } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
 import { executeInspectCommand } from "./commands/inspect.ts";
@@ -27,10 +28,12 @@ export { renderInspectHelp } from "./commands/inspect.ts";
 export { renderRefreshHelp } from "./commands/refresh.ts";
 export { renderProposeHelp } from "./commands/propose.ts";
 export { renderNavHelp } from "./commands/nav.ts";
+export { renderRgHelp } from "./commands/rg.ts";
 
 export const COMMANDS = [
   ["diagnose", "validate a Service folder or endpoint scope"],
   ["read", "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)"],
+  ["rg", "run base lexical search (ripgrep) across endpoints, results as ukp:// references"],
   // `get` was renamed to `read`; with no external users the old
   // spelling was removed outright instead of kept as an alias.
   ["guide", "show short operational guides"],
@@ -51,6 +54,7 @@ export interface CliContext {
   registryPath?: string;
   resolveProvider?: ProviderResolver;
   qmdCommand?: readonly string[];
+  rgCommand?: readonly string[];
   artifactRoot?: string;
   artifactRunId?: string;
   now?: Date;
@@ -310,6 +314,14 @@ export function runCli(
     return writeCommandResult(executeProposeCommand(args.slice(1), {
       currentDirectory,
       registryPath,
+    }), stdout, stderr);
+  }
+
+  if (command === "rg") {
+    return writeCommandResult(executeRgCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+      rgCommand: context.rgCommand,
     }), stdout, stderr);
   }
 

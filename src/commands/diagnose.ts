@@ -1,11 +1,13 @@
 import { loadManifest, type LoadedManifest, type ManifestCapability } from "../config/manifest.ts";
 import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
+import { EXTERNAL_TOOL_CAPABILITIES, EXTERNAL_PROVIDER, isExternalToolCapability } from "../config/external-tool.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { Command, CommanderError } from "commander";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
 import { defaultQmdCommand } from "../capabilities/qmd.ts";
 import { resolveProposeFolder } from "../capabilities/propose.ts";
+import { rgExecutableAvailable } from "../capabilities/rg.ts";
 
 export interface ProviderCheck {
   supported: boolean;
@@ -19,7 +21,7 @@ export interface DiagnoseReport {
   capabilities: Array<{
     name: string;
     provider: string;
-    source: "manifest" | "derived-local";
+    source: "manifest" | "derived-local" | "base-tier";
     status: "ok" | "warning";
     reason?: string;
   }>;
@@ -64,6 +66,16 @@ export function defaultProviderResolver(provider: string, capability = "search")
           supported: false,
           reason: `provider '${provider}' is not supported for capability '${capability}' by this UKP build`,
         };
+  }
+  if (isExternalToolCapability(capability)) {
+    // External-tool base tier (ADR-RG-003): the provider marker is fixed;
+    // availability is the base tool itself, degrading to a warning row.
+    if (provider !== EXTERNAL_PROVIDER) {
+      return { supported: false, reason: `provider '${provider}' is not supported for capability '${capability}' by this UKP build` };
+    }
+    return rgExecutableAvailable()
+      ? { supported: true }
+      : { supported: false, reason: "rg executable is not available" };
   }
   if (capability === "refresh") {
     if (provider !== "qmd") {
@@ -134,7 +146,23 @@ export function evaluateServiceCapabilities(
         ...(check.reason ? { reason: check.reason } : {}),
       };
     });
-  return [...manifestCapabilities, ...derived];
+
+  // External-tool base tier (ADR-RG-003): base-tier members are effectively
+  // present on every registered local Service without declaration; a missing
+  // base tool degrades the row to a warning, never hides it.
+  const baseTier = Object.entries(EXTERNAL_TOOL_CAPABILITIES)
+    .filter(([name, spec]) => spec.baseTier && !Object.hasOwn(service.manifest.capabilities, name))
+    .map(([name]) => {
+      const check = resolveProvider(EXTERNAL_PROVIDER, name);
+      return {
+        name,
+        provider: EXTERNAL_PROVIDER,
+        source: "base-tier" as const,
+        status: check.supported ? "ok" as const : "warning" as const,
+        ...(check.reason ? { reason: check.reason } : {}),
+      };
+    });
+  return [...manifestCapabilities, ...derived, ...baseTier];
 }
 
 export function diagnoseService(
@@ -378,7 +406,9 @@ export function renderDiagnose(report: DiagnoseReport, options: RenderDiagnoseOp
   for (const capability of report.capabilities) {
     lines.push(capability.source === "derived-local"
       ? `capability: ${capability.name} (derived local baseline)`
-      : `capability: ${capability.name}`);
+      : capability.source === "base-tier"
+        ? `capability: ${capability.name} (external-tool base tier)`
+        : `capability: ${capability.name}`);
     lines.push(`provider: ${capability.provider}`);
     lines.push(`status: ${capability.status}`);
     if (capability.reason) lines.push(`warning: ${capability.reason}`);

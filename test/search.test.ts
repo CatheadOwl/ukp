@@ -563,7 +563,11 @@ describe("search", () => {
     const succeeded = createService(root, "json-success", "success");
     const noMatch = createService(root, "json-no-match", "empty");
     const failed = createService(root, "json-provider-fail", "failed");
-    const skipped = createService(root, "json-skipped", "skipped", "rg", "rg");
+    // Note: the skipped service uses provider "rg" under the *search*
+    // capability (unsupported by search → skipped). `[capabilities.rg]`
+    // itself is the external-tool base tier now (ADR-RG-003) and must be
+    // bare or 'external' — a different name keeps this fixture valid.
+    const skipped = createService(root, "json-skipped", "skipped", "search", "rg");
     registerAt(registryPath, "success", succeeded);
     registerAt(registryPath, "empty", noMatch);
     registerAt(registryPath, "failed", failed);
