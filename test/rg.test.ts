@@ -67,6 +67,8 @@ describe("ukp rg command surface", () => {
 
   test("passthrough allowlist accepts context flags and rejects scope/output breakers", () => {
     expect(() => validateRgPassthrough(["-C", "3", "-A2", "-w", "--no-ignore"])).not.toThrow();
+    // Claude Grep surface parity: multiline (-U) routes through the hatch.
+    expect(() => validateRgPassthrough(["-U", "--multiline"])).not.toThrow();
     expect(() => validateRgPassthrough(["--json"])).toThrow(/allowlist/);
     expect(() => validateRgPassthrough(["-r", "x"])).toThrow(/allowlist/);
     expect(() => validateRgPassthrough(["--config", "x"])).toThrow(/allowlist/);

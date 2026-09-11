@@ -139,7 +139,7 @@ export function rgTimeoutMs(): number {
 
 /** Value flags consume the next token (or an attached value: `-C2`). */
 const PASSTHROUGH_VALUE_FLAGS = new Set(["-A", "-B", "-C", "-m", "--max-count", "-g", "--glob", "-t", "--type", "--max-filesize"]);
-const PASSTHROUGH_BOOL_FLAGS = new Set(["-i", "--ignore-case", "-S", "--smart-case", "-s", "--case-sensitive", "-w", "--word-regexp", "-F", "--fixed-strings", "-v", "--invert-match", "--no-ignore", "--hidden", "--no-messages", "--column", "--no-heading"]);
+const PASSTHROUGH_BOOL_FLAGS = new Set(["-i", "--ignore-case", "-S", "--smart-case", "-s", "--case-sensitive", "-w", "--word-regexp", "-F", "--fixed-strings", "-v", "--invert-match", "-U", "--multiline", "--no-ignore", "--hidden", "--no-messages", "--column", "--no-heading"]);
 
 /** Validates passthrough args: allowlist membership + scope protection.
  * Throws `RgUsageError` naming the rejected token and the reason; returns
