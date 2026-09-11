@@ -53,7 +53,9 @@ export class SearchPlanningError extends Error {
   }
 }
 
-export interface HumanSearchContext {
+/** ADR 0021 context injection (registry path, provider command, artifact
+ * root/run id, clock) — no ambient state. */
+export interface SearchContext {
   currentDirectory: string;
   registryPath: string;
   qmdCommand?: readonly string[];
@@ -62,10 +64,62 @@ export interface HumanSearchContext {
   now?: Date;
 }
 
-export interface HumanSearchResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
+/** ADR 0021 aggregate classification (D-036: skip never changes the success
+ * state; a provider failure makes the whole run exit non-zero). The surface
+ * adapter maps this onto exit codes — the capability never decides them. */
+export type SearchAggregateStatus =
+  | "succeeded"
+  | "provider-failure"
+  | "cancelled"
+  | "no-success";
+
+/** One endpoint's structured result. Contract zone: name/provider/status/
+ * message plus the json-mode artifact fields. Provider-native zone: the raw
+ * provider output and exit status (human-mode render source, passed through
+ * unmodeled per ADR 0021 §1). `folder` is internal provenance for the human
+ * renderer (ukp:// derivation), never part of the envelope. */
+export interface SearchEndpointOutcome {
+  name: string;
+  provider: string | null;
+  /** Undefined only transiently while the run classifies the provider
+   * result; every path assigns a final status before the outcome escapes
+   * (the envelope projection defaults any stray undefined to `failed`). */
+  status?:
+    | "succeeded"
+    | "no_matches"
+    | "skipped"
+    | "failed"
+    | "cancelled"
+    /** human mode only: this endpoint's SIGINT stopped the run — its header
+     * was already rendered, its result block never is. */
+    | "interrupted";
+  /** Factual skip/failure message (envelope `message`), no surface prefix. */
+  message?: string;
+  traversal?: TraversalProvenance;
+  folder?: string;
+  /** Raw provider stdout, trimmed (human-mode render source). */
+  providerOutput?: string;
+  /** Raw provider exit status (null on signal or spawn error). */
+  providerExitStatus?: number | null;
+  /** Provider stderr detail or spawn error message. */
+  providerErrorDetail?: string;
+  artifact?: string;
+  format?: string;
+  references_artifact?: string;
+  references_format?: "ukp-search-references-v1";
+  error_artifact?: string;
+}
+
+/** ADR 0021 structured outcome: everything both render modes and future
+ * surfaces (MCP, programmatic) consume. No stdout/stderr/exit codes. */
+export interface SearchResult {
+  query: string;
+  limit: number;
+  /** Present only when the run produced an artifact directory (json mode). */
+  runId?: string;
+  endpoints: SearchEndpointOutcome[];
+  warnings: string[];
+  aggregate: SearchAggregateStatus;
 }
 
 interface PlannedEndpoint {
@@ -121,7 +175,7 @@ export interface SearchEnvelope {
   warnings: string[];
 }
 
-function planSearch(parsed: ParsedSearch, context: HumanSearchContext): {
+function planSearch(parsed: ParsedSearch, context: SearchContext): {
   plan: PlannedEndpoint[];
   warnings: string[];
 } {
@@ -296,8 +350,7 @@ function commandFor(endpoint: PlannedEndpoint, parsed: ParsedSearch, json: boole
   return buildQmdInvocation(endpoint.command!, providerArgs);
 }
 
-function renderTraversalProvenance(endpoint: PlannedEndpoint): string[] {
-  const traversal = endpoint.traversal;
+function renderTraversalProvenance(traversal: TraversalProvenance | undefined): string[] {
   if (!traversal) return [];
   const via = traversal.via ? ` via=${traversal.via.kind}` : "";
   const lines = [
@@ -307,22 +360,48 @@ function renderTraversalProvenance(endpoint: PlannedEndpoint): string[] {
   return lines;
 }
 
-function executeHumanMode(
+function runHumanMode(
   parsed: ParsedSearch,
   plan: readonly PlannedEndpoint[],
   warnings: string[],
-): HumanSearchResult {
+): SearchResult {
   const executable = plan.filter((endpoint) => endpoint.status === "executable");
+  const endpoints: SearchEndpointOutcome[] = [];
   if (executable.length === 0) {
-    return { exitCode: 1, stdout: "", stderr: `${warnings.join("\n")}\n` };
+    return {
+      query: parsed.request.query,
+      limit: parsed.request.limit,
+      endpoints,
+      warnings,
+      aggregate: "no-success",
+    };
   }
 
-  const output: string[] = [];
   let failed = false;
-  for (const endpoint of executable) {
-    if (output.length > 0) output.push("");
-    output.push(`== ${endpoint.name} ==`);
-    output.push(...renderTraversalProvenance(endpoint));
+  let interrupted = false;
+  for (const endpoint of plan) {
+    if (endpoint.status === "skipped") {
+      endpoints.push({
+        name: endpoint.name,
+        provider: endpoint.provider,
+        status: "skipped",
+        message: endpoint.warning,
+        ...(endpoint.traversal ? { traversal: endpoint.traversal } : {}),
+      });
+      continue;
+    }
+    if (interrupted) {
+      // Executables after the SIGINT stop: recorded as cancelled so a JSON
+      // consumer can count them, never rendered in human mode.
+      endpoints.push({
+        name: endpoint.name,
+        provider: endpoint.provider,
+        status: "cancelled",
+        ...(endpoint.traversal ? { traversal: endpoint.traversal } : {}),
+      });
+      continue;
+    }
+
     const command = commandFor(endpoint, parsed, true);
     const result = spawnSync(command.file, command.args, {
       cwd: endpoint.folder!,
@@ -333,39 +412,49 @@ function executeHumanMode(
       timeout: providerTimeoutMs(),
     });
     const providerOutput = (result.stdout ?? "").trimEnd();
+    const outcome: SearchEndpointOutcome = {
+      name: endpoint.name,
+      provider: endpoint.provider,
+      ...(endpoint.traversal ? { traversal: endpoint.traversal } : {}),
+      folder: endpoint.folder,
+      providerOutput,
+      providerExitStatus: result.status,
+    };
+    endpoints.push(outcome);
     if (result.signal === "SIGTERM") {
       // Zero-output hang guard: a timed-out provider is a classified failure,
       // never silence (see qmd.ts providerTimeoutMs).
       failed = true;
-      warnings.push(
-        `endpoint '${endpoint.name}' provider timed out after ${providerTimeoutMs() / 1000}s (set UKP_PROVIDER_TIMEOUT_MS to adjust)`,
-      );
+      const message = `endpoint '${endpoint.name}' provider timed out after ${providerTimeoutMs() / 1000}s (set UKP_PROVIDER_TIMEOUT_MS to adjust)`;
+      warnings.push(message);
+      outcome.status = "failed";
+      outcome.providerExitStatus = null;
+      outcome.message = `endpoint '${endpoint.name}' provider timed out`;
       continue;
     }
     if (result.signal === "SIGINT") {
       warnings.push(`endpoint '${endpoint.name}' provider cancelled`);
-      return {
-        exitCode: 130,
-        stdout: `${output.join("\n")}\n`,
-        stderr: `${warnings.join("\n")}\n`,
-      };
-    }
-    if (providerOutput) {
-      output.push(renderResultUnits(providerOutput, endpoint.name, endpoint.folder!)
-        ?? renderFallbackProviderBlock(providerOutput, endpoint));
-    } else if (result.status === 0) {
-      output.push("(no matches)");
+      outcome.status = "interrupted";
+      outcome.providerExitStatus = null;
+      interrupted = true;
+      continue;
     }
     if (result.status !== 0 || result.error) {
       failed = true;
       const providerError = (result.stderr ?? "").trimEnd() || result.error?.message;
       warnings.push(`endpoint '${endpoint.name}' provider failed${providerError ? `: ${providerError}` : ""}`);
+      outcome.status = "failed";
+      outcome.providerErrorDetail = providerError;
+      continue;
     }
+    outcome.status = providerOutput ? "succeeded" : "no_matches";
   }
   return {
-    exitCode: failed ? 1 : 0,
-    stdout: `${output.join("\n")}\n`,
-    stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
+    query: parsed.request.query,
+    limit: parsed.request.limit,
+    endpoints,
+    warnings,
+    aggregate: interrupted ? "cancelled" : failed ? "provider-failure" : "succeeded",
   };
 }
 
@@ -649,7 +738,7 @@ function renderResultUnits(providerOutput: string, endpointName: string, endpoin
  * (`qmd://...:line #docid`); body lines with a 6-hex token (e.g. a color code)
  * are never treated as docids.
  */
-function renderFallbackProviderBlock(providerOutput: string, endpoint: PlannedEndpoint): string {
+function renderFallbackProviderBlock(providerOutput: string, endpointName: string): string {
   const lines = [providerOutput];
   const seen = new Set<string>();
   for (const textLine of providerOutput.split(/\r?\n/)) {
@@ -661,7 +750,7 @@ function renderFallbackProviderBlock(providerOutput: string, endpoint: PlannedEn
     seen.add(bare);
     const lineHit = /:(\d+)\s+#[a-f0-9]{6}/.exec(textLine);
     const lineHint = lineHit ? ` --lines ${Number(lineHit[1])}` : "";
-    lines.push(`UKP reference: ukp read --endpoint ${endpoint.name} ${bare}${lineHint}`);
+    lines.push(`UKP reference: ukp read --endpoint ${endpointName} ${bare}${lineHint}`);
   }
   return lines.join("\n");
 }
@@ -707,22 +796,22 @@ function writeQmdReferenceSidecar(
   });
 }
 
-function executeJsonMode(
+function runJsonMode(
   parsed: ParsedSearch,
-  context: HumanSearchContext,
+  context: SearchContext,
   plan: readonly PlannedEndpoint[],
   warnings: string[],
-): HumanSearchResult {
+): SearchResult {
   const run = createArtifactRun({
     root: context.artifactRoot,
     runId: context.artifactRunId,
     now: context.now,
   });
-  const endpoints: SearchEndpointEnvelope[] = [];
   let failed = false;
   let succeeded = false;
   let cancelled = false;
 
+  const endpoints: SearchEndpointOutcome[] = [];
   for (const endpoint of plan) {
     if (endpoint.status === "skipped") {
       endpoints.push({
@@ -730,7 +819,7 @@ function executeJsonMode(
         provider: endpoint.provider,
         status: "skipped",
         message: endpoint.warning,
-        ...(endpoint.traversal ?? {}),
+        ...(endpoint.traversal ? { traversal: endpoint.traversal } : {}),
       });
       continue;
     }
@@ -739,7 +828,7 @@ function executeJsonMode(
         name: endpoint.name,
         provider: endpoint.provider,
         status: "cancelled",
-        ...(endpoint.traversal ?? {}),
+        ...(endpoint.traversal ? { traversal: endpoint.traversal } : {}),
       });
       continue;
     }
@@ -749,6 +838,13 @@ function executeJsonMode(
     const errorArtifact = resolve(join(run.directory, `${endpoint.name}.stderr.txt`));
     let stdoutFd: number | undefined;
     let stderrFd: number | undefined;
+    const outcome: SearchEndpointOutcome = {
+      name: endpoint.name,
+      provider: endpoint.provider,
+      ...(endpoint.traversal ? { traversal: endpoint.traversal } : {}),
+      folder: endpoint.folder,
+    };
+    endpoints.push(outcome);
     try {
       stdoutFd = openSync(artifact, "w", 0o600);
       stderrFd = openSync(errorArtifact, "w", 0o600);
@@ -765,6 +861,9 @@ function executeJsonMode(
       closeSync(stderrFd);
       stderrFd = undefined;
 
+      outcome.artifact = artifact;
+      outcome.format = "qmd-json";
+
       if (result.signal === "SIGTERM") {
         // Zero-output hang guard: classified failure + error artifact, never
         // silence (see qmd.ts providerTimeoutMs).
@@ -772,32 +871,18 @@ function executeJsonMode(
         appendErrorArtifact(errorArtifact, `provider timed out after ${providerTimeoutMs() / 1000}s`);
         const message = `endpoint '${endpoint.name}' provider timed out`;
         warnings.push(message);
-        endpoints.push({
-          name: endpoint.name,
-          provider: endpoint.provider,
-          status: "failed",
-          artifact,
-          format: "qmd-json",
-          error_artifact: errorArtifact,
-          message,
-          ...(endpoint.traversal ?? {}),
-        });
+        outcome.status = "failed";
+        outcome.error_artifact = errorArtifact;
+        outcome.message = message;
         continue;
       }
 
       if (result.signal === "SIGINT") {
         cancelled = true;
         appendErrorArtifact(errorArtifact, "provider cancelled by SIGINT");
-        endpoints.push({
-          name: endpoint.name,
-          provider: endpoint.provider,
-          status: "cancelled",
-          artifact,
-          format: "qmd-json",
-          error_artifact: errorArtifact,
-          message: "provider cancelled by SIGINT",
-          ...(endpoint.traversal ?? {}),
-        });
+        outcome.status = "cancelled";
+        outcome.error_artifact = errorArtifact;
+        outcome.message = "provider cancelled by SIGINT";
         warnings.push(`endpoint '${endpoint.name}' provider cancelled`);
         continue;
       }
@@ -807,16 +892,9 @@ function executeJsonMode(
         if (result.error) appendErrorArtifact(errorArtifact, result.error.message);
         const message = `endpoint '${endpoint.name}' provider failed`;
         warnings.push(message);
-        endpoints.push({
-          name: endpoint.name,
-          provider: endpoint.provider,
-          status: "failed",
-          artifact,
-          format: "qmd-json",
-          error_artifact: errorArtifact,
-          message,
-          ...(endpoint.traversal ?? {}),
-        });
+        outcome.status = "failed";
+        outcome.error_artifact = errorArtifact;
+        outcome.message = message;
         continue;
       }
 
@@ -829,20 +907,14 @@ function executeJsonMode(
         appendErrorArtifact(errorArtifact, `invalid qmd-json output: ${detail}`);
         const message = `endpoint '${endpoint.name}' returned invalid qmd-json`;
         warnings.push(message);
-        endpoints.push({
-          name: endpoint.name,
-          provider: endpoint.provider,
-          status: "failed",
-          artifact,
-          format: "qmd-json",
-          error_artifact: errorArtifact,
-          message,
-          ...(endpoint.traversal ?? {}),
-        });
+        outcome.status = "failed";
+        outcome.error_artifact = errorArtifact;
+        outcome.message = message;
         continue;
       }
 
       succeeded = true;
+      outcome.status = status;
       let hasReferenceSidecar = false;
       try {
         writeQmdReferenceSidecar(endpoint.name, endpoint.folder!, artifact, referencesArtifact);
@@ -852,23 +924,13 @@ function executeJsonMode(
         appendErrorArtifact(errorArtifact, `invalid qmd-json reference mapping: ${detail}`);
         warnings.push(`endpoint '${endpoint.name}' reference sidecar unavailable: ${detail}`);
       }
+      if (hasReferenceSidecar) {
+        outcome.references_artifact = referencesArtifact;
+        outcome.references_format = "ukp-search-references-v1";
+      }
       const hasProviderStderr = statSync(errorArtifact).size > 0;
       if (!hasProviderStderr) unlinkSync(errorArtifact);
-      endpoints.push({
-        name: endpoint.name,
-        provider: endpoint.provider,
-        status,
-        artifact,
-        format: "qmd-json",
-        ...(hasReferenceSidecar
-          ? {
-            references_artifact: referencesArtifact,
-            references_format: "ukp-search-references-v1" as const,
-          }
-          : {}),
-        ...(hasProviderStderr ? { error_artifact: errorArtifact } : {}),
-        ...(endpoint.traversal ?? {}),
-      });
+      else outcome.error_artifact = errorArtifact;
     } catch (error) {
       failed = true;
       if (stdoutFd !== undefined) closeSync(stdoutFd);
@@ -881,38 +943,109 @@ function executeJsonMode(
       }
       const message = `endpoint '${endpoint.name}' artifact or provider execution failed: ${detail}`;
       warnings.push(message);
-      endpoints.push({
-        name: endpoint.name,
-        provider: endpoint.provider,
-        status: "failed",
-        ...(existsSync(artifact) ? { artifact, format: "qmd-json" } : {}),
-        ...(existsSync(errorArtifact) ? { error_artifact: errorArtifact } : {}),
-        message,
-        ...(endpoint.traversal ?? {}),
-      });
+      outcome.status = "failed";
+      if (!existsSync(artifact)) {
+        delete outcome.artifact;
+        delete outcome.format;
+      }
+      if (existsSync(errorArtifact)) outcome.error_artifact = errorArtifact;
+      outcome.message = message;
     }
   }
 
-  const envelope: SearchEnvelope = {
-    schema: "ukp.search.v1",
-    run_id: run.runId,
-    command: "search",
-    capability: "search",
+  return {
     query: parsed.request.query,
     limit: parsed.request.limit,
+    runId: run.runId,
     endpoints,
     warnings,
-  };
-  return {
-    exitCode: cancelled ? 130 : failed || !succeeded ? 1 : 0,
-    stdout: `${JSON.stringify(envelope, null, 2)}\n`,
-    stderr: "",
+    aggregate: cancelled
+      ? "cancelled"
+      : failed
+        ? "provider-failure"
+        : succeeded
+          ? "succeeded"
+          : "no-success",
   };
 }
 
-export function executeHumanSearch(parsed: ParsedSearch, context: HumanSearchContext): HumanSearchResult {
+/** ADR 0021 core entry: runs the search capability and returns the
+ * structured outcome. Scope/planning failures still throw typed errors
+ * (`SearchUsageError`, `SearchPlanningError`, `ScopeError`, `ManifestError`)
+ * for the surface adapter to map. */
+export function runSearch(parsed: ParsedSearch, context: SearchContext): SearchResult {
   const { plan, warnings } = planSearch(parsed, context);
   return parsed.options.json
-    ? executeJsonMode(parsed, context, plan, warnings)
-    : executeHumanMode(parsed, plan, warnings);
+    ? runJsonMode(parsed, context, plan, warnings)
+    : runHumanMode(parsed, plan, warnings);
+}
+
+// ---------------------------------------------------------------------------
+// Presentation (ADR 0021 two-stage form): project a structured view first,
+// render text from the view only. Adapters must consume these — never build
+// a private rendering pipeline (single render source).
+// ---------------------------------------------------------------------------
+
+/** Projection onto the public `ukp.search.v1` envelope: contract-zone fields
+ * in the canonical order; internal provenance (`folder`, raw provider
+ * output/exit) stays out. `interrupted` never occurs in json mode; it maps
+ * to `cancelled` defensively. */
+function toEndpointEnvelope(outcome: SearchEndpointOutcome): SearchEndpointEnvelope {
+  const status = outcome.status ?? "failed";
+  return {
+    name: outcome.name,
+    provider: outcome.provider,
+    status: status === "interrupted" ? "cancelled" : status,
+    ...(outcome.artifact !== undefined ? { artifact: outcome.artifact } : {}),
+    ...(outcome.format !== undefined ? { format: outcome.format } : {}),
+    ...(outcome.references_artifact !== undefined ? { references_artifact: outcome.references_artifact } : {}),
+    ...(outcome.references_format !== undefined ? { references_format: outcome.references_format } : {}),
+    ...(outcome.error_artifact !== undefined ? { error_artifact: outcome.error_artifact } : {}),
+    ...(outcome.message !== undefined ? { message: outcome.message } : {}),
+    ...(outcome.traversal ?? {}),
+  };
+}
+
+export function projectSearchEnvelope(result: SearchResult): SearchEnvelope {
+  return {
+    schema: "ukp.search.v1",
+    run_id: result.runId ?? "",
+    command: "search",
+    capability: "search",
+    query: result.query,
+    limit: result.limit,
+    endpoints: result.endpoints.map(toEndpointEnvelope),
+    warnings: result.warnings,
+  };
+}
+
+export function renderSearchJson(envelope: SearchEnvelope): string {
+  return `${JSON.stringify(envelope, null, 2)}\n`;
+}
+
+/** Human view: `== <name> ==` blocks in plan order. Skipped endpoints live
+ * only in warnings; the first `interrupted` endpoint keeps its header (the
+ * SIGINT stop happened mid-block) and ends the output; post-interrupt
+ * `cancelled` endpoints render nothing. */
+export function renderSearchHuman(result: SearchResult): string {
+  const lines: string[] = [];
+  for (const endpoint of result.endpoints) {
+    if (endpoint.status === "skipped") continue;
+    if (endpoint.status === "cancelled") break;
+    if (lines.length > 0) lines.push("");
+    lines.push(`== ${endpoint.name} ==`);
+    if (endpoint.traversal) lines.push(...renderTraversalProvenance(endpoint.traversal));
+    if (endpoint.status === "interrupted") break;
+    if (endpoint.providerOutput) {
+      lines.push(
+        endpoint.folder
+          ? (renderResultUnits(endpoint.providerOutput, endpoint.name, endpoint.folder)
+            ?? renderFallbackProviderBlock(endpoint.providerOutput, endpoint.name))
+          : renderFallbackProviderBlock(endpoint.providerOutput, endpoint.name),
+      );
+    } else if (endpoint.providerExitStatus === 0) {
+      lines.push("(no matches)");
+    }
+  }
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }
