@@ -108,6 +108,37 @@ you.
 
 ## Commands
 
+Commands are grouped in `ukp --help` by purpose (ADR 0022). Grouping is a
+display concern only: every command stays a flat `ukp <verb>`.
+
+### Endpoint commands
+
+| Command | What it does |
+|---|---|
+| `ukp search` | Runs lexical search; `--recursive` expands direct authority/context dependencies. |
+| `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
+| `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
+| `ukp rg` | Runs base lexical search (ripgrep) across endpoints — available on every registered endpoint by default (a missing rg binary degrades to a skip, never a fault); results are shaped into `read`-ready `ukp://` references; `--count` lists per-file counts; `--` passes rg flags through on an allowlist. |
+| `ukp propose` | Creates a proposal file in a target endpoint's proposal folder, dispatching via the file provider; resubmitting the same id updates the same proposal (created/unchanged/updated, revision bump). |
+
+### Registry commands
+
+| Command | What it does |
+|---|---|
+| `ukp init service` | Creates a minimal `.ukp/service.toml`. |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. |
+| `ukp list` | Lists registered endpoint bindings. |
+
+### Operations commands
+
+| Command | What it does |
+|---|---|
+| `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
+| `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
+| `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
+
+### Help commands
+
 | Command | What it does |
 |---|---|
 | `ukp version` / `ukp --version` / `ukp -V` | Shows the package version. |
@@ -115,16 +146,6 @@ you.
 | `ukp guide service qmd` | Shows provider-owned setup for the QMD provider. |
 | `ukp guide client` | Shows how a workspace uses registered Services by default. |
 | `ukp guide propose` | Shows the propose quickstart: submitting idempotent change proposals to a Service. |
-| `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
-| `ukp register` / `ukp unregister --endpoint <name>` / `ukp list` | Manages Host Registry endpoint bindings. |
-| `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
-| `ukp search` | Runs lexical search; `--recursive` expands direct authority/context dependencies. |
-| `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
-| `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
-| `ukp rg` | Runs base lexical search (ripgrep) across endpoints — available on every registered endpoint by default (a missing rg binary degrades to a skip, never a fault); results are shaped into `read`-ready `ukp://` references; `--count` lists per-file counts; `--` passes rg flags through on an allowlist. |
-| `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
-| `ukp propose` | Creates a proposal file in a target endpoint's proposal folder, dispatching via the file provider; resubmitting the same id updates the same proposal (created/unchanged/updated, revision bump). |
 
 `--endpoint <name>` is the canonical endpoint selector. `-c <name>` remains a
 compatibility alias. `-g` explicitly selects the full local Host Registry for

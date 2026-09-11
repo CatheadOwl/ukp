@@ -30,23 +30,54 @@ export { renderProposeHelp } from "./commands/propose.ts";
 export { renderNavHelp } from "./commands/nav.ts";
 export { renderRgHelp } from "./commands/rg.ts";
 
-export const COMMANDS = [
-  ["diagnose", "validate a Service folder or endpoint scope"],
-  ["read", "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)"],
-  ["rg", "run base lexical search (ripgrep) across endpoints, results as ukp:// references"],
-  // `get` was renamed to `read`; with no external users the old
-  // spelling was removed outright instead of kept as an alias.
-  ["guide", "show short operational guides"],
-  ["init", "initialize UKP-owned files"],
-  ["inspect", "explain current scope and endpoint routing"],
-  ["refresh", "trigger provider-owned Service maintenance"],
-  ["register", "register a Service endpoint"],
-  ["unregister", "remove a registered endpoint"],
-  ["list", "list registered endpoint bindings"],
-  ["nav", "navigate the Markdown structure of an endpoint"],
-  ["propose", "submit an idempotent change proposal"],
-  ["search", "run atomic lexical search"],
-  ["version", "show version information"],
+// `get` was renamed to `read`; with no external users the old
+// spelling was removed outright instead of kept as an alias.
+//
+// Command descriptions are the single source; COMMAND_GROUPS only assigns
+// each command a help-display heading (ADR 0022). Grouping is a rendering
+// concern: the invocation surface stays flat — `ukp <verb>` — and dispatch
+// in runCli is unchanged.
+const COMMAND_DESCRIPTIONS: Record<string, string> = {
+  diagnose: "validate a Service folder or endpoint scope",
+  read: "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)",
+  rg: "run base lexical search (ripgrep) across endpoints, results as ukp:// references",
+  guide: "show short operational guides",
+  init: "initialize UKP-owned files",
+  inspect: "explain current scope and endpoint routing",
+  refresh: "trigger provider-owned Service maintenance",
+  register: "register a Service endpoint",
+  unregister: "remove a registered endpoint",
+  list: "list registered endpoint bindings",
+  nav: "navigate the Markdown structure of an endpoint",
+  propose: "submit an idempotent change proposal",
+  search: "run atomic lexical search",
+  version: "show version information",
+};
+
+export const COMMANDS = Object.entries(COMMAND_DESCRIPTIONS).map(
+  ([name, description]) => [name, description] as const,
+);
+
+// Help-display groups (ADR 0022): purpose-noun headings over a flat verb
+// surface. Every command must appear in exactly one group; a guard test
+// locks group membership against COMMANDS.
+export const COMMAND_GROUPS = [
+  {
+    heading: "Endpoint commands",
+    commands: ["search", "read", "nav", "rg", "propose"],
+  },
+  {
+    heading: "Registry commands",
+    commands: ["init", "register", "unregister", "list"],
+  },
+  {
+    heading: "Operations commands",
+    commands: ["diagnose", "inspect", "refresh"],
+  },
+  {
+    heading: "Help commands",
+    commands: ["guide", "version"],
+  },
 ] as const;
 
 export interface CliContext {
@@ -148,8 +179,13 @@ export function renderHelp(): string {
     "Usage: ukp <command> [options]",
     "",
     "Commands:",
-    ...COMMANDS.map(([name, description]) => `  ${name.padEnd(10)} ${description}`),
-    "",
+    ...COMMAND_GROUPS.flatMap((group) => [
+      `${group.heading}:`,
+      ...group.commands.map((name) =>
+        `  ${name.padEnd(10)} ${COMMAND_DESCRIPTIONS[name]}`
+      ),
+      "",
+    ]),
     "Endpoint names for --endpoint come from 'ukp list'.",
     "",
     "Guides:",

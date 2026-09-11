@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, afterAll } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   COMMANDS,
+  COMMAND_GROUPS,
   renderDiagnoseHelp,
   renderReadHelp,
   renderGuideHelp,
@@ -23,10 +24,17 @@ import {
 } from "../src/cli.ts";
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
+import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
-const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
+// Private per-file copy: the fixture's invocation state is written into the
+// service folder, and bun runs test files in parallel (see helper doc).
+const fixture = createQmdFixtureCopy("cli-fixture");
 const fixtureExecutable = join(fixture, "qmd-fixture.mjs");
 const nodeExecutable = Bun.which("node") ?? process.execPath;
+
+afterAll(() => {
+  rmSync(fixture, { recursive: true, force: true });
+});
 const packageJson = JSON.parse(
   readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"),
 ) as { version: string };
@@ -37,6 +45,20 @@ describe("CLI bootstrap", () => {
     const help = renderHelp();
     for (const [name] of COMMANDS) {
       expect(help).toContain(name);
+    }
+  });
+
+  test("every command belongs to exactly one help group (ADR 0022)", () => {
+    const grouped: string[] = COMMAND_GROUPS.flatMap((group) => group.commands);
+    const names: string[] = COMMANDS.map(([name]) => name);
+    expect(grouped.sort()).toEqual(names.sort());
+    expect(new Set(grouped).size).toBe(grouped.length);
+  });
+
+  test("help renders group headings", () => {
+    const help = renderHelp();
+    for (const group of COMMAND_GROUPS) {
+      expect(help).toContain(`${group.heading}:`);
     }
   });
 
