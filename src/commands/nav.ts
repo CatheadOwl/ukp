@@ -1,17 +1,38 @@
 import { Command, CommanderError } from "commander";
 import {
-  executeNav,
+  runNav,
+  projectNavEnvelope,
+  renderNavHuman,
+  renderNavJson,
   NAV_MAX_DEPTH,
   NavProviderError,
   NavUsageError,
   validateNavRoutePath,
   type NavContext,
+  type NavErrorClass,
   type NavRequest,
-  type NavCommandResult,
 } from "../capabilities/nav.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+
+/** CLI-owned command result shape (ADR 0021: exit codes and channel text
+ * belong to the surface adapter, not the capability). */
+export interface NavCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Error-class → exit-code mapping (ADR 0021: owned by the CLI adapter per
+ * the Capability Contract; every nav failure class is a hard stop today). */
+const NAV_EXIT_BY_ERROR_CLASS: Record<NavErrorClass, number> = {
+  "no-endpoint": 1,
+  "endpoint-name-mismatch": 1,
+  "provider-unsupported": 1,
+  "route-root-not-found": 1,
+  "route-root-not-directory": 1,
+};
 
 function createNavCommand(): Command {
   return new Command("ukp nav")
@@ -114,8 +135,43 @@ export function executeNavCommand(args: readonly string[], context: NavContext):
     return { exitCode: 0, stdout: renderNavHelp(), stderr: "" };
   }
 
+  let request: NavRequest;
   try {
-    return executeNav(parseNavArgs(args), context);
+    request = parseNavArgs(args);
+  } catch (error) {
+    if (error instanceof NavUsageError) {
+      return { exitCode: 2, stdout: "", stderr: renderNavUsageError(error.message) };
+    }
+    throw error;
+  }
+
+  try {
+    const outcome = runNav(request, context);
+    if (!outcome.ok) {
+      // Single render source for failures too: the factual message is
+      // capability data; only the prefix, exit code, and hint wording are
+      // CLI renderings.
+      return {
+        exitCode: NAV_EXIT_BY_ERROR_CLASS[outcome.failure.errorClass],
+        stdout: "",
+        stderr: `ukp nav: ${outcome.failure.message}\n`,
+      };
+    }
+
+    const envelope = projectNavEnvelope(outcome.result);
+    // Diagnostics go to stderr in BOTH render modes (read's channel
+    // discipline: stdout is the payload, stderr is the operational
+    // channel). Without this, a Human-mode budget hit would be silent —
+    // violating ADR 0018's loud contract. JSON keeps the diagnostics in
+    // the envelope too.
+    const diagnosticLines = envelope.diagnostics
+      .map((diagnostic) => `ukp nav: ${diagnostic.code}: ${diagnostic.message}`)
+      .join("\n");
+    return {
+      exitCode: 0,
+      stdout: request.json ? renderNavJson(envelope) : renderNavHuman(envelope),
+      stderr: diagnosticLines.length > 0 ? `${diagnosticLines}\n` : "",
+    };
   } catch (error) {
     if (error instanceof NavUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderNavUsageError(error.message) };

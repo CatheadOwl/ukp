@@ -1,15 +1,37 @@
 import { Command, CommanderError } from "commander";
 import {
-  executeHumanSearch,
+  runSearch,
+  projectSearchEnvelope,
+  renderSearchHuman,
+  renderSearchJson,
   SearchPlanningError,
   SearchUsageError,
-  type HumanSearchContext,
-  type HumanSearchResult,
   type ParsedSearch,
+  type SearchAggregateStatus,
+  type SearchContext,
 } from "../capabilities/search.ts";
 import { ManifestError } from "../config/manifest.ts";
 import { ScopeError } from "../scope.ts";
 import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+
+/** CLI-owned command result shape (ADR 0021: exit codes and channel text
+ * belong to the surface adapter, not the capability). */
+export interface SearchCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Aggregate classification → exit code (ADR 0021: the D-036 aggregation
+ * rule lives here, driven by the capability's structured classification —
+ * skip never changes the success state; a provider failure fails the run;
+ * an interrupt is 130). */
+const SEARCH_EXIT_BY_AGGREGATE: Record<SearchAggregateStatus, number> = {
+  "succeeded": 0,
+  "provider-failure": 1,
+  "no-success": 1,
+  "cancelled": 130,
+};
 
 function collectValues(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -121,7 +143,7 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
   };
 }
 
-export function executeSearchCommand(args: readonly string[], context: HumanSearchContext): HumanSearchResult {
+export function executeSearchCommand(args: readonly string[], context: SearchContext): SearchCommandResult {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderSearchHelp(), stderr: "" };
   }
@@ -143,6 +165,22 @@ export function executeSearchCommand(args: readonly string[], context: HumanSear
     }
     throw error;
   }
+}
+
+/** CLI composition of the structured outcome (ADR 0021): the shared renders
+ * plus the aggregate → exit-code mapping. Kept as the test entry so suites
+ * exercise the exact adapter path the `ukp search` bin takes. */
+export function executeHumanSearch(parsed: ParsedSearch, context: SearchContext): SearchCommandResult {
+  const result = runSearch(parsed, context);
+  const exitCode = SEARCH_EXIT_BY_AGGREGATE[result.aggregate];
+  if (parsed.options.json) {
+    return { exitCode, stdout: renderSearchJson(projectSearchEnvelope(result)), stderr: "" };
+  }
+  return {
+    exitCode,
+    stdout: renderSearchHuman(result),
+    stderr: result.warnings.length > 0 ? `${result.warnings.join("\n")}\n` : "",
+  };
 }
 
 export function renderSearchHelp(): string {

@@ -266,11 +266,29 @@ export interface NavContext {
   registryPath: string;
 }
 
-export interface NavCommandResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
+/** Structured failure (ADR 0021): factual data only — the `ukp nav:` prefix,
+ * exit code, and recovery wording are adapter renderings, not capability
+ * data. `errorClass` is the stable classification the exit-code mapping
+ * consumes. */
+export type NavErrorClass =
+  | "no-endpoint"
+  | "endpoint-name-mismatch"
+  | "provider-unsupported"
+  | "route-root-not-found"
+  | "route-root-not-directory";
+
+export interface NavFailure {
+  errorClass: NavErrorClass;
+  /** Factual message without any surface prefix or hint phrasing. */
+  message: string;
 }
+
+/** ADR 0021 capability outcome: structured success (`NavResult` is the
+ * `ukp.nav.v1` envelope body) or a classified failure. Never rendered text,
+ * never exit codes. */
+export type NavOutcome =
+  | { ok: true; result: NavResult }
+  | { ok: false; failure: NavFailure };
 
 export class NavUsageError extends Error {
   constructor(message: string) {
@@ -564,12 +582,41 @@ export function validateNavRoutePath(routePath: string): string[] {
   return segments;
 }
 
-export function renderNavHuman(result: NavResult): string {
-  const lines = [`endpoint: ${result.endpoint} (root: ${result.root}, depth: ${result.depth})`];
-  if (result.entries.length === 0) {
+/** Presentation projection (ADR 0021 two-stage form): the structured,
+ * serializable view. First-class citizen — adapters (CLI today, MCP /
+ * programmatic later) consume this view, never the raw scan result. */
+export interface NavEnvelope {
+  schema: "ukp.nav.v1";
+  command: "nav";
+  capability: "nav";
+  endpoint: string;
+  root: string;
+  depth: number;
+  routeCount: number;
+  entries: NavEntry[];
+  diagnostics: NavDiagnostic[];
+}
+
+export function projectNavEnvelope(result: NavResult): NavEnvelope {
+  return {
+    schema: "ukp.nav.v1",
+    command: "nav",
+    capability: "nav",
+    endpoint: result.endpoint,
+    root: result.root,
+    depth: result.depth,
+    routeCount: result.routeCount,
+    entries: result.entries,
+    diagnostics: result.diagnostics,
+  };
+}
+
+export function renderNavHuman(envelope: NavEnvelope): string {
+  const lines = [`endpoint: ${envelope.endpoint} (root: ${envelope.root}, depth: ${envelope.depth})`];
+  if (envelope.entries.length === 0) {
     lines.push("no markdown routes under this root");
   }
-  for (const entry of result.entries) {
+  for (const entry of envelope.entries) {
     if (entry.kind === "folder") {
       const line = `[truncated: ${entry.omittedMarkdownCount}] ${entry.path}`;
       lines.push(entry.description ? `${line} | ${entry.description}` : line);
@@ -582,22 +629,16 @@ export function renderNavHuman(result: NavResult): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderNavJson(result: NavResult): string {
-  const envelope = {
-    schema: "ukp.nav.v1",
-    command: "nav",
-    capability: "nav",
-    endpoint: result.endpoint,
-    root: result.root,
-    depth: result.depth,
-    routeCount: result.routeCount,
-    entries: result.entries,
-    diagnostics: result.diagnostics,
-  };
+export function renderNavJson(envelope: NavEnvelope): string {
   return `${JSON.stringify(envelope, null, 2)}\n`;
 }
 
-export function executeNav(request: NavRequest, context: NavContext): NavCommandResult {
+/** ADR 0021 core entry: runs the nav capability and returns a structured
+ * outcome. Scope/manifest/provider failures that cannot be classified as a
+ * nav failure still throw their typed errors (`ScopeError`,
+ * `ManifestError`, `NavUsageError`, `NavProviderError`) for the surface
+ * adapter to map. */
+export function runNav(request: NavRequest, context: NavContext): NavOutcome {
   let depth = NAV_DEFAULT_DEPTH;
   if (request.depth !== undefined) {
     if (!Number.isSafeInteger(request.depth) || request.depth < 0 || request.depth > NAV_MAX_DEPTH) {
@@ -615,15 +656,17 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
   });
   const [binding] = scope.bindings;
   if (!binding) {
-    return { exitCode: 1, stdout: "", stderr: "ukp nav: no endpoint selected\n" };
+    return { ok: false, failure: { errorClass: "no-endpoint", message: "no endpoint selected" } };
   }
 
   const service = loadManifest(binding.path);
   if (service.effectiveName !== binding.name) {
     return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp nav: endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'\n`,
+      ok: false,
+      failure: {
+        errorClass: "endpoint-name-mismatch",
+        message: `endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'`,
+      },
     };
   }
 
@@ -633,9 +676,11 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
   const resolved = resolveFileNativeCapability(service.manifest, "nav");
   if (!resolved || resolved.capability.provider !== "file") {
     return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp nav: ${unsupportedFileNativeProviderMessage("nav", resolved?.capability.provider)}\n`,
+      ok: false,
+      failure: {
+        errorClass: "provider-unsupported",
+        message: unsupportedFileNativeProviderMessage("nav", resolved?.capability.provider),
+      },
     };
   }
 
@@ -653,9 +698,11 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
       targetReal = realpathSync(targetPath);
     } catch {
       return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `ukp nav: path '${request.path}' was not found in endpoint '${binding.name}'\n`,
+        ok: false,
+        failure: {
+          errorClass: "route-root-not-found",
+          message: `path '${request.path}' was not found in endpoint '${binding.name}'`,
+        },
       };
     }
     const rel = relative(serviceReal, targetReal);
@@ -664,9 +711,11 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
     }
     if (!statSync(targetReal).isDirectory()) {
       return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `ukp nav: path '${request.path}' is not a directory in endpoint '${binding.name}'\n`,
+        ok: false,
+        failure: {
+          errorClass: "route-root-not-directory",
+          message: `path '${request.path}' is not a directory in endpoint '${binding.name}'`,
+        },
       };
     }
     routeRootFolder = targetReal;
@@ -682,16 +731,5 @@ export function executeNav(request: NavRequest, context: NavContext): NavCommand
     resolveNavVisibility(resolved.capability),
     resolveNavDescriptionBudget(resolved.capability),
   );
-  // Diagnostics go to stderr in BOTH render modes (read's channel discipline:
-  // stdout is the payload, stderr is the operational channel). Without this,
-  // a Human-mode budget hit would be silent — violating ADR 0018's loud
-  // contract. JSON keeps the diagnostics in the envelope too.
-  const diagnosticLines = result.diagnostics
-    .map((diagnostic) => `ukp nav: ${diagnostic.code}: ${diagnostic.message}`)
-    .join("\n");
-  return {
-    exitCode: 0,
-    stdout: request.json ? renderNavJson(result) : renderNavHuman(result),
-    stderr: diagnosticLines.length > 0 ? `${diagnosticLines}\n` : "",
-  };
+  return { ok: true, result };
 }

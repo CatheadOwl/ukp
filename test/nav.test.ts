@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  executeNav,
   NAV_DEFAULT_DEPTH,
   NAV_MAX_DEPTH,
   type NavContext,
@@ -49,9 +48,15 @@ function setup(root: string, files: readonly FileSpec[], name = "kb"): NavContex
   return { currentDirectory: root, registryPath };
 }
 
-/** Runs nav with --json and parses the envelope. */
+/** Runs nav through the CLI adapter with --json and parses the envelope. */
 function navJson(request: Omit<NavRequest, "json">, context: NavContext) {
-  const result = executeNav({ ...request, json: true }, context);
+  const args = [
+    "--endpoint", request.endpoint,
+    ...(request.path === undefined ? [] : [request.path]),
+    ...(request.depth === undefined ? [] : ["--depth", String(request.depth)]),
+    "--json",
+  ];
+  const result = executeNavCommand(args, context);
   expect(result.exitCode).toBe(0);
   return JSON.parse(result.stdout);
 }
@@ -356,7 +361,7 @@ describe("nav capability", () => {
       ]);
 
       // Human mode: budget-hit entries carry a visible marker
-      const human = executeNav({ endpoint: "kb", depth: 1, json: false }, context);
+      const human = executeNavCommand(["--endpoint", "kb", "--depth", "1"], context);
       expect(human.exitCode).toBe(0);
       expect(human.stdout).toContain("c.md | (description omitted: budget reached)");
       expect(human.stdout).not.toContain("C\n");
@@ -596,7 +601,7 @@ describe("nav capability failures", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [{ path: "docs/guide.md" }]);
-      const result = executeNav({ endpoint: "kb", path: "doc", json: false }, context);
+      const result = executeNavCommand(["--endpoint", "kb", "doc"], context);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("was not found in endpoint 'kb'");
       expect(result.stderr).not.toContain("Did you mean");
@@ -609,7 +614,7 @@ describe("nav capability failures", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [{ path: "docs/guide.md" }]);
-      const result = executeNav({ endpoint: "kb", path: "docs/guide.md", json: false }, context);
+      const result = executeNavCommand(["--endpoint", "kb", "docs/guide.md"], context);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("is not a directory");
     } finally {
