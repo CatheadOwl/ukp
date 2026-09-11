@@ -16,5 +16,5 @@ All notable public changes to UKP will be documented in this file.
 ### Notes
 
 - This is an MVP/demo-but-usable release, not a stable 1.0 protocol.
-- Remote endpoints, `rg`, `vsearch`, API Search, full Client Scope, and
+- Remote endpoints, semantic search tier, API Search, full Client Scope, and
   standalone binary distribution are not included yet.

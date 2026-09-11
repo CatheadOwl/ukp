@@ -21,5 +21,5 @@ publishing; see the release process.
 - Do not publish or depend on any private development material outside this
   repository.
 - Keep QMD collection, index, ranking, and maintenance internals provider-owned.
-- Do not add Remote, `rg`, `vsearch`, API Search, full Client Scope, or
+- Do not add Remote, semantic search tier, API Search, full Client Scope, or
   standalone binary distribution unless that scope has been explicitly accepted.
