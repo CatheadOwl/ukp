@@ -115,7 +115,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 
 | Command | What it does |
 |---|---|
-| `ukp search` | Runs lexical search; `--recursive` expands direct authority/context dependencies. |
+| `ukp search` | Runs indexed search through the endpoint's search provider (currently QMD; a semantic tier is a future provider tier); `--recursive` expands direct authority/context dependencies. |
 | `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
 | `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
 | `ukp rg` | Runs base lexical search (ripgrep) across endpoints — available on every registered endpoint by default (a missing rg binary degrades to a skip, never a fault); results are shaped into `read`-ready `ukp://` references; `--count` lists per-file counts; `--` passes rg flags through on an allowlist. |
@@ -164,7 +164,7 @@ commands that support global scope.
 ## Not Yet
 
 - Remote endpoints or a formal network protocol;
-- `rg`, `vsearch`, API Search, query rewrite, reranking, or deduplication;
+- semantic search tier (5b), API Search, query rewrite, reranking, or deduplication;
 - full Client Scope with aliases, visibility, inheritance, or profiles;
 - automatic artifact browsing, cleanup, or "select result N" references;
 - standalone binary distribution.
