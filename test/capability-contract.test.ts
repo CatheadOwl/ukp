@@ -12,11 +12,13 @@ import { fileURLToPath } from "node:url";
 const capabilitiesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "capabilities");
 
 /** Files already holding the ADR 0021 contract. */
-const MIGRATED = new Set(["nav.ts", "qmd.ts", "rename-recovery.ts", "search.ts", "read.ts"]);
+const MIGRATED = new Set(["nav.ts", "qmd.ts", "rename-recovery.ts", "search.ts", "read.ts", "refresh.ts", "propose.ts"]);
 
 /** Files still carrying CLI-shaped returns; remove an entry here and add it
- * to MIGRATED in the same change that migrates it. */
-const PENDING = new Set(["refresh.ts", "propose.ts"]);
+ * to MIGRATED in the same change that migrates it. The set is empty — every
+ * capability holds the contract; new capabilities must land in MIGRATED
+ * shape from day one. */
+const PENDING = new Set<string>([]);
 
 // A CLI-shaped return constructs `stdout:` / `stderr:` / `exitCode:` object
 // members. Word-boundary + colon keeps comments, provider spawnSync results

@@ -21,10 +21,45 @@ export interface RefreshContext {
   qmdCommand?: readonly string[];
 }
 
-export interface RefreshResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
+/** ADR 0021 aggregate classification — the adapter maps it onto exit codes;
+ * the capability never decides them. */
+export type RefreshAggregateStatus =
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "no-success";
+
+/** One endpoint's structured refresh outcome. `message` keeps today's
+ * wording (including Hint lines — same documented debt class as search
+ * warnings); `providerOutput` is the provider-native zone, passed through
+ * unmodeled. */
+export interface RefreshEndpointOutcome {
+  name: string;
+  provider: string | null;
+  /** Transiently undefined while the provider run classifies the entry;
+   * every path assigns a final status before the outcome escapes. */
+  status?:
+    | "refreshed"
+    | "skipped"
+    /** plan-stage failure (name mismatch, manifest error) — renders with an
+     * `error:` line, unlike a provider failure. */
+    | "plan-failed"
+    | "provider-failed"
+    | "timeout"
+    /** this endpoint's SIGINT stopped the run — its header block was already
+     * rendered through `status: cancelled`, later endpoints render nothing. */
+    | "interrupted"
+    /** not reached because an earlier endpoint was interrupted. */
+    | "cancelled";
+  message?: string;
+  providerOutput?: string;
+}
+
+/** ADR 0021 structured outcome. */
+export interface RefreshOutcome {
+  endpoints: RefreshEndpointOutcome[];
+  warnings: string[];
+  aggregate: RefreshAggregateStatus;
 }
 
 export class RefreshUsageError extends Error {
@@ -192,16 +227,6 @@ function planRefresh(parsed: ParsedRefresh, context: RefreshContext): {
   return { plan, warnings };
 }
 
-function renderSkipped(endpoint: Exclude<PlannedEndpoint, { status: "executable" }>): string {
-  return [
-    `== ${endpoint.name} ==`,
-    "capability: refresh",
-    `provider: ${endpoint.provider ?? "(none)"}`,
-    `status: ${endpoint.status}`,
-    `${endpoint.status === "failed" ? "error" : "message"}: ${endpoint.message}`,
-  ].join("\n");
-}
-
 function commandFor(endpoint: Extract<PlannedEndpoint, { status: "executable" }>): {
   file: string;
   args: string[];
@@ -215,22 +240,36 @@ function commandFor(endpoint: Extract<PlannedEndpoint, { status: "executable" }>
 const QMD_MAINTENANCE_SCOPE =
   "provider-owned (qmd update in the Service folder; QMD decides which configured collections are maintained)";
 
-export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): RefreshResult {
+/** ADR 0021 core entry: runs the refresh capability and returns the
+ * structured outcome. Scope failures throw typed errors (`ScopeError`,
+ * `RefreshUsageError`) for the surface adapter to map. */
+export function runRefresh(parsed: ParsedRefresh, context: RefreshContext): RefreshOutcome {
   const { plan, warnings } = planRefresh(parsed, context);
-  const output: string[] = [];
+  const endpoints: RefreshEndpointOutcome[] = [];
   let failed = plan.some((endpoint) => endpoint.status === "failed");
   let succeeded = false;
+  let interrupted = false;
 
   for (const endpoint of plan) {
-    if (endpoint.status !== "executable") {
-      output.push(renderSkipped(endpoint));
+    if (endpoint.status === "skipped" || endpoint.status === "failed") {
+      endpoints.push({
+        name: endpoint.name,
+        provider: endpoint.provider,
+        status: endpoint.status === "failed" ? "plan-failed" : "skipped",
+        message: endpoint.message,
+      });
+      continue;
+    }
+    if (interrupted) {
+      endpoints.push({ name: endpoint.name, provider: endpoint.provider, status: "cancelled" });
       continue;
     }
 
-    output.push(`== ${endpoint.name} ==`);
-    output.push("capability: refresh");
-    output.push("provider: qmd");
-    output.push(`maintenance_scope: ${QMD_MAINTENANCE_SCOPE}`);
+    const outcome: RefreshEndpointOutcome = {
+      name: endpoint.name,
+      provider: "qmd",
+    };
+    endpoints.push(outcome);
     const command = commandFor(endpoint);
     const result = spawnSync(command.file, command.args, {
       cwd: endpoint.folder,
@@ -248,43 +287,90 @@ export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): 
       // Zero-output hang guard: `qmd update` on a large corpus is slow but
       // bounded; beyond the ceiling it is a classified failure, not silence.
       failed = true;
-      output.push("status: failed");
+      outcome.status = "timeout";
       warnings.push(
         `endpoint '${endpoint.name}' provider timed out after ${refreshTimeoutMs() / 1000}s (set UKP_REFRESH_TIMEOUT_MS to adjust)`,
       );
-      output.push(`error: provider timed out after ${refreshTimeoutMs() / 1000}s`);
       continue;
     }
 
     if (result.signal === "SIGINT" || result.status === 130) {
       warnings.push(`endpoint '${endpoint.name}' provider cancelled`);
-      output.push("status: cancelled");
-      return {
-        exitCode: 130,
-        stdout: `${output.join("\n")}\n`,
-        stderr: `${warnings.join("\n")}\n`,
-      };
+      outcome.status = "interrupted";
+      interrupted = true;
+      continue;
     }
 
     if (result.status !== 0 || result.error) {
       failed = true;
-      output.push("status: failed");
+      outcome.status = "provider-failed";
       warnings.push(`endpoint '${endpoint.name}' provider failed${providerError ? `: ${providerError}` : ""}`);
       continue;
     }
 
     succeeded = true;
-    output.push("status: refreshed");
-    if (providerOutput) {
-      output.push("");
-      output.push("== provider output ==");
-      output.push(providerOutput);
-    }
+    outcome.status = "refreshed";
+    if (providerOutput) outcome.providerOutput = providerOutput;
   }
 
   return {
-    exitCode: failed || !succeeded ? 1 : 0,
-    stdout: output.length > 0 ? `${output.join("\n")}\n` : "",
-    stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
+    endpoints,
+    warnings,
+    aggregate: interrupted
+      ? "cancelled"
+      : failed
+        ? "failed"
+        : succeeded
+          ? "succeeded"
+          : "no-success",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Presentation (ADR 0021 two-stage form, surface-neutral view): `body` /
+// `diagnostics` — the adapter assigns channels.
+// ---------------------------------------------------------------------------
+
+export interface RefreshHumanView {
+  body: string;
+  diagnostics: string;
+}
+
+export function renderRefreshHuman(result: RefreshOutcome): RefreshHumanView {
+  const lines: string[] = [];
+  for (const endpoint of result.endpoints) {
+    if (endpoint.status === "cancelled") break;
+    lines.push(`== ${endpoint.name} ==`);
+    lines.push("capability: refresh");
+    lines.push(`provider: ${endpoint.provider ?? "(none)"}`);
+    if (endpoint.status === "skipped" || endpoint.status === "plan-failed") {
+      lines.push(`status: ${endpoint.status === "plan-failed" ? "failed" : "skipped"}`);
+      lines.push(`${endpoint.status === "plan-failed" ? "error" : "message"}: ${endpoint.message}`);
+      continue;
+    }
+    lines.push(`maintenance_scope: ${QMD_MAINTENANCE_SCOPE}`);
+    if (endpoint.status === "interrupted") {
+      lines.push("status: cancelled");
+      break;
+    }
+    if (endpoint.status === "timeout") {
+      lines.push("status: failed");
+      lines.push(`error: provider timed out after ${refreshTimeoutMs() / 1000}s`);
+      continue;
+    }
+    if (endpoint.status === "provider-failed") {
+      lines.push("status: failed");
+      continue;
+    }
+    lines.push("status: refreshed");
+    if (endpoint.providerOutput) {
+      lines.push("");
+      lines.push("== provider output ==");
+      lines.push(endpoint.providerOutput);
+    }
+  }
+  return {
+    body: lines.length > 0 ? `${lines.join("\n")}\n` : "",
+    diagnostics: result.warnings.length > 0 ? `${result.warnings.join("\n")}\n` : "",
   };
 }

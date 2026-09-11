@@ -281,11 +281,24 @@ export interface ProposeContext {
   now?: () => Date;
 }
 
-export interface ProposeCommandResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
+/** ADR 0021 error classification — factual messages; the `ukp propose:`
+ * prefix and exit codes are adapter renderings. */
+export type ProposeErrorClass =
+  | "no-endpoint"
+  | "endpoint-name-mismatch"
+  | "capability-undeclared"
+  | "submission-file-unreadable";
+
+export interface ProposeFailure {
+  errorClass: ProposeErrorClass;
+  message: string;
 }
+
+/** ADR 0021 structured outcome. The upsert core (`ProposeResult`) was
+ * already structured; this wraps the endpoint/capability/file prelude. */
+export type ProposeOutcome =
+  | { ok: true; result: ProposeResult }
+  | { ok: false; failure: ProposeFailure };
 
 export class ProposeUsageError extends Error {
   constructor(message: string) {
@@ -327,7 +340,13 @@ export function renderProposeJson(endpoint: string, result: ProposeResult): stri
   return `${JSON.stringify(envelope, null, 2)}\n`;
 }
 
-export function executePropose(request: ProposeRequest, context: ProposeContext): ProposeCommandResult {
+/** ADR 0021 core entry: validates the prelude (id slug, scope, capability
+ * declaration, submission file) and runs the idempotent upsert. Usage
+ * violations throw `ProposeUsageError`; provider/config violations throw
+ * `ProposeProviderError`; scope/manifest failures throw their typed errors —
+ * all mapped by the surface adapter. The `json` request flag is a surface
+ * concern: the outcome is always structured. */
+export function runPropose(request: ProposeRequest, context: ProposeContext): ProposeOutcome {
   // Single stable channel (decision 2026-09-06): --file is the only content
   // source. A stdin channel would need unreliable isTTY-based selection
   // (agent harnesses spawn with piped stdin), and the canonical propose
@@ -351,15 +370,17 @@ export function executePropose(request: ProposeRequest, context: ProposeContext)
   });
   const [binding] = scope.bindings;
   if (!binding) {
-    return { exitCode: 1, stdout: "", stderr: "ukp propose: no endpoint selected\n" };
+    return { ok: false, failure: { errorClass: "no-endpoint", message: "no endpoint selected" } };
   }
 
   const service = loadManifest(binding.path);
   if (service.effectiveName !== binding.name) {
     return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp propose: endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'\n`,
+      ok: false,
+      failure: {
+        errorClass: "endpoint-name-mismatch",
+        message: `endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'`,
+      },
     };
   }
 
@@ -368,9 +389,11 @@ export function executePropose(request: ProposeRequest, context: ProposeContext)
   const resolved = resolveFileNativeCapability(service.manifest, "propose");
   if (!resolved) {
     return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp propose: endpoint '${binding.name}' does not declare the propose capability\n`,
+      ok: false,
+      failure: {
+        errorClass: "capability-undeclared",
+        message: `endpoint '${binding.name}' does not declare the propose capability`,
+      },
     };
   }
 
@@ -382,15 +405,15 @@ export function executePropose(request: ProposeRequest, context: ProposeContext)
     const detail = error instanceof Error && "code" in error && error.code === "ENOENT"
       ? "file not found"
       : error instanceof Error ? error.message : String(error);
-    return { exitCode: 1, stdout: "", stderr: `ukp propose: cannot read --file '${request.file}': ${detail}\n` };
+    return {
+      ok: false,
+      failure: {
+        errorClass: "submission-file-unreadable",
+        message: `cannot read --file '${request.file}': ${detail}`,
+      },
+    };
   }
 
   const result = proposeUpsert(service.folder, resolved.capability, id, content, { now: context.now });
-  return {
-    exitCode: 0,
-    stdout: request.json
-      ? renderProposeJson(binding.name, result)
-      : renderProposeHuman(result),
-    stderr: "",
-  };
+  return { ok: true, result };
 }

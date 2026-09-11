@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import {
   assertProposeSlug,
   DEFAULT_PROPOSE_FOLDER,
-  executePropose,
   proposeUpsert,
   ProposeProviderError,
   ProposeUsageError,
@@ -16,7 +15,7 @@ import {
   resolveProposeFolder,
   type ProposeContext,
 } from "../src/capabilities/propose.ts";
-import { executeProposeCommand, renderProposeHelp } from "../src/commands/propose.ts";
+import { executePropose, executeProposeCommand, renderProposeHelp } from "../src/commands/propose.ts";
 import { registerAt } from "../src/registry.ts";
 
 function createService(root: string, name: string, provider = "file", folder?: string): string {
