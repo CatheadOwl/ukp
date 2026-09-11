@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, afterAll } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -12,10 +12,17 @@ import { tmpdir } from "node:os";
 import { executeReadCommand } from "../src/commands/read.ts";
 import { executeHumanSearch, parseSearchArgs } from "../src/commands/search.ts";
 import { registerAt } from "../src/registry.ts";
+import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
-const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
+// Private per-file copy: the fixture's invocation state is written into the
+// service folder, and bun runs test files in parallel (see helper doc).
+const fixture = createQmdFixtureCopy("search-fixture");
 const fixtureExecutable = join(fixture, "qmd-fixture.mjs");
 const nodeExecutable = Bun.which("node") ?? process.execPath;
+
+afterAll(() => {
+  rmSync(fixture, { recursive: true, force: true });
+});
 
 function createService(
   root: string,

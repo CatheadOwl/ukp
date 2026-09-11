@@ -1,3 +1,7 @@
+---
+description: Deterministic QMD-provider test fixture — a canonical UKP Service folder whose fake `qmd` executable records invocations and returns QMD-like search/get/update results for adapter contract tests.
+---
+
 # QMD provider fixture
 
 This fixture represents one canonical UKP Service folder. It is intentionally
@@ -37,3 +41,14 @@ behavior.
 
 The fixture is not evidence that a real QMD index is healthy. QMD owns its
 local/global configuration, collections, index freshness, and fallback rules.
+
+## Parallel-test isolation rule
+
+The invocation state files above are mutable and live in the Service folder
+(the provider's cwd). bun runs test files in parallel, so **a test file that
+asserts on invocation state must not register this shared directory as its
+endpoint** — a parallel file's invocation would overwrite or delete the same
+files mid-assert. Such test files take a private copy at module load via
+`test/helpers/qmd-fixture.ts` (`createQmdFixtureCopy`). Test files that only
+spawn the executable against their own per-test service folders (read,
+refresh, manifest) can keep referencing the shared directory read-only.
