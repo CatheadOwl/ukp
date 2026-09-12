@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { executeRefresh, executeRefreshCommand, parseRefreshArgs, type RefreshContext } from "../src/commands/refresh.ts";
+import { executeRefresh, executeRefreshCommand, parseRefreshArgs, renderRefreshHelp, type RefreshContext } from "../src/commands/refresh.ts";
 import { registerAt } from "../src/registry.ts";
 
 const fixtureExecutable = join(import.meta.dir, "fixtures", "qmd-provider", "qmd-fixture.mjs");
@@ -40,6 +40,12 @@ function invocationCount(service: string): number {
 }
 
 describe("refresh", () => {
+  test("help states the explicit-scope requirement instead of a silent registry fallback", () => {
+    const help = renderRefreshHelp();
+    expect(help).toContain("Without a Client Config, refresh needs an explicit scope");
+    expect(help).not.toContain("with no Client Config, every registered endpoint");
+  });
+
   test("parses refresh selectors and rejects misuse", () => {
     expect(parseRefreshArgs(["--endpoint", "cad", "-c", "mem0"]).options.explicitEndpoints).toEqual([
       "cad",
