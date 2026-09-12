@@ -121,6 +121,16 @@ describe("CLI bootstrap", () => {
     expect(help).toContain("submit an idempotent change proposal (the write path into a Service)");
   });
 
+  // Probe 20260912-root-terminology-gloss (promoted): the second gloss line
+  // defines Service / endpoint / scope. The "-g (every registered endpoint)"
+  // parenthetical was added at ship time in response to the cross-arm finding
+  // that -g was never defined in root help — verify implicitly next probe.
+  test("root help defines Service, endpoint, and scope", () => {
+    const help = renderHelp();
+    expect(help).toContain("A Service is a folder with a manifest (a name plus declared capabilities); registering it binds that name as an endpoint you address with --endpoint.");
+    expect(help).toContain("The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given.");
+  });
+
   test("help exits successfully", () => {
     const output: string[] = [];
     expect(runCli(["--help"], (message) => output.push(message))).toBe(0);
@@ -436,10 +446,13 @@ describe("CLI bootstrap", () => {
     expect(readHelp).toContain("count omitted: to end of file");
     expect(readHelp).toContain("default is human output");
     // propose: endpoint-name discovery pointer + slug constraint scoped to
-    // explicit ids and the default alike.
+    // explicit ids and the default alike; lifecycle visibility (owner
+    // adjudication, no accept/reject command yet).
     const proposeHelp = renderProposeHelp().replace(/\s+/g, " ");
     expect(proposeHelp).toContain("endpoint names come from 'ukp list'");
     expect(proposeHelp).toContain("enforced for explicit ids and the default alike");
+    expect(proposeHelp).toContain("for the Service owner to adjudicate");
+    expect(proposeHelp).toContain("no accept/reject command yet");
     // init: says what it creates and that service is the only target.
     expect(renderInitHelp()).toContain(".ukp/service.toml");
     // guide: subtopic example no longer reads like a two-word topic value.

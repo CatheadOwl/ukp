@@ -70,6 +70,15 @@ export const PROPOSE_SPEC: UkpCommandSpec = {
     endpointHelp: "select the endpoint that receives the proposal",
     unsupportedHelp: "not supported by propose; use --endpoint <name>",
   },
+  helpSuffix: [
+    "",
+    "Lifecycle:",
+    "  Submitted proposals land in the Service's proposal folder (default",
+    "  'inbox') for the Service owner to adjudicate; there is no",
+    "  accept/reject command yet. Resubmitting the same id revises the same",
+    "  proposal ('ukp guide propose' covers the model).",
+    "",
+  ].join("\n"),
 };
 
 interface ProposeCommandOptions extends Record<string, unknown> {
