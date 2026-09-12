@@ -28,6 +28,10 @@ import { REFRESH_SPEC } from "../src/commands/refresh.ts";
 import { DIAGNOSE_SPEC } from "../src/commands/diagnose.ts";
 import { INSPECT_SPEC } from "../src/commands/inspect.ts";
 import { SEARCH_SPEC } from "../src/commands/search.ts";
+import { NAV_SPEC } from "../src/commands/nav.ts";
+import { PROPOSE_SPEC } from "../src/commands/propose.ts";
+import { RG_SPEC } from "../src/commands/rg.ts";
+import { READ_SPEC } from "../src/commands/read.ts";
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
@@ -206,7 +210,7 @@ describe("CLI bootstrap", () => {
   // single source of its root-help line.
   test("migrated command specs feed the root help summaries", () => {
     const help = renderHelp();
-    for (const spec of [DIAGNOSE_SPEC, INSPECT_SPEC, REFRESH_SPEC, SEARCH_SPEC]) {
+    for (const spec of [DIAGNOSE_SPEC, INSPECT_SPEC, REFRESH_SPEC, SEARCH_SPEC, NAV_SPEC, PROPOSE_SPEC, RG_SPEC, READ_SPEC]) {
       expect(help).toContain(spec.summary);
     }
   });

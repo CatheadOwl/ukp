@@ -20,12 +20,18 @@ export class KitUsageError extends Error {
 }
 
 /** Option declaration. Non-multi options get generated singleton duplicate
- * detection (replaces per-command countFlagOccurrences if-chains). */
+ * detection (replaces per-command countFlagOccurrences if-chains).
+ * `teachingFlag` marks a presence-only option (the `-g` "not supported"
+ * flags) whose any occurrence triggers its own dedicated error — it skips
+ * singleton detection so `-g -g` reports the teaching message, not a
+ * duplicate-count message. */
 export interface KitOptionSpec {
   flags: string;
   help: string;
   /** repeat-to-collect (append semantics); default singleton */
   multi?: boolean;
+  /** presence-only option; excluded from singleton duplicate detection */
+  teachingFlag?: boolean;
 }
 
 /** Command spec — the single source for everything the family rules render
@@ -47,6 +53,15 @@ export interface UkpCommandSpec {
     endpointHelp: string;
     globalHelp: string;
   };
+  /** Single-endpoint family: `-c, --endpoint <name>` rendered before the
+   * declared options, the `-g` teaching flag after them; parse rejects -g
+   * ("requires --endpoint <name> and does not support -g") and a missing
+   * --endpoint ("requires --endpoint <name>"). Positionals and per-command
+   * semantics stay command-side. */
+  singleEndpoint?: {
+    endpointHelp: string;
+    unsupportedHelp: string;
+  };
   /** pre-wrapped extra section appended verbatim to --help */
   helpSuffix?: string;
 }
@@ -66,13 +81,19 @@ function flagSpellings(flags: string): { long?: string; short?: string } {
 }
 
 /** Generated singleton detection: every declared non-multi option (plus the
- * scope family's -g) may appear exactly once, counting short/long spellings
- * and bundled short forms together. The error names the canonical spelling
- * (long preferred), matching the pre-kit messages. */
+ * multi scope family's -g, plus the single-endpoint family's -c) may appear
+ * exactly once, counting short/long spellings and bundled short forms
+ * together. The error names the canonical spelling (long preferred),
+ * matching the pre-kit messages. The single-endpoint teaching -g is NOT
+ * singleton-checked (pre-kit commands never rejected a repeated -g there —
+ * any occurrence is already a usage error). */
 function assertSingletonFlags(spec: UkpCommandSpec, args: readonly string[]): void {
   const declarations: string[] = [
-    ...(spec.options ?? []).filter((option) => !option.multi).map((option) => option.flags),
+    ...(spec.options ?? [])
+      .filter((option) => !option.multi && !option.teachingFlag)
+      .map((option) => option.flags),
     ...(spec.scope ? ["-g"] : []),
+    ...(spec.singleEndpoint ? ["-c, --endpoint <name>"] : []),
   ];
   for (const flags of declarations) {
     const { long, short } = flagSpellings(flags);
@@ -92,6 +113,9 @@ export function createKitCommand(spec: UkpCommandSpec): Command {
     .helpOption("-h, --help", "show this help")
     .usage(spec.usage)
     .description(spec.description);
+  if (spec.singleEndpoint) {
+    command.option("-c, --endpoint <name>", spec.singleEndpoint.endpointHelp);
+  }
   for (const argument of spec.arguments ?? []) {
     command.argument(argument.required ? `<${argument.name}>` : `[${argument.name}]`, argument.help);
   }
@@ -102,6 +126,9 @@ export function createKitCommand(spec: UkpCommandSpec): Command {
   if (spec.scope) {
     command.option("-c, --endpoint <name>", spec.scope.endpointHelp, collectValues);
     command.option("-g", spec.scope.globalHelp);
+  }
+  if (spec.singleEndpoint) {
+    command.option("-g", spec.singleEndpoint.unsupportedHelp);
   }
   return command;
 }
@@ -144,6 +171,20 @@ export function parseKitArgs<Options extends Record<string, unknown> = Record<st
 
   const options = command.opts<Options>();
   const positionals = command.args;
+  if (spec.singleEndpoint) {
+    if ((options as { g?: boolean }).g) {
+      throw new KitUsageError(`${spec.name} requires --endpoint <name> and does not support -g`);
+    }
+    const endpoint = (options as { endpoint?: string }).endpoint;
+    if (endpoint === undefined || endpoint.length === 0) {
+      throw new KitUsageError(`${spec.name} requires --endpoint <name>`);
+    }
+    return {
+      positionals,
+      options,
+      scope: { explicitEndpoints: [endpoint], global: false, warnings: [] },
+    };
+  }
   if (!spec.scope) {
     return { positionals, options, scope: { global: false, warnings: [] } };
   }

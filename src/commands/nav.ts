@@ -1,4 +1,3 @@
-import { Command, CommanderError } from "commander";
 import {
   runNav,
   projectNavEnvelope,
@@ -14,7 +13,8 @@ import {
 } from "../capabilities/nav.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
-import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
+import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
+import { HelpRequestError, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021: exit codes and channel text
  * belong to the surface adapter, not the capability). */
@@ -34,100 +34,68 @@ const NAV_EXIT_BY_ERROR_CLASS: Record<NavErrorClass, number> = {
   "route-root-not-directory": 1,
 };
 
-function createNavCommand(): Command {
-  return new Command("ukp nav")
-    .exitOverride()
-    .allowUnknownOption(false)
-    .allowExcessArguments(true)
-    .helpOption("-h, --help", "show this help")
-    .usage("--endpoint <name> [path] [--depth <n>] [--json]")
-    .description("Navigate the Markdown structure of one Service endpoint (endpoint names come from 'ukp list').")
-    .option("-c, --endpoint <name>", "select the endpoint to navigate")
-    .option("--depth <n>", "how many directory levels to expand from the route root (0-10, default 0; deeper folders appear as [truncated: N], where N is that folder's total recursive .md count)")
-    .option("--json", "emit the structured response envelope")
-    .option("-g", "not supported by nav; use --endpoint <name>");
-}
+/** Single-source command spec (ADR 0024): summary feeds the root help via
+ * cli.ts; usage feeds the help header and the usage-error line; the
+ * single-endpoint family (-c singleton, -g teaching flag, required
+ * --endpoint) and help-intent triage live in kit.ts. */
+export const NAV_SPEC: UkpCommandSpec = {
+  name: "nav",
+  summary: "navigate the Markdown structure of an endpoint",
+  group: "endpoint",
+  description: "Navigate the Markdown structure of one Service endpoint (endpoint names come from 'ukp list').",
+  usage: "--endpoint <name> [path] [--depth <n>] [--json]",
+  options: [
+    {
+      flags: "--depth <n>",
+      help: "how many directory levels to expand from the route root (0-10, default 0; deeper folders appear as [truncated: N], where N is that folder's total recursive .md count)",
+    },
+    { flags: "--json", help: "emit the structured response envelope" },
+  ],
+  singleEndpoint: {
+    endpointHelp: "select the endpoint to navigate",
+    unsupportedHelp: "not supported by nav; use --endpoint <name>",
+  },
+};
 
-function parseNavCommand(args: readonly string[]): {
-  positionals: string[];
+interface NavCommandOptions extends Record<string, unknown> {
   endpoint?: string;
-  depth?: number;
-  json: boolean;
-  global?: boolean;
-} {
-  const command = createNavCommand()
-    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
-
-  try {
-    command.parse(args, { from: "user" });
-  } catch (error) {
-    if (error instanceof CommanderError) {
-      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
-      throw new NavUsageError(error.message.replace(/^error: /, ""));
-    }
-    throw error;
-  }
-
-  const options = command.opts<{
-    endpoint?: string;
-    depth?: string;
-    json?: boolean;
-    g?: boolean;
-  }>();
-  let depth: number | undefined;
-  if (options.depth !== undefined) {
-    // Strict decimal form only: Number() would accept "1e1"/"0x2" variants
-    // that are almost certainly typos on a 0-10 flag.
-    if (!/^\d+$/.test(options.depth.trim())) {
-      throw new NavUsageError("--depth must be a non-negative integer");
-    }
-    const parsed = Number(options.depth.trim());
-    if (parsed < 0) {
-      throw new NavUsageError("--depth must be a non-negative integer");
-    }
-    depth = parsed;
-  }
-  return {
-    positionals: command.args,
-    endpoint: options.endpoint,
-    depth,
-    json: options.json === true,
-    global: options.g,
-  };
+  depth?: string;
+  json?: boolean;
+  g?: boolean;
 }
 
 export function parseNavArgs(args: readonly string[]): NavRequest {
-  const parsed = parseNavCommand(args);
+  const parsed = parseKitArgs<NavCommandOptions>(NAV_SPEC, args);
 
-  if (countFlagOccurrences(args, "--endpoint") + countFlagOccurrences(args, "-c") > 1) {
-    throw new NavUsageError("--endpoint may only be specified once");
-  }
-  if (countFlagOccurrences(args, "--depth") > 1) {
-    throw new NavUsageError("--depth may only be specified once");
-  }
-  if (parsed.global) throw new NavUsageError("nav requires --endpoint <name> and does not support -g");
-  if (parsed.endpoint === undefined || parsed.endpoint.length === 0) {
-    throw new NavUsageError("nav requires --endpoint <name>");
-  }
+  // Command-side semantics, pre-kit order: excess positionals, then depth
+  // form and range, then route-path lexical validation.
   if (parsed.positionals.length > 1) {
-    throw new NavUsageError(
+    throw new KitUsageError(
       `unexpected argument '${parsed.positionals[1]}'; nav takes at most one [path] argument`,
     );
   }
-  // Lexical validation lives at the parse layer so usage errors surface as
-  // exit 2 before any endpoint work starts; the capability re-validates.
-  if (parsed.depth !== undefined && (parsed.depth < 0 || parsed.depth > NAV_MAX_DEPTH)) {
-    throw new NavUsageError(`--depth must be an integer between 0 and ${NAV_MAX_DEPTH}`);
+  let depth: number | undefined;
+  if (parsed.options.depth !== undefined) {
+    // Strict decimal form only: Number() would accept "1e1"/"0x2" variants
+    // that are almost certainly typos on a 0-10 flag.
+    if (!/^\d+$/.test(parsed.options.depth.trim())) {
+      throw new KitUsageError("--depth must be a non-negative integer");
+    }
+    const candidate = Number(parsed.options.depth.trim());
+    if (candidate < 0 || candidate > NAV_MAX_DEPTH) {
+      throw new KitUsageError(`--depth must be an integer between 0 and ${NAV_MAX_DEPTH}`);
+    }
+    depth = candidate;
   }
   if (parsed.positionals[0] !== undefined) {
     validateNavRoutePath(parsed.positionals[0]);
   }
 
   return {
-    endpoint: parsed.endpoint,
+    endpoint: parsed.scope.explicitEndpoints![0],
     ...(parsed.positionals[0] === undefined ? {} : { path: parsed.positionals[0] }),
-    ...(parsed.depth === undefined ? {} : { depth: parsed.depth }),
-    json: parsed.json,
+    ...(depth === undefined ? {} : { depth }),
+    json: parsed.options.json === true,
   };
 }
 
@@ -143,7 +111,7 @@ export function executeNavCommand(args: readonly string[], context: NavContext):
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderNavHelp(), stderr: "" };
     }
-    if (error instanceof NavUsageError) {
+    if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderNavUsageError(error.message) };
     }
     throw error;
@@ -202,13 +170,9 @@ export function executeNavCommand(args: readonly string[], context: NavContext):
 }
 
 export function renderNavHelp(): string {
-  return createNavCommand().helpInformation();
+  return renderKitHelp(NAV_SPEC);
 }
 
 export function renderNavUsageError(message: string): string {
-  return [
-    `ukp nav: ${message}`,
-    "Usage: ukp nav --endpoint <name> [path] [--depth <n>] [--json]",
-    "Run 'ukp nav --help' for details.",
-  ].join("\n");
+  return renderKitUsageError(NAV_SPEC, message);
 }

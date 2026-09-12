@@ -9,14 +9,14 @@ import {
   DIAGNOSE_SPEC,
   type ProviderResolver,
 } from "./commands/diagnose.ts";
-import { executeReadCommand } from "./commands/read.ts";
-import { executeRgCommand } from "./commands/rg.ts";
+import { executeReadCommand, READ_SPEC } from "./commands/read.ts";
+import { executeRgCommand, RG_SPEC } from "./commands/rg.ts";
 import { executeGuideCommand, GUIDE_TOPICS } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
 import { executeInspectCommand, INSPECT_SPEC } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
-import { executeNavCommand } from "./commands/nav.ts";
-import { executeProposeCommand } from "./commands/propose.ts";
+import { executeNavCommand, NAV_SPEC } from "./commands/nav.ts";
+import { executeProposeCommand, PROPOSE_SPEC } from "./commands/propose.ts";
 import { executeRefreshCommand, REFRESH_SPEC } from "./commands/refresh.ts";
 import { executeSearchCommand, SEARCH_SPEC } from "./commands/search.ts";
 
@@ -42,8 +42,8 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   // ADR 0024: migrated commands feed their root-help summary from the
   // command spec; unmigrated commands keep hand-written entries.
   diagnose: DIAGNOSE_SPEC.summary,
-  read: "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)",
-  rg: "grep raw endpoint files with ripgrep (no index or declaration needed; results as ukp:// references)",
+  read: READ_SPEC.summary,
+  rg: RG_SPEC.summary,
   guide: "show short operational guides",
   init: "initialize UKP-owned files",
   inspect: INSPECT_SPEC.summary,
@@ -51,8 +51,8 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   register: "register a Service endpoint",
   unregister: "remove a registered endpoint binding (files on disk are untouched)",
   list: "list registered endpoint bindings",
-  nav: "navigate the Markdown structure of an endpoint",
-  propose: "submit an idempotent change proposal",
+  nav: NAV_SPEC.summary,
+  propose: PROPOSE_SPEC.summary,
   search: SEARCH_SPEC.summary,
   version: "show version information",
 };

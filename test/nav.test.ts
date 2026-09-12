@@ -10,6 +10,10 @@ import {
 } from "../src/capabilities/nav.ts";
 import { executeNavCommand, parseNavArgs, renderNavHelp } from "../src/commands/nav.ts";
 import { NavUsageError } from "../src/capabilities/nav.ts";
+// Parse-layer usage errors surface as kit usage errors since the ADR 0024
+// migration; the capability's NavUsageError remains for the re-validation
+// path inside runNav.
+import { KitUsageError } from "../src/commands/kit.ts";
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
 
@@ -647,15 +651,15 @@ describe("nav command surface", () => {
   });
 
   test("rejects -g, missing --endpoint, duplicate flags, extra positionals, bad depth", () => {
-    expect(() => parseNavArgs(["-g", "--endpoint", "kb"])).toThrow(NavUsageError);
-    expect(() => parseNavArgs([])).toThrow(NavUsageError);
-    expect(() => parseNavArgs(["--endpoint", "kb", "--endpoint", "kb2"])).toThrow(NavUsageError);
-    expect(() => parseNavArgs(["--depth", "1"])).toThrow(NavUsageError);
-    expect(() => parseNavArgs(["--endpoint", "kb", "a", "b"])).toThrow(NavUsageError);
-    expect(() => parseNavArgs(["--endpoint", "kb", "--depth", "-1"])).toThrow(NavUsageError);
+    expect(() => parseNavArgs(["-g", "--endpoint", "kb"])).toThrow(KitUsageError);
+    expect(() => parseNavArgs([])).toThrow(KitUsageError);
+    expect(() => parseNavArgs(["--endpoint", "kb", "--endpoint", "kb2"])).toThrow(KitUsageError);
+    expect(() => parseNavArgs(["--depth", "1"])).toThrow(KitUsageError);
+    expect(() => parseNavArgs(["--endpoint", "kb", "a", "b"])).toThrow(KitUsageError);
+    expect(() => parseNavArgs(["--endpoint", "kb", "--depth", "-1"])).toThrow(KitUsageError);
     expect(() => parseNavArgs(["--endpoint", "kb", "--depth", String(NAV_MAX_DEPTH + 1)]))
-      .toThrow(NavUsageError);
-    expect(() => parseNavArgs(["--endpoint", "kb", "--depth", "x"])).toThrow(NavUsageError);
+      .toThrow(KitUsageError);
+    expect(() => parseNavArgs(["--endpoint", "kb", "--depth", "x"])).toThrow(KitUsageError);
   });
 
   test("rejects absolute and traversal paths as usage errors", () => {

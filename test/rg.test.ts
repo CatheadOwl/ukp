@@ -8,6 +8,7 @@ import {
   splitRgPassthrough,
 } from "../src/commands/rg.ts";
 import { RgUsageError, validateRgPassthrough } from "../src/capabilities/rg.ts";
+import { KitUsageError } from "../src/commands/kit.ts";
 import type { RgContext } from "../src/capabilities/rg.ts";
 import { registerAt } from "../src/registry.ts";
 
@@ -53,11 +54,13 @@ describe("ukp rg command surface", () => {
     expect(parsed.options.ignoreCase).toBe(true);
     expect(parsed.options.count).toBe(true);
     expect(parsed.options.explicitEndpoints).toEqual(["kb"]);
-    expect(() => parseRgArgs(["--endpoint", "kb", "x", "--limit", "0"])).toThrow(RgUsageError);
-    expect(() => parseRgArgs(["--endpoint", "kb", "x", "--limit", "1001"])).toThrow(RgUsageError);
-    expect(() => parseRgArgs([])).toThrow(RgUsageError);
-    expect(() => parseRgArgs(["--endpoint", "kb", "a", "b"])).toThrow(RgUsageError);
-    expect(() => parseRgArgs(["-g", "--endpoint", "kb", "x"])).toThrow(RgUsageError);
+    // Parse-layer usage errors surface as kit usage errors since the ADR
+    // 0024 migration (same messages, exit 2 path).
+    expect(() => parseRgArgs(["--endpoint", "kb", "x", "--limit", "0"])).toThrow(KitUsageError);
+    expect(() => parseRgArgs(["--endpoint", "kb", "x", "--limit", "1001"])).toThrow(KitUsageError);
+    expect(() => parseRgArgs([])).toThrow(KitUsageError);
+    expect(() => parseRgArgs(["--endpoint", "kb", "a", "b"])).toThrow(KitUsageError);
+    expect(() => parseRgArgs(["-g", "--endpoint", "kb", "x"])).toThrow(KitUsageError);
   });
 
   test("default limit is 50 (ADR-RG-004)", () => {

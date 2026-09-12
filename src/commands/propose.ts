@@ -1,4 +1,3 @@
-import { Command, CommanderError } from "commander";
 import {
   runPropose,
   renderProposeHuman,
@@ -11,7 +10,8 @@ import {
 } from "../capabilities/propose.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
-import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
+import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
+import { HelpRequestError, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021). */
 export interface ProposeCommandResult {
@@ -48,86 +48,52 @@ export function executePropose(request: ProposeRequest, context: ProposeContext)
   };
 }
 
-function createProposeCommand(): Command {
-  return new Command("ukp propose")
-    .exitOverride()
-    .allowUnknownOption(false)
-    .allowExcessArguments(true)
-    .helpOption("-h, --help", "show this help")
-    .usage("--endpoint <name> [--id <slug>] --file <path>")
-    .description("Submit an idempotent change proposal to one Service endpoint.")
-    .option("-c, --endpoint <name>", "select the endpoint that receives the proposal")
-    .option(
-      "--id <slug>",
-      "revision key: resubmitting the same id updates the same proposal (revision +1); defaults to the --file basename (1-63 lowercase ASCII slug), which then becomes the proposal's persistent id — renaming the file creates a new proposal",
-    )
-    .option("--file <path>", "read the proposal content from a file (required)")
-    .option("--json", "emit the structured response envelope")
-    .option("-g", "not supported by propose; use --endpoint <name>");
-}
+/** Single-source command spec (ADR 0024): summary feeds the root help via
+ * cli.ts; usage feeds the help header and the usage-error line; the
+ * single-endpoint family (-c singleton, -g teaching flag, required
+ * --endpoint) and help-intent triage live in kit.ts. */
+export const PROPOSE_SPEC: UkpCommandSpec = {
+  name: "propose",
+  summary: "submit an idempotent change proposal",
+  group: "endpoint",
+  description: "Submit an idempotent change proposal to one Service endpoint.",
+  usage: "--endpoint <name> [--id <slug>] --file <path>",
+  options: [
+    {
+      flags: "--id <slug>",
+      help: "revision key: resubmitting the same id updates the same proposal (revision +1); defaults to the --file basename (1-63 lowercase ASCII slug), which then becomes the proposal's persistent id — renaming the file creates a new proposal",
+    },
+    { flags: "--file <path>", help: "read the proposal content from a file (required)" },
+    { flags: "--json", help: "emit the structured response envelope" },
+  ],
+  singleEndpoint: {
+    endpointHelp: "select the endpoint that receives the proposal",
+    unsupportedHelp: "not supported by propose; use --endpoint <name>",
+  },
+};
 
-function parseProposeCommand(args: readonly string[]): {
-  positionals: string[];
+interface ProposeCommandOptions extends Record<string, unknown> {
   endpoint?: string;
   id?: string;
   file?: string;
-  json: boolean;
-  global?: boolean;
-} {
-  const command = createProposeCommand()
-    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
-
-  try {
-    command.parse(args, { from: "user" });
-  } catch (error) {
-    if (error instanceof CommanderError) {
-      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
-      throw new ProposeUsageError(error.message.replace(/^error: /, ""));
-    }
-    throw error;
-  }
-
-  const options = command.opts<{
-    endpoint?: string;
-    id?: string;
-    file?: string;
-    json?: boolean;
-    g?: boolean;
-  }>();
-  return {
-    positionals: command.args,
-    endpoint: options.endpoint,
-    id: options.id,
-    file: options.file,
-    json: options.json === true,
-    global: options.g,
-  };
+  json?: boolean;
+  g?: boolean;
 }
 
 export function parseProposeArgs(args: readonly string[]): ProposeRequest {
-  const parsed = parseProposeCommand(args);
+  const parsed = parseKitArgs<ProposeCommandOptions>(PROPOSE_SPEC, args);
   const [unexpected] = parsed.positionals;
-
-  if (countFlagOccurrences(args, "--endpoint") + countFlagOccurrences(args, "-c") > 1) {
-    throw new ProposeUsageError("--endpoint may only be specified once");
-  }
-  if (countFlagOccurrences(args, "--id") > 1) throw new ProposeUsageError("--id may only be specified once");
-  if (countFlagOccurrences(args, "--file") > 1) throw new ProposeUsageError("--file may only be specified once");
-  if (parsed.global) throw new ProposeUsageError("propose requires --endpoint <name> and does not support -g");
-  if (parsed.endpoint === undefined || parsed.endpoint.length === 0) {
-    throw new ProposeUsageError("propose requires --endpoint <name>");
-  }
   if (unexpected !== undefined) {
-    throw new ProposeUsageError(
+    throw new KitUsageError(
       `unexpected argument '${unexpected}'; propose reads content from --file <path>, not from an inline argument`,
     );
   }
 
   return {
-    endpoint: parsed.endpoint,
-    ...(parsed.id === undefined ? {} : { id: parsed.id }),
-    ...(parsed.file === undefined ? {} : { file: parsed.file }),
-    json: parsed.json,
+    endpoint: parsed.scope.explicitEndpoints![0],
+    ...(parsed.options.id === undefined ? {} : { id: parsed.options.id }),
+    ...(parsed.options.file === undefined ? {} : { file: parsed.options.file }),
+    json: parsed.options.json === true,
   };
 }
 
@@ -142,7 +108,9 @@ export function executeProposeCommand(args: readonly string[], context: ProposeC
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderProposeHelp(), stderr: "" };
     }
-    if (error instanceof ProposeUsageError) {
+    if (error instanceof KitUsageError || error instanceof ProposeUsageError) {
+      // ProposeUsageError: capability-side validation (slug form, missing
+      // --file) classifies as usage too — same rendering, exit 2.
       return { exitCode: 2, stdout: "", stderr: renderProposeUsageError(error.message) };
     }
     if (error instanceof ScopeError) {
@@ -167,13 +135,9 @@ export function executeProposeCommand(args: readonly string[], context: ProposeC
 }
 
 export function renderProposeHelp(): string {
-  return createProposeCommand().helpInformation();
+  return renderKitHelp(PROPOSE_SPEC);
 }
 
 export function renderProposeUsageError(message: string): string {
-  return [
-    `ukp propose: ${message}`,
-    "Usage: ukp propose --endpoint <name> [--id <slug>] --file <path>",
-    "Run 'ukp propose --help' for details.",
-  ].join("\n");
+  return renderKitUsageError(PROPOSE_SPEC, message);
 }
