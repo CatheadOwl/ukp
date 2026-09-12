@@ -35,6 +35,28 @@ import { READ_SPEC } from "../src/commands/read.ts";
 import { INIT_SPEC } from "../src/commands/init.ts";
 import { GUIDE_SPEC } from "../src/commands/guide.ts";
 import { LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC } from "../src/commands/inventory.ts";
+import { INIT_SERVICE_SPEC } from "../src/commands/init.ts";
+import { renderKitHelp, type UkpCommandSpec } from "../src/commands/kit.ts";
+
+/** Every spec-based command in the CLI (version stays hand-written).
+ * ROOT_MIGRATED_SPECS feeds the root help; the subcommand spec joins only
+ * the structural guard. */
+const ROOT_MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [
+  DIAGNOSE_SPEC,
+  INSPECT_SPEC,
+  REFRESH_SPEC,
+  SEARCH_SPEC,
+  NAV_SPEC,
+  PROPOSE_SPEC,
+  RG_SPEC,
+  READ_SPEC,
+  INIT_SPEC,
+  GUIDE_SPEC,
+  REGISTER_SPEC,
+  UNREGISTER_SPEC,
+  LIST_SPEC,
+];
+const MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [...ROOT_MIGRATED_SPECS, INIT_SERVICE_SPEC];
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
@@ -213,22 +235,37 @@ describe("CLI bootstrap", () => {
   // single source of its root-help line (version stays hand-written).
   test("migrated command specs feed the root help summaries", () => {
     const help = renderHelp();
-    for (const spec of [
-      DIAGNOSE_SPEC,
-      INSPECT_SPEC,
-      REFRESH_SPEC,
-      SEARCH_SPEC,
-      NAV_SPEC,
-      PROPOSE_SPEC,
-      RG_SPEC,
-      READ_SPEC,
-      INIT_SPEC,
-      GUIDE_SPEC,
-      REGISTER_SPEC,
-      UNREGISTER_SPEC,
-      LIST_SPEC,
-    ]) {
+    for (const spec of ROOT_MIGRATED_SPECS) {
       expect(help).toContain(spec.summary);
+    }
+  });
+
+  // ADR 0024 spec-driven structural guard: every declared option, argument,
+  // and selector family must actually render into --help, and the usage
+  // header must come from the spec's single usage string. Command-specific
+  // copy stays pinned by the hand-written tests above; this test pins the
+  // mechanical spec -> rendering contract for all commands at once.
+  test("every spec renders its usage line and all declared option/argument help", () => {
+    for (const spec of MIGRATED_SPECS) {
+      const help = renderKitHelp(spec);
+      const flat = help.replace(/\s+/g, " ");
+      expect(flat).toContain(`Usage: ukp ${spec.name} ${spec.usage}`.replace(/\s+/g, " "));
+      for (const argument of spec.arguments ?? []) {
+        expect(flat).toContain(argument.help.replace(/\s+/g, " "));
+      }
+      for (const option of spec.options ?? []) {
+        const primary = option.flags.split(",")[0]!.trim().split(/\s+/)[0];
+        expect(help).toContain(primary);
+        expect(flat).toContain(option.help.replace(/\s+/g, " "));
+      }
+      if (spec.scope) {
+        expect(flat).toContain(spec.scope.endpointHelp.replace(/\s+/g, " "));
+        expect(flat).toContain(spec.scope.globalHelp.replace(/\s+/g, " "));
+      }
+      if (spec.singleEndpoint) {
+        expect(flat).toContain(spec.singleEndpoint.endpointHelp.replace(/\s+/g, " "));
+        expect(flat).toContain(spec.singleEndpoint.unsupportedHelp.replace(/\s+/g, " "));
+      }
     }
   });
 
