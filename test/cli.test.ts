@@ -124,11 +124,15 @@ describe("CLI bootstrap", () => {
   // Probe 20260912-root-terminology-gloss (promoted): the second gloss line
   // defines Service / endpoint / scope. The "-g (every registered endpoint)"
   // parenthetical was added at ship time in response to the cross-arm finding
-  // that -g was never defined in root help — verify implicitly next probe.
-  test("root help defines Service, endpoint, and scope", () => {
+  // that -g was never defined in root help — implicitly verified by the
+  // 2026-09-12 targeted follow-up batch (sweep doc third batch). The scope
+  // gloss now also points at guide client for changing the default
+  // (registered round-3 candidate: "scope how to set, not just what").
+  test("root help defines Service, endpoint, and scope (with the change pointer)", () => {
     const help = renderHelp();
     expect(help).toContain("A Service is a folder with a manifest (a name plus declared capabilities); registering it binds that name as an endpoint you address with --endpoint.");
-    expect(help).toContain("The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given.");
+    expect(help).toContain("The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given; 'ukp guide client' shows how to set the workspace default.");
+    expect(help).toContain("set your default scope here");
   });
 
   test("help exits successfully", () => {
@@ -253,6 +257,9 @@ describe("CLI bootstrap", () => {
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
     // ADR 0024 pilot: refresh's root-help summary is fed by its command spec.
     expect(renderHelp()).toContain(REFRESH_SPEC.summary);
+    // Round-3 candidate (refresh semantic granularity): the help states what
+    // maintenance actually runs.
+    expect(help).toContain("qmd update");
   });
 
   // ADR 0024 migration guard: every migrated command's spec summary is the
@@ -306,6 +313,10 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("ukp inspect --endpoint your-endpoint-name");
     expect(guide).toContain("ukp read --endpoint your-endpoint-name docs/example.md");
     expect(guide).toContain("derived read/file baseline");
+    // Round-3 candidate (docid/ukp:// jargon → guide face): step 7 defines
+    // the two reference forms search results carry.
+    expect(guide).toContain("durable, endpoint-scoped reference");
+    expect(guide).toContain("provider's short-lived document id (QMD handoff key)");
     expect(guide).toContain("ukp refresh --endpoint your-endpoint-name");
     expect(guide).toContain("Future providers should add provider adapters");
     expect(guide).toContain("ukp unregister --endpoint <name>");

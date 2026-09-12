@@ -47,9 +47,9 @@ export const REFRESH_SPEC: UkpCommandSpec = {
     "  With no --endpoint or -g, the workspace default scope applies: the",
     "  Client Config's default endpoints ('ukp inspect' shows the resolved",
     "  scope); with no Client Config, every registered endpoint. -g cannot",
-    "  be combined with --endpoint. Maintenance",
-    "  itself is provider-owned: the endpoint selector never maps to a",
-    "  provider collection.",
+    "  be combined with --endpoint. Maintenance runs the provider's own",
+    "  update step (QMD: 'qmd update'), refreshing what its index covers;",
+    "  the endpoint selector never maps to a provider collection.",
     "",
   ].join("\n"),
 };
