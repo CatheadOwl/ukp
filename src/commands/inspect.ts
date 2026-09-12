@@ -162,7 +162,7 @@ export function executeInspectCommand(
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `error: ${error instanceof Error ? error.message : String(error)}\n`,
+      stderr: `ukp inspect: ${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
 }

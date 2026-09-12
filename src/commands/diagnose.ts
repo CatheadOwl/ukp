@@ -314,14 +314,14 @@ export function executeDiagnoseCommand(
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `error: ${error instanceof Error ? error.message : String(error)}\n`,
+      stderr: `ukp diagnose: ${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
 }
 
 export function renderLocalDiagnoseError(message: string): string {
   return [
-    `error: ${message}`,
+    `ukp diagnose: ${message}`,
     "Hint: 'ukp diagnose' checks the current folder as a Service.",
     "Run 'ukp guide service' for the short onboarding guide.",
     "Use 'ukp diagnose -g' to validate every registered endpoint, or 'ukp diagnose --endpoint <name>' for one endpoint.",

@@ -200,7 +200,7 @@ function executeInitServiceCommand(args: readonly string[], context: InitCommand
     if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderKitUsageError(INIT_SERVICE_SPEC, error.message) };
     }
-    return { exitCode: 1, stdout: "", stderr: `error: ${error instanceof Error ? error.message : String(error)}\n` };
+    return { exitCode: 1, stdout: "", stderr: `ukp init service: ${error instanceof Error ? error.message : String(error)}\n` };
   }
 }
 
@@ -226,7 +226,7 @@ export function executeInitCommand(args: readonly string[], context: InitCommand
     if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderKitUsageError(INIT_SPEC, error.message) };
     }
-    return { exitCode: 1, stdout: "", stderr: `error: ${error instanceof Error ? error.message : String(error)}\n` };
+    return { exitCode: 1, stdout: "", stderr: `ukp init: ${error instanceof Error ? error.message : String(error)}\n` };
   }
 }
 

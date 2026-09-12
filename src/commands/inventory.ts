@@ -128,7 +128,7 @@ export function executeRegisterCommand(
     if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderKitUsageError(REGISTER_SPEC, error.message) };
     }
-    return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+    return { exitCode: 1, stdout: "", stderr: `ukp register: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
@@ -165,7 +165,7 @@ export function executeListCommand(args: readonly string[], context: InventoryCo
     if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderKitUsageError(LIST_SPEC, error.message) };
     }
-    return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+    return { exitCode: 1, stdout: "", stderr: `ukp list: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
@@ -201,6 +201,6 @@ export function executeUnregisterCommand(
     if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderKitUsageError(UNREGISTER_SPEC, error.message) };
     }
-    return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+    return { exitCode: 1, stdout: "", stderr: `ukp unregister: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
