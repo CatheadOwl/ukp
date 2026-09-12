@@ -14,7 +14,7 @@ import {
 } from "../capabilities/rg.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
-import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021). */
 export interface RgCommandResult {
@@ -76,6 +76,7 @@ function parseRgCommand(args: readonly string[]): {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new RgUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -179,6 +180,9 @@ export function executeRgCommand(args: readonly string[], context: RgContext): R
     parsed = parseRgArgs(commandArgs);
     parsed.options.passthrough = passthrough;
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderRgHelp(), stderr: "" };
+    }
     if (error instanceof RgUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderRgUsageError(error.message) };
     }
@@ -232,6 +236,11 @@ export function renderRgHelp(): string {
     "  are rejected: the endpoint selector owns scope, UKP owns the output.",
     "",
     "Result scope:",
+    "  With no --endpoint or -g, the workspace default scope applies: the",
+    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
+    "  scope); with no Client Config, every registered endpoint. 'Available on",
+    "  every registered endpoint' refers to capability availability, not this",
+    "  default scope.",
     "  rg scans each endpoint's own files (same visibility root as read/file).",
     "  'ukp search' covers indexed search where the Service declares a search",
     "  capability provider.",

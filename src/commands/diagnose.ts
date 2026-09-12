@@ -4,7 +4,7 @@ import { EXTERNAL_TOOL_CAPABILITIES, EXTERNAL_PROVIDER, isExternalToolCapability
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { Command, CommanderError } from "commander";
-import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 import { defaultQmdCommand } from "../capabilities/qmd.ts";
 import { resolveProposeFolder } from "../capabilities/propose.ts";
 import { rgExecutableAvailable } from "../capabilities/rg.ts";
@@ -223,6 +223,7 @@ function parseDiagnoseCommand(args: readonly string[]): {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new DiagnoseUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -365,6 +366,9 @@ export function executeDiagnoseCommand(
       stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
     };
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderDiagnoseHelp(), stderr: "" };
+    }
     if (error instanceof DiagnoseUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderDiagnoseUsageError(error.message) };
     }

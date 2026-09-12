@@ -10,7 +10,7 @@ import {
 
 export type { RefreshContext } from "../capabilities/refresh.ts";
 import { ScopeError } from "../scope.ts";
-import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021). */
 export interface RefreshCommandResult {
@@ -59,6 +59,7 @@ function parseRefreshCommand(args: readonly string[]): {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new RefreshUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -126,6 +127,9 @@ export function executeRefreshCommand(args: readonly string[], context: RefreshC
   try {
     return executeRefresh(parseRefreshArgs(args), context);
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderRefreshHelp(), stderr: "" };
+    }
     if (error instanceof RefreshUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderRefreshUsageError(error.message) };
     }
@@ -149,7 +153,16 @@ export function executeRefreshCommand(args: readonly string[], context: RefreshC
 }
 
 export function renderRefreshHelp(): string {
-  return createRefreshCommand().helpInformation();
+  return createRefreshCommand().helpInformation() + [
+    "",
+    "Scope:",
+    "  With no --endpoint or -g, the workspace default scope applies: the",
+    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
+    "  scope); with no Client Config, every registered endpoint. Maintenance",
+    "  itself is provider-owned: the endpoint selector never maps to a",
+    "  provider collection.",
+    "",
+  ].join("\n");
 }
 
 export function renderRefreshUsageError(message: string): string {

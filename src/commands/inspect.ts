@@ -10,7 +10,7 @@ import {
   type DiagnoseReport,
   type ProviderResolver,
 } from "./diagnose.ts";
-import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 export interface InspectCommandContext {
   currentDirectory: string;
@@ -63,6 +63,7 @@ function parseInspectCommand(args: readonly string[]): {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new InspectUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -210,6 +211,9 @@ export function executeInspectCommand(
       stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
     };
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderInspectHelp(), stderr: "" };
+    }
     if (error instanceof InspectUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderInspectUsageError(error.message) };
     }

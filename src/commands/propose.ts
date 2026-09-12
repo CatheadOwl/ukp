@@ -11,7 +11,7 @@ import {
 } from "../capabilities/propose.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
-import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021). */
 export interface ProposeCommandResult {
@@ -81,6 +81,7 @@ function parseProposeCommand(args: readonly string[]): {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new ProposeUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -138,6 +139,9 @@ export function executeProposeCommand(args: readonly string[], context: ProposeC
   try {
     return executePropose(parseProposeArgs(args), context);
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderProposeHelp(), stderr: "" };
+    }
     if (error instanceof ProposeUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderProposeUsageError(error.message) };
     }

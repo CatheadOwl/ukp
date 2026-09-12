@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Command, CommanderError } from "commander";
+import { HelpRequestError, isCommanderHelpIntent } from "./flags.ts";
 
 export interface GuideCommandResult {
   exitCode: number;
@@ -15,6 +16,17 @@ export class GuideUsageError extends Error {
 }
 
 const GUIDE_CONTENT_URL = new URL("./guide-content/", import.meta.url);
+
+/** Single source for guide topic one-liners — root help and
+ * `ukp guide --help` render the same summaries (blank-agent sweep 2026-09-11:
+ * the inversion of root help describing guides better than guide's own help
+ * was a confirmed doc-gap). */
+export const GUIDE_TOPICS: ReadonlyArray<readonly [topic: string, summary: string]> = [
+  ["service", "first Service setup, inspect, search, read, and refresh path"],
+  ["service qmd", "provider setup for the default QMD provider"],
+  ["client", "use registered Services by default from a workspace"],
+  ["propose", "submit idempotent change proposals to a Service"],
+];
 
 function readGuideContent(filename: string): string {
   return readFileSync(new URL(filename, GUIDE_CONTENT_URL), "utf8");
@@ -40,6 +52,7 @@ function parseGuideCommand(args: readonly string[]): [topic: string, subtopic?: 
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new GuideUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -76,6 +89,9 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
         throw new GuideUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client, propose`);
     }
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderGuideHelp(), stderr: "" };
+    }
     if (error instanceof GuideUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderGuideUsageError(error.message) };
     }
@@ -88,7 +104,12 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
 }
 
 export function renderGuideHelp(): string {
-  return createGuideCommand().helpInformation();
+  return createGuideCommand().helpInformation() + [
+    "",
+    "Topics:",
+    ...GUIDE_TOPICS.map(([topic, summary]) => `  ${topic.padEnd(12)} ${summary}`),
+    "",
+  ].join("\n");
 }
 
 export function renderServiceGuide(): string {
@@ -110,7 +131,7 @@ export function renderProposeGuide(): string {
 export function renderGuideUsageError(message: string): string {
   return [
     `ukp guide: ${message}`,
-    "Usage: ukp guide <topic>",
+    "Usage: ukp guide <topic> [subtopic]",
     "Run 'ukp guide --help' for details.",
   ].join("\n");
 }
