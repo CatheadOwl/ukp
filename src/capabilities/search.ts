@@ -40,13 +40,6 @@ export interface ParsedSearch {
   warnings: string[];
 }
 
-export class SearchUsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SearchUsageError";
-  }
-}
-
 export class SearchPlanningError extends Error {
   constructor(message: string) {
     super(message);
@@ -966,7 +959,7 @@ function runJsonMode(
 
 /** ADR 0021 core entry: runs the search capability and returns the
  * structured outcome. Scope/planning failures still throw typed errors
- * (`SearchUsageError`, `SearchPlanningError`, `ScopeError`, `ManifestError`)
+ * (`SearchPlanningError`, `ScopeError`, `ManifestError`)
  * for the surface adapter to map. */
 export function runSearch(parsed: ParsedSearch, context: SearchContext): SearchResult {
   const { plan, warnings } = planSearch(parsed, context);
