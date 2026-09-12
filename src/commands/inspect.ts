@@ -1,4 +1,3 @@
-import { Command, CommanderError } from "commander";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope, ScopeError, type ResolvedScope } from "../scope.ts";
@@ -10,7 +9,8 @@ import {
   type DiagnoseReport,
   type ProviderResolver,
 } from "./diagnose.ts";
-import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
+import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
+import { HelpRequestError, isHelpRequest } from "./flags.ts";
 
 export interface InspectCommandContext {
   currentDirectory: string;
@@ -24,92 +24,31 @@ export interface InspectCommandResult {
   stderr: string;
 }
 
-export class InspectUsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "InspectUsageError";
-  }
-}
-
-function collectValues(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
-}
-
-function createInspectCommand(): Command {
-  return new Command("ukp inspect")
-    .exitOverride()
-    .allowUnknownOption(false)
-    .allowExcessArguments(true)
-    .helpOption("-h, --help", "show this help")
-    .usage("[--endpoint <name> ... | -g]")
-    .description("Explain the current UKP scope, Registry bindings, and Service capabilities.")
-    .option(
-      "-c, --endpoint <name>",
-      "inspect one registered endpoint; repeat to inspect multiple endpoints",
-      collectValues,
-    )
-    .option("-g", "inspect every endpoint in the Host Registry; takes no value");
-}
-
-function parseInspectCommand(args: readonly string[]): {
-  positionals: string[];
-  endpoints: string[];
-  global?: boolean;
-} {
-  const command = createInspectCommand()
-    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
-
-  try {
-    command.parse(args, { from: "user" });
-  } catch (error) {
-    if (error instanceof CommanderError) {
-      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
-      throw new InspectUsageError(error.message.replace(/^error: /, ""));
-    }
-    throw error;
-  }
-
-  const options = command.opts<{
-    endpoint?: string[];
-    g?: boolean;
-  }>();
-  return {
-    positionals: command.args,
-    endpoints: options.endpoint ?? [],
-    global: options.g,
-  };
-}
+/** Single-source command spec (ADR 0024): summary feeds the root help via
+ * cli.ts; usage feeds the help header and the usage-error line; the scope
+ * family, singleton detection, and help-intent triage live in kit.ts. */
+export const INSPECT_SPEC: UkpCommandSpec = {
+  name: "inspect",
+  summary: "explain current scope and endpoint routing",
+  group: "operations",
+  description: "Explain the current UKP scope, Registry bindings, and Service capabilities.",
+  usage: "[--endpoint <name> ... | -g]",
+  scope: {
+    endpointHelp: "inspect one registered endpoint; repeat to inspect multiple endpoints",
+    globalHelp: "inspect every endpoint in the Host Registry; takes no value",
+  },
+};
 
 function parseInspectArgs(args: readonly string[]): {
   explicitEndpoints?: string[];
   global: boolean;
   warnings: string[];
 } {
-  const parsed = parseInspectCommand(args);
-  const explicit: string[] = [];
-  const warnings: string[] = [];
-
-  if (countFlagOccurrences(args, "-g") > 1) throw new InspectUsageError("-g may only be specified once");
-  const [unexpected] = parsed.positionals;
-  if (unexpected !== undefined) {
-    throw new InspectUsageError(
-      `unexpected argument '${unexpected}'. Use '--endpoint <name>' to select an endpoint; '-g' takes no value.`,
-    );
-  }
-
-  for (const endpoint of parsed.endpoints) {
-    if (explicit.includes(endpoint)) warnings.push(`duplicate endpoint '${endpoint}' ignored`);
-    else explicit.push(endpoint);
-  }
-
-  if (parsed.global && explicit.length > 0) {
-    throw new InspectUsageError("--endpoint and -g cannot be used together");
-  }
-
+  const parsed = parseKitArgs(INSPECT_SPEC, args);
   return {
-    explicitEndpoints: explicit.length > 0 ? explicit : undefined,
-    global: parsed.global ?? false,
-    warnings,
+    explicitEndpoints: parsed.scope.explicitEndpoints,
+    global: parsed.scope.global,
+    warnings: parsed.scope.warnings,
   };
 }
 
@@ -214,7 +153,7 @@ export function executeInspectCommand(
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderInspectHelp(), stderr: "" };
     }
-    if (error instanceof InspectUsageError) {
+    if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderInspectUsageError(error.message) };
     }
     if (error instanceof ScopeError) {
@@ -229,13 +168,9 @@ export function executeInspectCommand(
 }
 
 export function renderInspectHelp(): string {
-  return createInspectCommand().helpInformation();
+  return renderKitHelp(INSPECT_SPEC);
 }
 
 export function renderInspectUsageError(message: string): string {
-  return [
-    `ukp inspect: ${message}`,
-    "Usage: ukp inspect [--endpoint <name> ... | -g]",
-    "Run 'ukp inspect --help' for details.",
-  ].join("\n");
+  return renderKitUsageError(INSPECT_SPEC, message);
 }

@@ -92,6 +92,9 @@ export function createKitCommand(spec: UkpCommandSpec): Command {
     .helpOption("-h, --help", "show this help")
     .usage(spec.usage)
     .description(spec.description);
+  for (const argument of spec.arguments ?? []) {
+    command.argument(argument.required ? `<${argument.name}>` : `[${argument.name}]`, argument.help);
+  }
   for (const option of spec.options ?? []) {
     if (option.multi) command.option(option.flags, option.help, collectValues);
     else command.option(option.flags, option.help);

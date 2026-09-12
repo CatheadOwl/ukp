@@ -25,6 +25,9 @@ import {
   runCli,
 } from "../src/cli.ts";
 import { REFRESH_SPEC } from "../src/commands/refresh.ts";
+import { DIAGNOSE_SPEC } from "../src/commands/diagnose.ts";
+import { INSPECT_SPEC } from "../src/commands/inspect.ts";
+import { SEARCH_SPEC } from "../src/commands/search.ts";
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
@@ -197,6 +200,15 @@ describe("CLI bootstrap", () => {
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
     // ADR 0024 pilot: refresh's root-help summary is fed by its command spec.
     expect(renderHelp()).toContain(REFRESH_SPEC.summary);
+  });
+
+  // ADR 0024 migration guard: every migrated command's spec summary is the
+  // single source of its root-help line.
+  test("migrated command specs feed the root help summaries", () => {
+    const help = renderHelp();
+    for (const spec of [DIAGNOSE_SPEC, INSPECT_SPEC, REFRESH_SPEC, SEARCH_SPEC]) {
+      expect(help).toContain(spec.summary);
+    }
   });
 
   test("guide service is a short provider-agnostic CLI-accessible onboarding guide", () => {
