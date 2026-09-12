@@ -32,6 +32,9 @@ import { NAV_SPEC } from "../src/commands/nav.ts";
 import { PROPOSE_SPEC } from "../src/commands/propose.ts";
 import { RG_SPEC } from "../src/commands/rg.ts";
 import { READ_SPEC } from "../src/commands/read.ts";
+import { INIT_SPEC } from "../src/commands/init.ts";
+import { GUIDE_SPEC } from "../src/commands/guide.ts";
+import { LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC } from "../src/commands/inventory.ts";
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
@@ -207,10 +210,24 @@ describe("CLI bootstrap", () => {
   });
 
   // ADR 0024 migration guard: every migrated command's spec summary is the
-  // single source of its root-help line.
+  // single source of its root-help line (version stays hand-written).
   test("migrated command specs feed the root help summaries", () => {
     const help = renderHelp();
-    for (const spec of [DIAGNOSE_SPEC, INSPECT_SPEC, REFRESH_SPEC, SEARCH_SPEC, NAV_SPEC, PROPOSE_SPEC, RG_SPEC, READ_SPEC]) {
+    for (const spec of [
+      DIAGNOSE_SPEC,
+      INSPECT_SPEC,
+      REFRESH_SPEC,
+      SEARCH_SPEC,
+      NAV_SPEC,
+      PROPOSE_SPEC,
+      RG_SPEC,
+      READ_SPEC,
+      INIT_SPEC,
+      GUIDE_SPEC,
+      REGISTER_SPEC,
+      UNREGISTER_SPEC,
+      LIST_SPEC,
+    ]) {
       expect(help).toContain(spec.summary);
     }
   });

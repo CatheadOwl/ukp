@@ -64,6 +64,10 @@ export interface UkpCommandSpec {
   };
   /** pre-wrapped extra section appended verbatim to --help */
   helpSuffix?: string;
+  /** Reject excess positionals with commander's own message ("too many
+   * arguments. Expected N ..."). Default false — selector-family commands
+   * reject positionals with the family message instead. */
+  strictArguments?: boolean;
 }
 
 function collectValues(value: string, previous: string[] = []): string[] {
@@ -109,7 +113,7 @@ export function createKitCommand(spec: UkpCommandSpec): Command {
   const command = new Command(`ukp ${spec.name}`)
     .exitOverride()
     .allowUnknownOption(false)
-    .allowExcessArguments(true)
+    .allowExcessArguments(spec.strictArguments !== true)
     .helpOption("-h, --help", "show this help")
     .usage(spec.usage)
     .description(spec.description);
