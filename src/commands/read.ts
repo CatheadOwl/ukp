@@ -75,14 +75,25 @@ export const READ_SPEC: UkpCommandSpec = {
       help: "not supported; read is explicitly endpoint-scoped (current scope: 'ukp inspect'; endpoints: 'ukp list')",
       teachingFlag: true,
     },
-    { flags: "--lines <start[:count]>", help: "read a 1-based text line window" },
+    { flags: "--lines <start[:count]>", help: "read a 1-based text line window (count omitted: to end of file)" },
     {
       flags: "--from <route>",
       help: "resolve a document-relative reference (../x.md, bare filename) against this source document's endpoint-relative route",
     },
     { flags: "--pin <sha256-hex>", help: "verify rename recovery against this ukp-pin content hash (sha256-<64 hex>)" },
-    { flags: "--format <mode>", help: "output mode: json emits a structured failure envelope (body still goes to stdout)" },
+    { flags: "--format <mode>", help: "output mode: 'json' emits a structured failure envelope (body still goes to stdout); default is human output" },
   ],
+  helpSuffix: [
+    "",
+    "Reference forms:",
+    "  endpoint-local path — requires --endpoint <name>",
+    "  ukp://<endpoint>/<rel-path>[#L<line>] — carries its own endpoint",
+    "  docid[:line] / qmd://<reference> — provider-owned references;",
+    "  require --endpoint <name> and are resolved by the Service's provider",
+    "  absolute filesystem path — the owning endpoint is matched from the",
+    "  Host Registry (mapping echoed on stderr)",
+    "",
+  ].join("\n"),
 };
 
 interface ReadCommandOptions extends Record<string, unknown> {

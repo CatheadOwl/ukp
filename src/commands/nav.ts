@@ -44,6 +44,9 @@ export const NAV_SPEC: UkpCommandSpec = {
   group: "endpoint",
   description: "Navigate the Markdown structure of one Service endpoint (endpoint names come from 'ukp list').",
   usage: "--endpoint <name> [path] [--depth <n>] [--json]",
+  arguments: [
+    { name: "path", help: "endpoint-relative route to expand (default: the endpoint root)" },
+  ],
   options: [
     {
       flags: "--depth <n>",

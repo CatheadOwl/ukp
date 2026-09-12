@@ -184,7 +184,7 @@ export function renderHelp(): string {
   const lines = [
     "Usage: ukp <command> [options]",
     "",
-    "Start here: 'ukp guide service' (first setup) or 'ukp list' (see registered endpoints).",
+    "Start here: 'ukp guide service' (first setup — covers init and register) or 'ukp list' (see registered endpoints).",
     "",
     "Commands:",
     ...COMMAND_GROUPS.flatMap((group) => [

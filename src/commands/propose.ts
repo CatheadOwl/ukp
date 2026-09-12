@@ -56,12 +56,12 @@ export const PROPOSE_SPEC: UkpCommandSpec = {
   name: "propose",
   summary: "submit an idempotent change proposal",
   group: "endpoint",
-  description: "Submit an idempotent change proposal to one Service endpoint.",
+  description: "Submit an idempotent change proposal to one Service endpoint (endpoint names come from 'ukp list').",
   usage: "--endpoint <name> [--id <slug>] --file <path>",
   options: [
     {
       flags: "--id <slug>",
-      help: "revision key: resubmitting the same id updates the same proposal (revision +1); defaults to the --file basename (1-63 lowercase ASCII slug), which then becomes the proposal's persistent id — renaming the file creates a new proposal",
+      help: "revision key: resubmitting the same id updates the same proposal (revision +1); 1-63 lowercase ASCII slug (enforced for explicit ids and the default alike); defaults to the --file basename, which then becomes the proposal's persistent id — renaming the file creates a new proposal",
     },
     { flags: "--file <path>", help: "read the proposal content from a file (required)" },
     { flags: "--json", help: "emit the structured response envelope" },

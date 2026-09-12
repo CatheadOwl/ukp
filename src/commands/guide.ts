@@ -38,7 +38,7 @@ export const GUIDE_SPEC: UkpCommandSpec = {
   usage: "<topic> [subtopic]",
   arguments: [
     { name: "topic", required: true, help: "guide topic: service | service qmd | client | propose" },
-    { name: "subtopic", help: "provider subtopic for a topic, e.g. service qmd" },
+    { name: "subtopic", help: "provider subtopic for a topic, e.g. 'qmd' as in 'ukp guide service qmd'" },
   ],
   strictArguments: true,
   helpSuffix: [
