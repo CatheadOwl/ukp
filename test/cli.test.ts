@@ -65,6 +65,16 @@ describe("CLI bootstrap", () => {
     }
   });
 
+  // Probe 20260911-root-help-onboarding (promoted): on-ramp line plus
+  // search/rg/unregister summaries carry the choice criteria verbatim.
+  test("root help states the on-ramp and the search/rg choice criteria", () => {
+    const help = renderHelp();
+    expect(help).toContain("Start here: 'ukp guide service' (first setup) or 'ukp list' (see registered endpoints).");
+    expect(help).toContain("search a Service's indexed content (provider-backed; use 'ukp rg' to grep raw files)");
+    expect(help).toContain("grep raw endpoint files with ripgrep (no index or declaration needed");
+    expect(help).toContain("remove a registered endpoint binding (files on disk are untouched)");
+  });
+
   test("help exits successfully", () => {
     const output: string[] = [];
     expect(runCli(["--help"], (message) => output.push(message))).toBe(0);

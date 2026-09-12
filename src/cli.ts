@@ -40,7 +40,7 @@ export { renderRgHelp } from "./commands/rg.ts";
 const COMMAND_DESCRIPTIONS: Record<string, string> = {
   diagnose: "validate a Service folder or endpoint scope",
   read: "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)",
-  rg: "run base lexical search (ripgrep) across endpoints, results as ukp:// references",
+  rg: "grep raw endpoint files with ripgrep (no index or declaration needed; results as ukp:// references)",
   guide: "show short operational guides",
   init: "initialize UKP-owned files",
   inspect: "explain current scope and endpoint routing",
@@ -48,11 +48,11 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   // command spec; unmigrated commands keep hand-written entries.
   refresh: REFRESH_SPEC.summary,
   register: "register a Service endpoint",
-  unregister: "remove a registered endpoint",
+  unregister: "remove a registered endpoint binding (files on disk are untouched)",
   list: "list registered endpoint bindings",
   nav: "navigate the Markdown structure of an endpoint",
   propose: "submit an idempotent change proposal",
-  search: "run atomic lexical search",
+  search: "search a Service's indexed content (provider-backed; use 'ukp rg' to grep raw files)",
   version: "show version information",
 };
 
@@ -181,6 +181,8 @@ export function renderVersionHelp(): string {
 export function renderHelp(): string {
   const lines = [
     "Usage: ukp <command> [options]",
+    "",
+    "Start here: 'ukp guide service' (first setup) or 'ukp list' (see registered endpoints).",
     "",
     "Commands:",
     ...COMMAND_GROUPS.flatMap((group) => [
