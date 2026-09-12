@@ -198,6 +198,8 @@ export function renderHelp(): string {
     "",
     "A Service's declared capabilities are backed by a provider (QMD backs search and refresh today); rg and nav work on endpoint files directly, no provider needed.",
     "",
+    "A Service is a folder with a manifest (a name plus declared capabilities); registering it binds that name as an endpoint you address with --endpoint. The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given.",
+    "",
     "Guides:",
     ...GUIDE_TOPICS.map(([topic, summary]) => `  ukp ${`guide ${topic}`.padEnd(17)} ${summary}`),
     "",
