@@ -21,7 +21,7 @@ const GUIDE_CONTENT_URL = new URL("./guide-content/", import.meta.url);
  * the inversion of root help describing guides better than guide's own help
  * was a confirmed doc-gap). */
 export const GUIDE_TOPICS: ReadonlyArray<readonly [topic: string, summary: string]> = [
-  ["service", "first Service setup, inspect, search, read, and refresh path"],
+  ["service", "first Service setup, inspect, search, read, and update path"],
   ["service qmd", "provider setup for the default QMD provider"],
   ["client", "use registered Services by default from a workspace; set your default scope here"],
   ["propose", "submit idempotent change proposals to a Service"],

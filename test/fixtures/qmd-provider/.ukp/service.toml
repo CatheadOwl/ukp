@@ -4,5 +4,5 @@ description = "Deterministic QMD-compatible search fixture for UKP tests."
 [capabilities.search]
 provider = "qmd"
 
-[capabilities.refresh]
+[capabilities.update]
 provider = "qmd"

@@ -7,20 +7,20 @@ import {
   type UkpCommandSpec,
 } from "./kit.ts";
 import {
-  runRefresh,
-  renderRefreshHuman,
-  type ParsedRefresh,
-  type RefreshAggregateStatus,
-  type RefreshContext,
-} from "../capabilities/refresh.ts";
+  runUpdate,
+  renderUpdateHuman,
+  type ParsedUpdate,
+  type UpdateAggregateStatus,
+  type UpdateContext,
+} from "../capabilities/update.ts";
 
-export type { RefreshContext } from "../capabilities/refresh.ts";
+export type { UpdateContext } from "../capabilities/update.ts";
 
 /** CLI-owned command result shape (ADR 0021). */
-export interface RefreshCommandResult extends KitCommandResult {}
+export interface UpdateCommandResult extends KitCommandResult {}
 
 /** Aggregate classification → exit code (ADR 0021). */
-const REFRESH_EXIT_BY_AGGREGATE: Record<RefreshAggregateStatus, number> = {
+const UPDATE_EXIT_BY_AGGREGATE: Record<UpdateAggregateStatus, number> = {
   "succeeded": 0,
   "failed": 1,
   "no-success": 1,
@@ -31,32 +31,32 @@ const REFRESH_EXIT_BY_AGGREGATE: Record<RefreshAggregateStatus, number> = {
  * root help via cli.ts; `usage` feeds both the help header and the
  * usage-error line; the scope family, singleton detection, help-intent
  * triage, and catch chain live in kit.ts. */
-export const REFRESH_SPEC: UkpCommandSpec = {
-  name: "refresh",
+export const UPDATE_SPEC: UkpCommandSpec = {
+  name: "update",
   summary: "trigger provider-owned Service maintenance",
   group: "operations",
   description: "Trigger provider-owned maintenance for selected Service endpoints.",
   usage: "[--endpoint <name> ... | -g]",
   scope: {
-    endpointHelp: "refresh one endpoint; repeat to refresh multiple endpoints",
-    globalHelp: "refresh every endpoint in the Host Registry; takes no value",
+    endpointHelp: "update one endpoint; repeat to update multiple endpoints",
+    globalHelp: "update every endpoint in the Host Registry; takes no value",
   },
   helpSuffix: [
     "",
     "Scope:",
     "  With no --endpoint or -g, the workspace default scope applies: the",
     "  Client Config's default endpoints ('ukp inspect' shows the resolved",
-    "  scope). Without a Client Config, refresh needs an explicit scope:",
+    "  scope). Without a Client Config, update needs an explicit scope:",
     "  pass --endpoint <name> or -g. -g selects every endpoint in the Host",
     "  Registry and cannot be combined with --endpoint. Maintenance runs",
-    "  the provider's own update step (QMD: 'qmd update'), refreshing what",
+    "  the provider's own update step (QMD: 'qmd update'), updating what",
     "  its index covers; the endpoint selector never maps to a provider",
     "  collection.",
     "",
   ].join("\n"),
 };
 
-function toParsedRefresh(parsed: KitParsed): ParsedRefresh {
+function toParsedUpdate(parsed: KitParsed): ParsedUpdate {
   return {
     options: {
       explicitEndpoints: parsed.scope.explicitEndpoints,
@@ -66,34 +66,34 @@ function toParsedRefresh(parsed: KitParsed): ParsedRefresh {
   };
 }
 
-export function parseRefreshArgs(args: readonly string[]): ParsedRefresh {
-  return toParsedRefresh(parseKitArgs(REFRESH_SPEC, args));
+export function parseUpdateArgs(args: readonly string[]): ParsedUpdate {
+  return toParsedUpdate(parseKitArgs(UPDATE_SPEC, args));
 }
 
 /** CLI composition of the structured outcome (ADR 0021); kept as the test
  * entry so suites exercise the exact adapter path the bin takes. */
-export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): RefreshCommandResult {
-  const result = runRefresh(parsed, context);
-  const view = renderRefreshHuman(result);
+export function executeUpdate(parsed: ParsedUpdate, context: UpdateContext): UpdateCommandResult {
+  const result = runUpdate(parsed, context);
+  const view = renderUpdateHuman(result);
   return {
-    exitCode: REFRESH_EXIT_BY_AGGREGATE[result.aggregate],
+    exitCode: UPDATE_EXIT_BY_AGGREGATE[result.aggregate],
     stdout: view.body,
     stderr: view.diagnostics,
   };
 }
 
-export function executeRefreshCommand(args: readonly string[], context: RefreshContext): RefreshCommandResult {
+export function executeUpdateCommand(args: readonly string[], context: UpdateContext): UpdateCommandResult {
   return executeKitCommand(
-    REFRESH_SPEC,
+    UPDATE_SPEC,
     args,
-    (parsed) => executeRefresh(toParsedRefresh(parsed), context),
+    (parsed) => executeUpdate(toParsedUpdate(parsed), context),
     {
       scopeErrorHint:
-        "Hint: run 'ukp list' to inspect registrations, 'ukp register' from a Service folder to add one, or pass '-g' to explicitly refresh every registered endpoint.",
+        "Hint: run 'ukp list' to inspect registrations, 'ukp register' from a Service folder to add one, or pass '-g' to explicitly update every registered endpoint.",
     },
   );
 }
 
-export function renderRefreshHelp(): string {
-  return renderKitHelp(REFRESH_SPEC);
+export function renderUpdateHelp(): string {
+  return renderKitHelp(UPDATE_SPEC);
 }

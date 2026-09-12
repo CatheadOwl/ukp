@@ -12,7 +12,7 @@ import {
   renderInitHelp,
   renderInitServiceHelp,
   renderInspectHelp,
-  renderRefreshHelp,
+  renderUpdateHelp,
   renderSearchHelp,
   renderVersion,
   renderVersionHelp,
@@ -25,7 +25,7 @@ import {
   renderRgHelp,
   runCli,
 } from "../src/cli.ts";
-import { REFRESH_SPEC } from "../src/commands/refresh.ts";
+import { UPDATE_SPEC } from "../src/commands/update.ts";
 import { DIAGNOSE_SPEC } from "../src/commands/diagnose.ts";
 import { INSPECT_SPEC } from "../src/commands/inspect.ts";
 import { SEARCH_SPEC } from "../src/commands/search.ts";
@@ -45,7 +45,7 @@ import { renderKitHelp, type UkpCommandSpec } from "../src/commands/kit.ts";
 const ROOT_MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [
   DIAGNOSE_SPEC,
   INSPECT_SPEC,
-  REFRESH_SPEC,
+  UPDATE_SPEC,
   SEARCH_SPEC,
   NAV_SPEC,
   PROPOSE_SPEC,
@@ -115,7 +115,7 @@ describe("CLI bootstrap", () => {
   // criteria verbatim.
   test("root help carries the provider gloss and command-role criteria", () => {
     const help = renderHelp();
-    expect(help).toContain("A Service's declared capabilities are backed by a provider (QMD backs search and refresh today); rg and nav work on endpoint files directly, no provider needed.");
+    expect(help).toContain("A Service's declared capabilities are backed by a provider (QMD backs search and update today); rg and nav work on endpoint files directly, no provider needed.");
     expect(help).toContain("check a Service or endpoints for wiring problems (manifest, provider setup)");
     expect(help).toContain("show which endpoints the current scope selects and their capabilities");
     expect(help).toContain("submit an idempotent change proposal (the write path into a Service)");
@@ -246,18 +246,18 @@ describe("CLI bootstrap", () => {
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
   });
 
-  test("refresh help documents endpoint selectors and exits successfully", () => {
+  test("update help documents endpoint selectors and exits successfully", () => {
     const output: string[] = [];
-    expect(renderRefreshHelp()).toContain("Usage: ukp refresh");
-    expect(runCli(["refresh", "--help"], (message) => output.push(message))).toBe(0);
+    expect(renderUpdateHelp()).toContain("Usage: ukp update");
+    expect(runCli(["update", "--help"], (message) => output.push(message))).toBe(0);
     const help = output.join("\n");
     expect(help).toContain("--endpoint <name>");
     expect(help).toContain("-c, --endpoint <name>");
     expect(help).toContain("-g");
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
-    // ADR 0024 pilot: refresh's root-help summary is fed by its command spec.
-    expect(renderHelp()).toContain(REFRESH_SPEC.summary);
-    // Round-3 candidate (refresh semantic granularity): the help states what
+    // ADR 0024 pilot: update's root-help summary is fed by its command spec.
+    expect(renderHelp()).toContain(UPDATE_SPEC.summary);
+    // Round-3 candidate (update semantic granularity): the help states what
     // maintenance actually runs.
     expect(help).toContain("qmd update");
   });
@@ -307,7 +307,7 @@ describe("CLI bootstrap", () => {
     expect(runCli(["guide", "service"], (message) => output.push(message))).toBe(0);
     const guide = output.join("\n");
     expect(guide).toContain(".ukp/service.toml");
-    expect(guide).toContain("QMD is the current default search/refresh provider");
+    expect(guide).toContain("QMD is the current default search/update provider");
     expect(guide).toContain("ukp diagnose");
     expect(guide).toContain("ukp register");
     expect(guide).toContain("ukp inspect --endpoint your-endpoint-name");
@@ -317,7 +317,7 @@ describe("CLI bootstrap", () => {
     // the two reference forms search results carry.
     expect(guide).toContain("durable, endpoint-scoped reference");
     expect(guide).toContain("provider's short-lived document id (QMD handoff key)");
-    expect(guide).toContain("ukp refresh --endpoint your-endpoint-name");
+    expect(guide).toContain("ukp update --endpoint your-endpoint-name");
     expect(guide).toContain("Future providers should add provider adapters");
     expect(guide).toContain("ukp unregister --endpoint <name>");
     expect(guide.indexOf("Fast path:")).toBeLessThan(guide.indexOf("Model:"));
@@ -373,7 +373,7 @@ describe("CLI bootstrap", () => {
       ["rg", ["pattern"]],
       ["inspect", ["stray"]],
       ["diagnose", ["stray"]],
-      ["refresh", ["stray"]],
+      ["update", ["stray"]],
       ["propose", ["stray"]],
       ["list", ["stray"]],
       ["register", ["stray"]],
@@ -420,8 +420,8 @@ describe("CLI bootstrap", () => {
   // topic descriptions, and the unregister legacy alias all became
   // load-bearing help text — pin them.
   test("help documents default scope, name sources, and guide topics (sweep fixes)", () => {
-    // search / rg / refresh share the workspace default scope semantics.
-    for (const render of [renderSearchHelp, renderRgHelp, renderRefreshHelp]) {
+    // search / rg / update share the workspace default scope semantics.
+    for (const render of [renderSearchHelp, renderRgHelp, renderUpdateHelp]) {
       const help = render();
       expect(help).toContain("workspace default scope");
       expect(help).toContain("'ukp inspect' shows the resolved");
@@ -433,8 +433,8 @@ describe("CLI bootstrap", () => {
     expect(runCli(["register", "--help"], (message) => registerHelp.push(message))).toBe(0);
     expect(registerHelp.join("\n")).toContain("effective name");
     // Guide topics are described in guide's own help (single-sourced with root).
-    expect(renderGuideHelp()).toContain("first Service setup, inspect, search, read, and refresh path");
-    expect(renderHelp()).toContain("first Service setup, inspect, search, read, and refresh path");
+    expect(renderGuideHelp()).toContain("first Service setup, inspect, search, read, and update path");
+    expect(renderHelp()).toContain("first Service setup, inspect, search, read, and update path");
     // Version help carries a description line.
     expect(renderVersionHelp()).toContain("Show version information.");
     // Unregister legacy positional steers to the canonical flag form.
@@ -470,8 +470,8 @@ describe("CLI bootstrap", () => {
     expect(renderGuideHelp().replace(/\s+/g, " ")).toContain("'qmd' as in 'ukp guide service qmd'");
     // nav: the [path] argument carries a description.
     expect(renderNavHelp()).toContain("endpoint-relative route to expand");
-    // search/rg/refresh/diagnose: -g/--endpoint mutual exclusion stated.
-    for (const help of [renderSearchHelp(), renderRgHelp(), renderRefreshHelp(), renderDiagnoseHelp()]) {
+    // search/rg/update/diagnose: -g/--endpoint mutual exclusion stated.
+    for (const help of [renderSearchHelp(), renderRgHelp(), renderUpdateHelp(), renderDiagnoseHelp()]) {
       expect(help.replace(/\s+/g, " ")).toContain("cannot be combined with --endpoint");
     }
   });
@@ -1286,7 +1286,7 @@ describe("CLI bootstrap", () => {
     expect(output.join("\n")).toContain("fixture-qmd");
     expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
     expect(output.join("\n")).toContain("capabilities on every endpoint: nav, read");
-    expect(output.join("\n")).toMatch(/fixture-qmd\t.*\trefresh,search/);
+    expect(output.join("\n")).toMatch(/fixture-qmd\t.*\tsearch,update/);
     expect(readFileSync(registryPath, "utf8")).not.toContain("description");
     expect(runCli(["unregister", "fixture-qmd"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);

@@ -89,12 +89,12 @@ export function providerTimeoutMs(): number {
 }
 
 /**
- * Refresh runs `qmd update`, which may legitimately index a large corpus —
+ * Update runs `qmd update`, which may legitimately index a large corpus —
  * its ceiling is correspondingly higher (default 600s, overridable via
- * `UKP_REFRESH_TIMEOUT_MS`).
+ * `UKP_UPDATE_TIMEOUT_MS`).
  */
-export function refreshTimeoutMs(): number {
-  return envTimeoutMs("UKP_REFRESH_TIMEOUT_MS", 600_000);
+export function updateTimeoutMs(): number {
+  return envTimeoutMs("UKP_UPDATE_TIMEOUT_MS", 600_000);
 }
 
 /** Detect a defaultQmdCommand cmd.exe wrapper prefix (…, "/c", <exe>). */

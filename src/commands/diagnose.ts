@@ -93,9 +93,9 @@ export function defaultProviderResolver(provider: string, capability = "search")
       ? { supported: true }
       : { supported: false, reason: "rg executable is not available" };
   }
-  if (capability === "refresh") {
+  if (capability === "update") {
     if (provider !== "qmd") {
-      return { supported: false, reason: `provider '${provider}' is not supported for capability 'refresh' by this UKP build` };
+      return { supported: false, reason: `provider '${provider}' is not supported for capability 'update' by this UKP build` };
     }
     return defaultQmdCommand()
       ? { supported: true }

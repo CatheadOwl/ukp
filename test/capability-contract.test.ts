@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const capabilitiesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "capabilities");
 
 /** Files already holding the ADR 0021 contract. */
-const MIGRATED = new Set(["nav.ts", "qmd.ts", "rename-recovery.ts", "search.ts", "read.ts", "refresh.ts", "propose.ts", "rg.ts"]);
+const MIGRATED = new Set(["nav.ts", "qmd.ts", "rename-recovery.ts", "search.ts", "read.ts", "update.ts", "propose.ts", "rg.ts"]);
 
 /** Files still carrying CLI-shaped returns; remove an entry here and add it
  * to MIGRATED in the same change that migrates it. The set is empty — every

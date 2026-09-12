@@ -15,7 +15,7 @@ describe("Service Manifest and diagnose", () => {
     expect(loaded.manifest.description).toBe("Deterministic QMD-compatible search fixture for UKP tests.");
     expect(loaded.manifest.dependencies).toBeUndefined();
     expect(loaded.manifest.capabilities.search.provider).toBe("qmd");
-    expect(loaded.manifest.capabilities.refresh.provider).toBe("qmd");
+    expect(loaded.manifest.capabilities.update.provider).toBe("qmd");
     expect(loaded.manifest.capabilities.get).toBeUndefined();
   });
 
@@ -24,7 +24,7 @@ describe("Service Manifest and diagnose", () => {
       supported: provider === "qmd",
       reason: provider === "qmd" ? undefined : "unsupported",
     }));
-    // search + refresh from the Manifest; get and nav as derived-local
+    // search + update from the Manifest; get and nav as derived-local
     // defaults; rg as the external-tool base tier (ADR-RG-003)
     expect(report.capabilities).toHaveLength(5);
     expect(report.capabilities.filter((capability) => capability.source === "manifest")).toHaveLength(2);
@@ -62,9 +62,9 @@ describe("Service Manifest and diagnose", () => {
     expect(defaultProviderResolver("not-qmd").reason).toContain("provider 'not-qmd' is not supported");
     expect(defaultProviderResolver("file", "read").supported).toBe(true);
     expect(defaultProviderResolver("qmd", "read").reason).toContain("provider 'qmd' is not supported for capability 'read'");
-    expect(typeof defaultProviderResolver("qmd", "refresh").supported).toBe("boolean");
-    expect(defaultProviderResolver("file", "refresh").reason).toContain(
-      "provider 'file' is not supported for capability 'refresh'",
+    expect(typeof defaultProviderResolver("qmd", "update").supported).toBe("boolean");
+    expect(defaultProviderResolver("file", "update").reason).toContain(
+      "provider 'file' is not supported for capability 'update'",
     );
     expect(defaultProviderResolver("qmd", "vsearch").supported).toBe(false);
     expect(defaultProviderResolver("qmd", "vsearch").reason).toContain("capability 'vsearch' is not implemented");

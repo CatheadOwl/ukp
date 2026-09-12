@@ -4,7 +4,7 @@ Local-first Unified Knowledge Plane CLI for named knowledge endpoints.
 
 UKP turns folders into services that can be addressed by name. That gives
 humans and agents one stable command surface for inspecting, navigating,
-reading, searching, and refreshing knowledge without memorizing physical
+reading, searching, and updating knowledge without memorizing physical
 paths or provider-specific commands.
 
 > [!NOTE]
@@ -34,7 +34,7 @@ Use UKP when:
   local Service.
 - Search one endpoint, a workspace default scope, the whole local Registry, or
   direct authority/context dependencies with explicit recursion (QMD-backed).
-- Refresh provider-owned indexes through a stable UKP command (QMD-backed).
+- Update provider-owned indexes through a stable UKP command (QMD-backed).
 - Give agents JSON output and provider-native artifacts when they need
   machine-readable handoff.
 
@@ -67,9 +67,9 @@ Requirements:
 
 - Bun `1.3.14` or newer in the verified baseline family. The package is
   published through npm, but the CLI currently runs on Bun.
-- QMD on `PATH` for `search/qmd`, `read/qmd`, and `refresh/qmd`. QMD is an
+- QMD on `PATH` for `search/qmd`, `read/qmd`, and `update/qmd`. QMD is an
   external tool maintained as a separate project; it is required for the
-  QMD-backed search, read, and refresh capabilities, which reach it through
+  QMD-backed search, read, and update capabilities, which reach it through
   UKP's provider path. See QMD's own release channel and documentation for
   installation.
 - Node/npm for package dry-runs and publishing workflows.
@@ -135,7 +135,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 |---|---|
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
-| `ukp refresh` | Runs provider-owned maintenance when `refresh/qmd` is declared. |
+| `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared. |
 
 ### Help commands
 
@@ -155,9 +155,9 @@ commands that support global scope.
 
 - local-first CLI;
 - TOML Service Manifest, Host Registry, and Client Config;
-- onboarding, diagnosis, registration, inspection, search, read, and refresh
+- onboarding, diagnosis, registration, inspection, search, read, and update
   command surface;
-- QMD-backed `search`, `read`, and `refresh`;
+- QMD-backed `search`, `read`, and `update`;
 - agent-oriented JSON output and artifacts;
 - explicit recursive search over direct authority/context dependencies.
 

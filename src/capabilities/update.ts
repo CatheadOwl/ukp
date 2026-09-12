@@ -3,19 +3,19 @@ import { loadClientConfig, findNearestClientConfig } from "../config/client.ts";
 import { loadManifest } from "../config/manifest.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
-import { buildQmdInvocation, defaultQmdCommand, refreshTimeoutMs } from "./qmd.ts";
+import { buildQmdInvocation, defaultQmdCommand, updateTimeoutMs } from "./qmd.ts";
 
-export interface RefreshOptions {
+export interface UpdateOptions {
   explicitEndpoints?: string[];
   global: boolean;
 }
 
-export interface ParsedRefresh {
-  options: RefreshOptions;
+export interface ParsedUpdate {
+  options: UpdateOptions;
   warnings: string[];
 }
 
-export interface RefreshContext {
+export interface UpdateContext {
   currentDirectory: string;
   registryPath: string;
   qmdCommand?: readonly string[];
@@ -23,23 +23,23 @@ export interface RefreshContext {
 
 /** ADR 0021 aggregate classification — the adapter maps it onto exit codes;
  * the capability never decides them. */
-export type RefreshAggregateStatus =
+export type UpdateAggregateStatus =
   | "succeeded"
   | "failed"
   | "cancelled"
   | "no-success";
 
-/** One endpoint's structured refresh outcome. `message` keeps today's
+/** One endpoint's structured update outcome. `message` keeps today's
  * wording (including Hint lines — same documented debt class as search
  * warnings); `providerOutput` is the provider-native zone, passed through
  * unmodeled. */
-export interface RefreshEndpointOutcome {
+export interface UpdateEndpointOutcome {
   name: string;
   provider: string | null;
   /** Transiently undefined while the provider run classifies the entry;
    * every path assigns a final status before the outcome escapes. */
   status?:
-    | "refreshed"
+    | "updated"
     | "skipped"
     /** plan-stage failure (name mismatch, manifest error) — renders with an
      * `error:` line, unlike a provider failure. */
@@ -56,16 +56,16 @@ export interface RefreshEndpointOutcome {
 }
 
 /** ADR 0021 structured outcome. */
-export interface RefreshOutcome {
-  endpoints: RefreshEndpointOutcome[];
+export interface UpdateOutcome {
+  endpoints: UpdateEndpointOutcome[];
   warnings: string[];
-  aggregate: RefreshAggregateStatus;
+  aggregate: UpdateAggregateStatus;
 }
 
-export class RefreshUsageError extends Error {
+export class UpdateUsageError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "RefreshUsageError";
+    this.name = "UpdateUsageError";
   }
 }
 
@@ -90,10 +90,10 @@ type PlannedEndpoint =
     message: string;
   };
 
-function resolveRefreshBindings(
-  parsed: ParsedRefresh,
+function resolveUpdateBindings(
+  parsed: ParsedUpdate,
   registry: readonly RegistryBinding[],
-  context: RefreshContext,
+  context: UpdateContext,
 ): { bindings: RegistryBinding[]; warnings: string[] } {
   if (parsed.options.global && parsed.options.explicitEndpoints !== undefined) {
     throw new ScopeError("explicit endpoint scope and global scope cannot be used together");
@@ -117,7 +117,7 @@ function resolveRefreshBindings(
 
   const configPath = findNearestClientConfig(context.currentDirectory);
   if (!configPath) {
-    throw new ScopeError("refresh requires an explicit scope; use '--endpoint <name>' or '-g'");
+    throw new ScopeError("update requires an explicit scope; use '--endpoint <name>' or '-g'");
   }
 
   const config = loadClientConfig(configPath);
@@ -133,12 +133,12 @@ function resolveRefreshBindings(
   return { bindings, warnings };
 }
 
-function planRefresh(parsed: ParsedRefresh, context: RefreshContext): {
+function planUpdate(parsed: ParsedUpdate, context: UpdateContext): {
   plan: PlannedEndpoint[];
   warnings: string[];
 } {
   const registry = readRegistry(context.registryPath);
-  const { bindings, warnings } = resolveRefreshBindings(parsed, registry, context);
+  const { bindings, warnings } = resolveUpdateBindings(parsed, registry, context);
   const qmdCommand = context.qmdCommand ?? defaultQmdCommand();
   const plan: PlannedEndpoint[] = [];
 
@@ -162,14 +162,14 @@ function planRefresh(parsed: ParsedRefresh, context: RefreshContext): {
         continue;
       }
 
-      const capability = service.manifest.capabilities.refresh;
+      const capability = service.manifest.capabilities.update;
       if (!capability) {
         plan.push({
           name: binding.name,
           provider: null,
           status: "skipped",
           message: [
-            `endpoint '${binding.name}' does not provide refresh`,
+            `endpoint '${binding.name}' does not provide update`,
             `Hint: run 'ukp inspect --endpoint ${binding.name}' to review Service capabilities.`,
           ].join("\n"),
         });
@@ -182,7 +182,7 @@ function planRefresh(parsed: ParsedRefresh, context: RefreshContext): {
           name: binding.name,
           provider,
           status: "skipped",
-          message: `endpoint '${binding.name}' uses unsupported refresh provider '${provider}'`,
+          message: `endpoint '${binding.name}' uses unsupported update provider '${provider}'`,
         });
         continue;
       }
@@ -193,7 +193,7 @@ function planRefresh(parsed: ParsedRefresh, context: RefreshContext): {
           provider: "qmd",
           status: "skipped",
           message: [
-            `endpoint '${binding.name}' refresh unavailable: qmd executable is not available`,
+            `endpoint '${binding.name}' update unavailable: qmd executable is not available`,
             "Hint: install QMD or pass a valid qmd command in the execution context.",
           ].join("\n"),
         });
@@ -221,7 +221,7 @@ function planRefresh(parsed: ParsedRefresh, context: RefreshContext): {
   }
 
   if (!plan.some((endpoint) => endpoint.status === "executable")) {
-    warnings.push("no executable refresh endpoints: run 'ukp inspect' to review selected endpoint capabilities");
+    warnings.push("no executable update endpoints: run 'ukp inspect' to review selected endpoint capabilities");
   }
 
   return { plan, warnings };
@@ -240,12 +240,12 @@ function commandFor(endpoint: Extract<PlannedEndpoint, { status: "executable" }>
 const QMD_MAINTENANCE_SCOPE =
   "provider-owned (qmd update in the Service folder; QMD decides which configured collections are maintained)";
 
-/** ADR 0021 core entry: runs the refresh capability and returns the
+/** ADR 0021 core entry: runs the update capability and returns the
  * structured outcome. Scope failures throw typed errors (`ScopeError`,
- * `RefreshUsageError`) for the surface adapter to map. */
-export function runRefresh(parsed: ParsedRefresh, context: RefreshContext): RefreshOutcome {
-  const { plan, warnings } = planRefresh(parsed, context);
-  const endpoints: RefreshEndpointOutcome[] = [];
+ * `UpdateUsageError`) for the surface adapter to map. */
+export function runUpdate(parsed: ParsedUpdate, context: UpdateContext): UpdateOutcome {
+  const { plan, warnings } = planUpdate(parsed, context);
+  const endpoints: UpdateEndpointOutcome[] = [];
   let failed = plan.some((endpoint) => endpoint.status === "failed");
   let succeeded = false;
   let interrupted = false;
@@ -265,7 +265,7 @@ export function runRefresh(parsed: ParsedRefresh, context: RefreshContext): Refr
       continue;
     }
 
-    const outcome: RefreshEndpointOutcome = {
+    const outcome: UpdateEndpointOutcome = {
       name: endpoint.name,
       provider: "qmd",
     };
@@ -277,7 +277,7 @@ export function runRefresh(parsed: ParsedRefresh, context: RefreshContext): Refr
       windowsHide: true,
       windowsVerbatimArguments: command.verbatim,
       maxBuffer: 64 * 1024 * 1024,
-      timeout: refreshTimeoutMs(),
+      timeout: updateTimeoutMs(),
     });
 
     const providerOutput = (result.stdout ?? "").trimEnd();
@@ -289,7 +289,7 @@ export function runRefresh(parsed: ParsedRefresh, context: RefreshContext): Refr
       failed = true;
       outcome.status = "timeout";
       warnings.push(
-        `endpoint '${endpoint.name}' provider timed out after ${refreshTimeoutMs() / 1000}s (set UKP_REFRESH_TIMEOUT_MS to adjust)`,
+        `endpoint '${endpoint.name}' provider timed out after ${updateTimeoutMs() / 1000}s (set UKP_UPDATE_TIMEOUT_MS to adjust)`,
       );
       continue;
     }
@@ -309,7 +309,7 @@ export function runRefresh(parsed: ParsedRefresh, context: RefreshContext): Refr
     }
 
     succeeded = true;
-    outcome.status = "refreshed";
+    outcome.status = "updated";
     if (providerOutput) outcome.providerOutput = providerOutput;
   }
 
@@ -331,17 +331,17 @@ export function runRefresh(parsed: ParsedRefresh, context: RefreshContext): Refr
 // `diagnostics` — the adapter assigns channels.
 // ---------------------------------------------------------------------------
 
-export interface RefreshHumanView {
+export interface UpdateHumanView {
   body: string;
   diagnostics: string;
 }
 
-export function renderRefreshHuman(result: RefreshOutcome): RefreshHumanView {
+export function renderUpdateHuman(result: UpdateOutcome): UpdateHumanView {
   const lines: string[] = [];
   for (const endpoint of result.endpoints) {
     if (endpoint.status === "cancelled") break;
     lines.push(`== ${endpoint.name} ==`);
-    lines.push("capability: refresh");
+    lines.push("capability: update");
     lines.push(`provider: ${endpoint.provider ?? "(none)"}`);
     if (endpoint.status === "skipped" || endpoint.status === "plan-failed") {
       lines.push(`status: ${endpoint.status === "plan-failed" ? "failed" : "skipped"}`);
@@ -355,14 +355,14 @@ export function renderRefreshHuman(result: RefreshOutcome): RefreshHumanView {
     }
     if (endpoint.status === "timeout") {
       lines.push("status: failed");
-      lines.push(`error: provider timed out after ${refreshTimeoutMs() / 1000}s`);
+      lines.push(`error: provider timed out after ${updateTimeoutMs() / 1000}s`);
       continue;
     }
     if (endpoint.status === "provider-failed") {
       lines.push("status: failed");
       continue;
     }
-    lines.push("status: refreshed");
+    lines.push("status: updated");
     if (endpoint.providerOutput) {
       lines.push("");
       lines.push("== provider output ==");

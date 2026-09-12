@@ -51,4 +51,4 @@ endpoint** — a parallel file's invocation would overwrite or delete the same
 files mid-assert. Such test files take a private copy at module load via
 `test/helpers/qmd-fixture.ts` (`createQmdFixtureCopy`). Test files that only
 spawn the executable against their own per-test service folders (read,
-refresh, manifest) can keep referencing the shared directory read-only.
+update, manifest) can keep referencing the shared directory read-only.
