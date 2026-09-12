@@ -196,6 +196,8 @@ export function renderHelp(): string {
     ]),
     "Endpoint names for --endpoint come from 'ukp list'.",
     "",
+    "A Service's declared capabilities are backed by a provider (QMD backs search and refresh today); rg and nav work on endpoint files directly, no provider needed.",
+    "",
     "Guides:",
     ...GUIDE_TOPICS.map(([topic, summary]) => `  ukp ${`guide ${topic}`.padEnd(17)} ${summary}`),
     "",

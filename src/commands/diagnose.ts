@@ -50,7 +50,7 @@ const SEARCHABILITY_HINT = "hint: diagnose checks wiring, not indexed content; f
  * family, singleton detection, and help-intent triage live in kit.ts. */
 export const DIAGNOSE_SPEC: UkpCommandSpec = {
   name: "diagnose",
-  summary: "validate a Service folder or endpoint scope",
+  summary: "check a Service or endpoints for wiring problems (manifest, provider setup)",
   group: "operations",
   description: "Validate a Service folder or selected registered Service endpoints.",
   usage: "[--endpoint <name> ... | -g]",
