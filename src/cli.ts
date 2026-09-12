@@ -6,18 +6,19 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   executeDiagnoseCommand,
+  DIAGNOSE_SPEC,
   type ProviderResolver,
 } from "./commands/diagnose.ts";
 import { executeReadCommand } from "./commands/read.ts";
 import { executeRgCommand } from "./commands/rg.ts";
 import { executeGuideCommand, GUIDE_TOPICS } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
-import { executeInspectCommand } from "./commands/inspect.ts";
+import { executeInspectCommand, INSPECT_SPEC } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
 import { executeNavCommand } from "./commands/nav.ts";
 import { executeProposeCommand } from "./commands/propose.ts";
 import { executeRefreshCommand, REFRESH_SPEC } from "./commands/refresh.ts";
-import { executeSearchCommand } from "./commands/search.ts";
+import { executeSearchCommand, SEARCH_SPEC } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
 export { renderDiagnoseHelp } from "./commands/diagnose.ts";
@@ -38,21 +39,21 @@ export { renderRgHelp } from "./commands/rg.ts";
 // concern: the invocation surface stays flat — `ukp <verb>` — and dispatch
 // in runCli is unchanged.
 const COMMAND_DESCRIPTIONS: Record<string, string> = {
-  diagnose: "validate a Service folder or endpoint scope",
+  // ADR 0024: migrated commands feed their root-help summary from the
+  // command spec; unmigrated commands keep hand-written entries.
+  diagnose: DIAGNOSE_SPEC.summary,
   read: "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)",
   rg: "grep raw endpoint files with ripgrep (no index or declaration needed; results as ukp:// references)",
   guide: "show short operational guides",
   init: "initialize UKP-owned files",
-  inspect: "explain current scope and endpoint routing",
-  // ADR 0024 pilot: migrated commands feed their root-help summary from the
-  // command spec; unmigrated commands keep hand-written entries.
+  inspect: INSPECT_SPEC.summary,
   refresh: REFRESH_SPEC.summary,
   register: "register a Service endpoint",
   unregister: "remove a registered endpoint binding (files on disk are untouched)",
   list: "list registered endpoint bindings",
   nav: "navigate the Markdown structure of an endpoint",
   propose: "submit an idempotent change proposal",
-  search: "search a Service's indexed content (provider-backed; use 'ukp rg' to grep raw files)",
+  search: SEARCH_SPEC.summary,
   version: "show version information",
 };
 

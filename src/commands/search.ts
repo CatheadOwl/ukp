@@ -1,18 +1,17 @@
-import { Command, CommanderError } from "commander";
 import {
   runSearch,
   projectSearchEnvelope,
   renderSearchHuman,
   renderSearchJson,
   SearchPlanningError,
-  SearchUsageError,
   type ParsedSearch,
   type SearchAggregateStatus,
   type SearchContext,
 } from "../capabilities/search.ts";
 import { ManifestError } from "../config/manifest.ts";
 import { ScopeError } from "../scope.ts";
-import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
+import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
+import { HelpRequestError, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021: exit codes and channel text
  * belong to the surface adapter, not the capability). */
@@ -33,112 +32,93 @@ const SEARCH_EXIT_BY_AGGREGATE: Record<SearchAggregateStatus, number> = {
   "cancelled": 130,
 };
 
-function collectValues(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
-}
+/** Single-source command spec (ADR 0024). Options-only form: `-c`/`-g` are
+ * declared inline rather than via `scope` so the rendered option order and
+ * the error precedence (limit validation before duplicate warnings, excess
+ * check before the conflict) stay byte-identical with the pre-kit command;
+ * adopting the generated scope family waits for an adjudicated
+ * precedence-unification pass. */
+export const SEARCH_SPEC: UkpCommandSpec = {
+  name: "search",
+  summary: "search a Service's indexed content (provider-backed; use 'ukp rg' to grep raw files)",
+  group: "endpoint",
+  description: "Run atomic lexical search against the selected Service endpoints.",
+  usage: "<query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--recursive] [--json]",
+  arguments: [{ name: "query", help: "one non-empty search query; quote multi-word queries" }],
+  options: [
+    { flags: "--limit <1-1000>", help: "maximum results requested from each endpoint (default: 20)" },
+    { flags: "-c, --endpoint <name>", help: "select one endpoint; repeat to select multiple endpoints", multi: true },
+    { flags: "-g", help: "search every endpoint in the Host Registry; takes no value" },
+    { flags: "--recursive", help: "include direct authority and context dependencies" },
+    { flags: "--json", help: "write provider-native results to artifacts and print an envelope" },
+  ],
+  helpSuffix: [
+    "",
+    "Result scope:",
+    "  With no --endpoint or -g, the workspace default scope applies: the",
+    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
+    "  scope); with no Client Config, every registered endpoint.",
+    "  --endpoint <name> requests that Service's search capability. The result",
+    "  range is decided by the Service's provider configuration and may include",
+    "  shared collections; results are not guaranteed to be the endpoint's own",
+    "  content. '== <name> ==' reports which Service was asked, not content",
+    "  ownership.",
+    "  --recursive keeps selected endpoints as depth-0 seeds and adds their",
+    "  registered authority/context dependencies at depth 1.",
+    "  Human results carry a copyable 'read:'/'uri:' handoff line that",
+    "  'ukp read' accepts directly.",
+    "",
+  ].join("\n"),
+};
 
-function createSearchCommand(): Command {
-  return new Command("ukp search")
-    .exitOverride()
-    .allowUnknownOption(false)
-    .allowExcessArguments(true)
-    .helpOption("-h, --help", "show this help")
-    .usage("<query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--recursive] [--json]")
-    .description("Run atomic lexical search against the selected Service endpoints.")
-    .argument("[query]", "one non-empty search query; quote multi-word queries")
-    .option("--limit <1-1000>", "maximum results requested from each endpoint (default: 20)")
-    .option(
-      "-c, --endpoint <name>",
-      "select one endpoint; repeat to select multiple endpoints",
-      collectValues,
-    )
-    .option("-g", "search every endpoint in the Host Registry; takes no value")
-    .option("--recursive", "include direct authority and context dependencies")
-    .option("--json", "write provider-native results to artifacts and print an envelope");
-}
-
-function parseSearchCommand(args: readonly string[]): {
-  positionals: string[];
+interface SearchCommandOptions extends Record<string, unknown> {
   limit?: string;
-  endpoints: string[];
-  global?: boolean;
+  endpoint?: string[];
+  g?: boolean;
   recursive?: boolean;
   json?: boolean;
-} {
-  const command = createSearchCommand()
-    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
-
-  try {
-    command.parse(args, { from: "user" });
-  } catch (error) {
-    if (error instanceof CommanderError) {
-      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
-      throw new SearchUsageError(error.message.replace(/^error: /, ""));
-    }
-    throw error;
-  }
-
-  const options = command.opts<{
-    limit?: string;
-    endpoint?: string[];
-    g?: boolean;
-    recursive?: boolean;
-    json?: boolean;
-  }>();
-  return {
-    positionals: command.args,
-    limit: options.limit,
-    endpoints: options.endpoint ?? [],
-    global: options.g,
-    recursive: options.recursive,
-    json: options.json,
-  };
 }
 
 export function parseSearchArgs(args: readonly string[]): ParsedSearch {
   let limit = 20;
   const explicit: string[] = [];
   const warnings: string[] = [];
-  const parsed = parseSearchCommand(args);
+  const parsed = parseKitArgs<SearchCommandOptions>(SEARCH_SPEC, args);
 
-  if (countFlagOccurrences(args, "--limit") > 1) throw new SearchUsageError("--limit may only be specified once");
-  if (countFlagOccurrences(args, "-g") > 1) throw new SearchUsageError("-g may only be specified once");
-  if (countFlagOccurrences(args, "--recursive") > 1) {
-    throw new SearchUsageError("--recursive may only be specified once");
-  }
-  if (countFlagOccurrences(args, "--json") > 1) throw new SearchUsageError("--json may only be specified once");
-
-  if (parsed.limit !== undefined) {
-    if (!/^[0-9]+$/.test(parsed.limit)) throw new SearchUsageError("--limit must be a decimal integer");
-    limit = Number(parsed.limit);
+  // Command-side semantic checks, in the pre-kit order (limit validation
+  // directly after the generated singleton checks, then duplicates, excess,
+  // emptiness, conflict).
+  if (parsed.options.limit !== undefined) {
+    if (!/^[0-9]+$/.test(parsed.options.limit)) throw new KitUsageError("--limit must be a decimal integer");
+    limit = Number(parsed.options.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
-      throw new SearchUsageError("--limit must be between 1 and 1000");
+      throw new KitUsageError("--limit must be between 1 and 1000");
     }
   }
 
-  for (const endpoint of parsed.endpoints) {
+  for (const endpoint of parsed.options.endpoint ?? []) {
     if (explicit.includes(endpoint)) warnings.push(`duplicate endpoint '${endpoint}' ignored`);
     else explicit.push(endpoint);
   }
 
   const [query, unexpected] = parsed.positionals;
   if (unexpected !== undefined) {
-    throw new SearchUsageError(
+    throw new KitUsageError(
       `unexpected argument '${unexpected}'; search accepts exactly one query. `
       + "Use '--endpoint <name>' to select an endpoint; '-g' takes no value.",
     );
   }
-  if (query === undefined || query.length === 0) throw new SearchUsageError("search query must be non-empty");
-  if (parsed.global && explicit.length > 0) {
-    throw new SearchUsageError("--endpoint and -g cannot be used together");
+  if (query === undefined || query.length === 0) throw new KitUsageError("search query must be non-empty");
+  if (parsed.options.g && explicit.length > 0) {
+    throw new KitUsageError("--endpoint and -g cannot be used together");
   }
   return {
     request: { query, limit },
     options: {
       explicitEndpoints: explicit.length > 0 ? explicit : undefined,
-      global: parsed.global ?? false,
-      recursive: parsed.recursive ?? false,
-      json: parsed.json ?? false,
+      global: parsed.options.g ?? false,
+      recursive: parsed.options.recursive ?? false,
+      json: parsed.options.json ?? false,
     },
     warnings,
   };
@@ -155,7 +135,7 @@ export function executeSearchCommand(args: readonly string[], context: SearchCon
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderSearchHelp(), stderr: "" };
     }
-    if (error instanceof SearchUsageError) {
+    if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderSearchUsageError(error.message) };
     }
     if (error instanceof ScopeError) {
@@ -188,29 +168,9 @@ export function executeHumanSearch(parsed: ParsedSearch, context: SearchContext)
 }
 
 export function renderSearchHelp(): string {
-  return createSearchCommand().helpInformation() + [
-    "",
-    "Result scope:",
-    "  With no --endpoint or -g, the workspace default scope applies: the",
-    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
-    "  scope); with no Client Config, every registered endpoint.",
-    "  --endpoint <name> requests that Service's search capability. The result",
-    "  range is decided by the Service's provider configuration and may include",
-    "  shared collections; results are not guaranteed to be the endpoint's own",
-    "  content. '== <name> ==' reports which Service was asked, not content",
-    "  ownership.",
-    "  --recursive keeps selected endpoints as depth-0 seeds and adds their",
-    "  registered authority/context dependencies at depth 1.",
-    "  Human results carry a copyable 'read:'/'uri:' handoff line that",
-    "  'ukp read' accepts directly.",
-    "",
-  ].join("\n");
+  return renderKitHelp(SEARCH_SPEC);
 }
 
 export function renderSearchUsageError(message: string): string {
-  return [
-    `ukp search: ${message}`,
-    "Usage: ukp search <query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--recursive] [--json]",
-    "Run 'ukp search --help' for details.",
-  ].join("\n");
+  return renderKitUsageError(SEARCH_SPEC, message);
 }

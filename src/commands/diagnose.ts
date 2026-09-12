@@ -3,8 +3,8 @@ import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file
 import { EXTERNAL_TOOL_CAPABILITIES, EXTERNAL_PROVIDER, isExternalToolCapability } from "../config/external-tool.ts";
 import { readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
-import { Command, CommanderError } from "commander";
-import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
+import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
+import { HelpRequestError, isHelpRequest } from "./flags.ts";
 import { defaultQmdCommand } from "../capabilities/qmd.ts";
 import { resolveProposeFolder } from "../capabilities/propose.ts";
 import { rgExecutableAvailable } from "../capabilities/rg.ts";
@@ -45,12 +45,20 @@ export interface RenderDiagnoseOptions {
 
 const SEARCHABILITY_HINT = "hint: diagnose checks wiring, not indexed content; for QMD run qmd init / collection add / update.";
 
-export class DiagnoseUsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "DiagnoseUsageError";
-  }
-}
+/** Single-source command spec (ADR 0024): summary feeds the root help via
+ * cli.ts; usage feeds the help header and the usage-error line; the scope
+ * family, singleton detection, and help-intent triage live in kit.ts. */
+export const DIAGNOSE_SPEC: UkpCommandSpec = {
+  name: "diagnose",
+  summary: "validate a Service folder or endpoint scope",
+  group: "operations",
+  description: "Validate a Service folder or selected registered Service endpoints.",
+  usage: "[--endpoint <name> ... | -g]",
+  scope: {
+    endpointHelp: "validate one registered endpoint; repeat to validate multiple endpoints",
+    globalHelp: "validate every endpoint in the Host Registry; takes no value",
+  },
+};
 
 // Provider registration point for this UKP build: every provider that can
 // back a capability must have its availability check here. Adding a provider
@@ -191,85 +199,16 @@ export function renderDependencyRegistryWarnings(
     );
 }
 
-function collectValues(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
-}
-
-function createDiagnoseCommand(): Command {
-  return new Command("ukp diagnose")
-    .exitOverride()
-    .allowUnknownOption(false)
-    .allowExcessArguments(true)
-    .helpOption("-h, --help", "show this help")
-    .usage("[--endpoint <name> ... | -g]")
-    .description("Validate a Service folder or selected registered Service endpoints.")
-    .option(
-      "-c, --endpoint <name>",
-      "validate one registered endpoint; repeat to validate multiple endpoints",
-      collectValues,
-    )
-    .option("-g", "validate every endpoint in the Host Registry; takes no value");
-}
-
-function parseDiagnoseCommand(args: readonly string[]): {
-  positionals: string[];
-  endpoints: string[];
-  global?: boolean;
-} {
-  const command = createDiagnoseCommand()
-    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
-
-  try {
-    command.parse(args, { from: "user" });
-  } catch (error) {
-    if (error instanceof CommanderError) {
-      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
-      throw new DiagnoseUsageError(error.message.replace(/^error: /, ""));
-    }
-    throw error;
-  }
-
-  const options = command.opts<{
-    endpoint?: string[];
-    g?: boolean;
-  }>();
-  return {
-    positionals: command.args,
-    endpoints: options.endpoint ?? [],
-    global: options.g,
-  };
-}
-
 function parseDiagnoseArgs(args: readonly string[]): {
   explicitEndpoints?: string[];
   global: boolean;
   warnings: string[];
 } {
-  const parsed = parseDiagnoseCommand(args);
-  const explicit: string[] = [];
-  const warnings: string[] = [];
-
-  if (countFlagOccurrences(args, "-g") > 1) throw new DiagnoseUsageError("-g may only be specified once");
-  const [unexpected] = parsed.positionals;
-  if (unexpected !== undefined) {
-    throw new DiagnoseUsageError(
-      `unexpected argument '${unexpected}'. Use '--endpoint <name>' to select an endpoint; '-g' takes no value.`,
-    );
-  }
-
-  for (const endpoint of parsed.endpoints) {
-    if (explicit.includes(endpoint)) warnings.push(`duplicate endpoint '${endpoint}' ignored`);
-    else explicit.push(endpoint);
-  }
-
-  if (parsed.global && explicit.length > 0) {
-    throw new DiagnoseUsageError("--endpoint and -g cannot be used together");
-  }
-
+  const parsed = parseKitArgs(DIAGNOSE_SPEC, args);
   return {
-    explicitEndpoints: explicit.length > 0 ? explicit : undefined,
-    global: parsed.global ?? false,
-    warnings,
+    explicitEndpoints: parsed.scope.explicitEndpoints,
+    global: parsed.scope.global,
+    warnings: parsed.scope.warnings,
   };
 }
 
@@ -369,7 +308,7 @@ export function executeDiagnoseCommand(
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderDiagnoseHelp(), stderr: "" };
     }
-    if (error instanceof DiagnoseUsageError) {
+    if (error instanceof KitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderDiagnoseUsageError(error.message) };
     }
     return {
@@ -422,13 +361,9 @@ export function renderDiagnose(report: DiagnoseReport, options: RenderDiagnoseOp
 }
 
 export function renderDiagnoseHelp(): string {
-  return createDiagnoseCommand().helpInformation();
+  return renderKitHelp(DIAGNOSE_SPEC);
 }
 
 export function renderDiagnoseUsageError(message: string): string {
-  return [
-    `ukp diagnose: ${message}`,
-    "Usage: ukp diagnose [--endpoint <name> ... | -g]",
-    "Run 'ukp diagnose --help' for details.",
-  ].join("\n");
+  return renderKitUsageError(DIAGNOSE_SPEC, message);
 }
