@@ -58,6 +58,14 @@ export const DIAGNOSE_SPEC: UkpCommandSpec = {
     endpointHelp: "validate one registered endpoint; repeat to validate multiple endpoints",
     globalHelp: "validate every endpoint in the Host Registry; takes no value",
   },
+  helpSuffix: [
+    "",
+    "Scope:",
+    "  With no --endpoint or -g, diagnose validates the current folder as a",
+    "  Service (Manifest and provider wiring). -g validates every registered",
+    "  endpoint; -g cannot be combined with --endpoint.",
+    "",
+  ].join("\n"),
 };
 
 // Provider registration point for this UKP build: every provider that can

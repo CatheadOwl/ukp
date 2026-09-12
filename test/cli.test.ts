@@ -20,6 +20,7 @@ import {
   renderServiceQmdGuide,
   renderClientGuide,
   renderProposeGuide,
+  renderProposeHelp,
   renderNavHelp,
   renderRgHelp,
   runCli,
@@ -99,9 +100,11 @@ describe("CLI bootstrap", () => {
 
   // Probe 20260911-root-help-onboarding (promoted): on-ramp line plus
   // search/rg/unregister summaries carry the choice criteria verbatim.
+  // Sweep round 2 amended the on-ramp to state that guide service covers
+  // init and register (confirmed on-ramp hole).
   test("root help states the on-ramp and the search/rg choice criteria", () => {
     const help = renderHelp();
-    expect(help).toContain("Start here: 'ukp guide service' (first setup) or 'ukp list' (see registered endpoints).");
+    expect(help).toContain("Start here: 'ukp guide service' (first setup — covers init and register) or 'ukp list' (see registered endpoints).");
     expect(help).toContain("search a Service's indexed content (provider-backed; use 'ukp rg' to grep raw files)");
     expect(help).toContain("grep raw endpoint files with ripgrep (no index or declaration needed");
     expect(help).toContain("remove a registered endpoint binding (files on disk are untouched)");
@@ -406,6 +409,36 @@ describe("CLI bootstrap", () => {
     const unregisterHelp: string[] = [];
     expect(runCli(["unregister", "--help"], (message) => unregisterHelp.push(message))).toBe(0);
     expect(unregisterHelp.join("\n").replace(/\s+/g, " ")).toContain("prefer the flag form");
+  });
+
+  // Sweep round 2 fixes (2026-09-11): the remaining doc-gaps surfaced by the
+  // second blank-agent pass — see the round-2 record in
+  // agent-eval/unit-docs/help-cognition-sweep.md.
+  test("help documents round-2 fixes (diagnose scope, read forms, propose/init pointers)", () => {
+    // diagnose gains the Scope section its siblings already had.
+    expect(renderDiagnoseHelp().replace(/\s+/g, " ")).toContain("validates the current folder as a Service");
+    // read: all four reference forms with their endpoint rules, plus the
+    // --lines count and --format defaults.
+    const readHelp = renderReadHelp().replace(/\s+/g, " ");
+    expect(readHelp).toContain("Reference forms:");
+    expect(readHelp).toContain("docid[:line] / qmd://<reference> — provider-owned references");
+    expect(readHelp).toContain("count omitted: to end of file");
+    expect(readHelp).toContain("default is human output");
+    // propose: endpoint-name discovery pointer + slug constraint scoped to
+    // explicit ids and the default alike.
+    const proposeHelp = renderProposeHelp().replace(/\s+/g, " ");
+    expect(proposeHelp).toContain("endpoint names come from 'ukp list'");
+    expect(proposeHelp).toContain("enforced for explicit ids and the default alike");
+    // init: says what it creates and that service is the only target.
+    expect(renderInitHelp()).toContain(".ukp/service.toml");
+    // guide: subtopic example no longer reads like a two-word topic value.
+    expect(renderGuideHelp().replace(/\s+/g, " ")).toContain("'qmd' as in 'ukp guide service qmd'");
+    // nav: the [path] argument carries a description.
+    expect(renderNavHelp()).toContain("endpoint-relative route to expand");
+    // search/rg/refresh/diagnose: -g/--endpoint mutual exclusion stated.
+    for (const help of [renderSearchHelp(), renderRgHelp(), renderRefreshHelp(), renderDiagnoseHelp()]) {
+      expect(help.replace(/\s+/g, " ")).toContain("cannot be combined with --endpoint");
+    }
   });
 
   test("guide rejects an unknown provider subtopic with recovery guidance", () => {

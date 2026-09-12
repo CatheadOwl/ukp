@@ -32,6 +32,13 @@ export const INIT_SPEC: UkpCommandSpec = {
   usage: "<target>",
   arguments: [{ name: "target", required: true, help: "init target: service" }],
   strictArguments: true,
+  helpSuffix: [
+    "",
+    "Run 'ukp init service' to create a Service Manifest",
+    "('.ukp/service.toml') in the current folder; 'service' is currently",
+    "the only target.",
+    "",
+  ].join("\n"),
 };
 
 export const INIT_SERVICE_SPEC: UkpCommandSpec = {
