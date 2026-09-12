@@ -80,6 +80,9 @@ Details:
    Every registered local Service has the derived read/file baseline; no Manifest get entry is needed.
    ukp read --endpoint your-endpoint-name docs/example.md
    ukp read --endpoint your-endpoint-name docs/example.md --lines 10:20
+   Search results carry copyable handoff lines you can paste straight into read:
+   - a ukp://<endpoint>/<path> URI is the durable, endpoint-scoped reference;
+   - a bare docid is the provider's short-lived document id (QMD handoff key).
    On a QMD-backed Service (including observe mode), provider content is read with
    'ukp read --endpoint <name> <docid handoff key or qmd:// reference>'; do not
    manually convert qmd:// provider locations into Service-folder paths.
