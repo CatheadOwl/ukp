@@ -2,6 +2,19 @@
 
 All notable public changes to UKP will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Rename the `refresh` command and capability to `update`: the command is now
+  `ukp update`, Service Manifests declare `[capabilities.update]`, and the
+  `refresh` capability/provider route becomes `update/qmd`. The old spelling is
+  removed rather than kept as an alias (no external users; same approach as the
+  earlier `get` → `read` rename).
+- Rename the provider timeout override environment variable to
+  `UKP_UPDATE_TIMEOUT_MS`.
+- Human output now reports `capability: update` and `status: updated`.
+
 ## [0.1.0] - 2026-08-22
 
 ### Added

@@ -9,7 +9,7 @@ Model:
 - UKP walks up from the current directory to find the nearest .ukp/client.toml.
 - Client Config stores endpoint names only; bindings live in the Host Registry.
 - Explicit --endpoint <name> or -g overrides the client defaults. With no Client Config, most commands fall back to every registered endpoint.
-- ukp refresh is stricter: it does not fall back to the Registry. It uses your Client Config defaults, or requires --endpoint <name> / -g.
+- ukp update is stricter: it does not fall back to the Registry. It uses your Client Config defaults, or requires --endpoint <name> / -g.
 - ukp register does not edit .ukp/client.toml.
 
 1. Create a workspace Client Config

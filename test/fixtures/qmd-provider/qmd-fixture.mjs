@@ -30,7 +30,7 @@ await writeFile("qmd-fixture-invocation.json", `${JSON.stringify(invocation, nul
 await appendFile("qmd-fixture-invocations.jsonl", `${JSON.stringify(invocation)}\n`, "utf8");
 
 const serviceFolder = basename(process.cwd());
-const isRefresh = commandName === "update";
+const isUpdate = commandName === "update";
 const hasMatch = query === "fixture-cad-search-token" && !serviceFolder.includes("no-match");
 const shouldFail = serviceFolder.includes("provider-fail");
 const shouldCancel = serviceFolder.includes("provider-sigint");
@@ -95,7 +95,7 @@ if (isGet) {
   process.exit(0);
 }
 
-if (isRefresh) {
+if (isUpdate) {
   process.stdout.write("fixture update complete\n");
 } else if (outputFormat === "json" && !serviceFolder.includes("no-json")) {
   let result = [];

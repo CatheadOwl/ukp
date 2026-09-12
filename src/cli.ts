@@ -17,7 +17,7 @@ import { executeInspectCommand, INSPECT_SPEC } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand, LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC } from "./commands/inventory.ts";
 import { executeNavCommand, NAV_SPEC } from "./commands/nav.ts";
 import { executeProposeCommand, PROPOSE_SPEC } from "./commands/propose.ts";
-import { executeRefreshCommand, REFRESH_SPEC } from "./commands/refresh.ts";
+import { executeUpdateCommand, UPDATE_SPEC } from "./commands/update.ts";
 import { executeSearchCommand, SEARCH_SPEC } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
@@ -26,7 +26,7 @@ export { renderReadHelp } from "./commands/read.ts";
 export { renderGuideHelp, renderServiceGuide, renderServiceQmdGuide, renderClientGuide, renderProposeGuide } from "./commands/guide.ts";
 export { renderInitHelp, renderInitServiceHelp } from "./commands/init.ts";
 export { renderInspectHelp } from "./commands/inspect.ts";
-export { renderRefreshHelp } from "./commands/refresh.ts";
+export { renderUpdateHelp } from "./commands/update.ts";
 export { renderProposeHelp } from "./commands/propose.ts";
 export { renderNavHelp } from "./commands/nav.ts";
 export { renderRgHelp } from "./commands/rg.ts";
@@ -48,7 +48,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   guide: GUIDE_SPEC.summary,
   init: INIT_SPEC.summary,
   inspect: INSPECT_SPEC.summary,
-  refresh: REFRESH_SPEC.summary,
+  update: UPDATE_SPEC.summary,
   register: REGISTER_SPEC.summary,
   unregister: UNREGISTER_SPEC.summary,
   list: LIST_SPEC.summary,
@@ -76,7 +76,7 @@ export const COMMAND_GROUPS = [
   },
   {
     heading: "Operations commands",
-    commands: ["diagnose", "inspect", "refresh"],
+    commands: ["diagnose", "inspect", "update"],
   },
   {
     heading: "Help commands",
@@ -196,7 +196,7 @@ export function renderHelp(): string {
     ]),
     "Endpoint names for --endpoint come from 'ukp list'.",
     "",
-    "A Service's declared capabilities are backed by a provider (QMD backs search and refresh today); rg and nav work on endpoint files directly, no provider needed.",
+    "A Service's declared capabilities are backed by a provider (QMD backs search and update today); rg and nav work on endpoint files directly, no provider needed.",
     "",
     "A Service is a folder with a manifest (a name plus declared capabilities); registering it binds that name as an endpoint you address with --endpoint. The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given; 'ukp guide client' shows how to set the workspace default.",
     "",
@@ -328,8 +328,8 @@ export function runCli(
     }), stdout, stderr);
   }
 
-  if (command === "refresh") {
-    return writeCommandResult(executeRefreshCommand(args.slice(1), {
+  if (command === "update") {
+    return writeCommandResult(executeUpdateCommand(args.slice(1), {
       currentDirectory,
       registryPath,
       qmdCommand: context.qmdCommand,

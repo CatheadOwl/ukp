@@ -74,7 +74,7 @@ interface UnregisterCommandOptions extends Record<string, unknown> {
 // Derived file-native capabilities (read/nav today) exist on every registered
 // endpoint without a declaration (ADR 0016 rule 2); they are stated once in
 // the header instead of being repeated on every row. Everything else a
-// Service declares (search, refresh, propose, ...) is per-endpoint news and
+// Service declares (search, update, propose, ...) is per-endpoint news and
 // gets its own column.
 const DEFAULT_CAPABILITIES = (Object.keys(FILE_NATIVE_CAPABILITIES) as Array<keyof typeof FILE_NATIVE_CAPABILITIES>)
   .filter((name) => FILE_NATIVE_CAPABILITIES[name].derived)
