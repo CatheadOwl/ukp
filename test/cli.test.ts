@@ -701,7 +701,7 @@ describe("CLI bootstrap", () => {
         registryPath: join(root, "registry.toml"),
       })).toBe(1);
       const error = errors.join("\n");
-      expect(error).toContain("error: Service Manifest is not readable:");
+      expect(error).toContain("ukp diagnose: Service Manifest is not readable:");
       expect(error).toContain(join(root, ".ukp", "service.toml"));
       expect(error).toContain("Hint: 'ukp diagnose' checks the current folder as a Service.");
       expect(error).toContain("ukp guide service");
@@ -728,6 +728,10 @@ describe("CLI bootstrap", () => {
         registryPath,
       })).toBe(1);
       const error = [...output, ...errors].join("\n");
+      // The scoped per-endpoint failure renders as a structured report field
+      // (`== name ==` block: status:/error: lines on stdout), not the
+      // stderr channel prefix — field vocabulary stays as adjudicated (D-076
+      // covers channel prefixes only).
       expect(error).toContain("error: Service Manifest is not readable:");
       expect(error).toContain(join(endpointRoot, ".ukp", "service.toml"));
       expect(error).not.toContain("ManifestError:");

@@ -91,7 +91,7 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `error: ${error instanceof Error ? error.message : String(error)}\n`,
+      stderr: `ukp guide: ${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
 }
