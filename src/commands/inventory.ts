@@ -3,7 +3,7 @@ import { ENDPOINT_NAME, loadManifest } from "../config/manifest.ts";
 import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
 import { readRegistry, registerAt, unregisterAt } from "../registry.ts";
-import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 export interface InventoryCommandContext {
   currentDirectory: string;
@@ -39,6 +39,7 @@ function parseCommand(command: Command, args: readonly string[]): void {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new InventoryUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -60,6 +61,10 @@ export function renderRegisterHelp(): string {
     "  Registering a name already bound to a different location is rejected.",
     "  Unregister the old binding first, then register from the new Service folder:",
     "  ukp unregister --endpoint <name>",
+    "",
+    "Binding:",
+    "  The Host Registry binds the Service Manifest's effective name to this",
+    "  folder's location; 'ukp list' shows the resulting bindings.",
     "",
   ].join("\n");
 }
@@ -90,6 +95,9 @@ export function executeRegisterCommand(
       stderr: "",
     };
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderRegisterHelp(), stderr: "" };
+    }
     if (error instanceof InventoryUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderUsageError("register", error.message, "ukp register") };
     }
@@ -155,6 +163,9 @@ export function executeListCommand(args: readonly string[], context: InventoryCo
       stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
     };
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
+    }
     if (error instanceof InventoryUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderUsageError("list", error.message, "ukp list") };
     }
@@ -168,7 +179,7 @@ export function executeUnregisterCommand(
 ): InventoryCommandResult {
   const command = createCommand("unregister", "Remove a registered endpoint.")
     .usage("--endpoint <name>")
-    .argument("[name]", "legacy registered endpoint name")
+    .argument("[name]", "legacy alias for --endpoint <name>; prefer the flag form")
     .option("-c, --endpoint <name>", "select the endpoint binding to remove");
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
@@ -195,6 +206,9 @@ export function executeUnregisterCommand(
       stderr: "",
     };
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: command.helpInformation(), stderr: "" };
+    }
     if (error instanceof InventoryUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderUsageError("unregister", error.message, "ukp unregister --endpoint <name>") };
     }

@@ -14,7 +14,7 @@ import {
 } from "../capabilities/read.ts";
 import { isValidPin } from "../capabilities/rename-recovery.ts";
 import { ScopeError } from "../scope.ts";
-import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021). `recovery` exposes the
  * structured rename-recovery metadata alongside the channels so programmatic
@@ -102,6 +102,7 @@ function parseReadCommand(args: readonly string[]): {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new ReadUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -378,6 +379,9 @@ export function executeReadCommand(args: readonly string[], context: ReadContext
       ...(recovery !== undefined ? { recovery } : {}),
     };
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderReadHelp(), stderr: "" };
+    }
     if (error instanceof ReadUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderReadUsageError(error.message) };
     }

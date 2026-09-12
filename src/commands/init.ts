@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { stringify } from "smol-toml";
 import { Command, CommanderError } from "commander";
 import { ENDPOINT_NAME, loadManifest, type ManifestDependency } from "../config/manifest.ts";
-import { isHelpRequest } from "./flags.ts";
+import { HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 export interface InitCommandContext {
   currentDirectory: string;
@@ -40,7 +40,7 @@ function createInitServiceCommand(): Command {
     .allowExcessArguments(false)
     .helpOption("-h, --help", "show this help")
     .description("Create a Service Manifest in the current folder.")
-    .option("--name <name>", "explicit Service endpoint name")
+    .option("--name <name>", "explicit Service endpoint name; defaults to the folder basename")
     .option("--description <text>", "human-readable Service description")
     .option("--dependency <name>", "declare a contextual dependency endpoint", (value, previous: string[] = []) => [...previous, value]);
 }
@@ -51,6 +51,7 @@ function parseCommand(command: Command, args: readonly string[]): void {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new InitUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -200,6 +201,9 @@ function executeInitServiceCommand(args: readonly string[], context: InitCommand
       stderr: "",
     };
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderInitServiceHelp(), stderr: "" };
+    }
     if (error instanceof InitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderServiceUsageError(error.message) };
     }
@@ -224,6 +228,9 @@ export function executeInitCommand(args: readonly string[], context: InitCommand
     }
     return executeInitServiceCommand([], context);
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderInitHelp(), stderr: "" };
+    }
     if (error instanceof InitUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderUsageError(error.message) };
     }

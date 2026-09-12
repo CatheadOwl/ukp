@@ -12,7 +12,7 @@ import {
 } from "../capabilities/search.ts";
 import { ManifestError } from "../config/manifest.ts";
 import { ScopeError } from "../scope.ts";
-import { countFlagOccurrences, isHelpRequest } from "./flags.ts";
+import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021: exit codes and channel text
  * belong to the surface adapter, not the capability). */
@@ -72,6 +72,7 @@ function parseSearchCommand(args: readonly string[]): {
     command.parse(args, { from: "user" });
   } catch (error) {
     if (error instanceof CommanderError) {
+      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
       throw new SearchUsageError(error.message.replace(/^error: /, ""));
     }
     throw error;
@@ -151,6 +152,9 @@ export function executeSearchCommand(args: readonly string[], context: SearchCon
   try {
     return executeHumanSearch(parseSearchArgs(args), context);
   } catch (error) {
+    if (error instanceof HelpRequestError) {
+      return { exitCode: 0, stdout: renderSearchHelp(), stderr: "" };
+    }
     if (error instanceof SearchUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderSearchUsageError(error.message) };
     }
@@ -187,6 +191,9 @@ export function renderSearchHelp(): string {
   return createSearchCommand().helpInformation() + [
     "",
     "Result scope:",
+    "  With no --endpoint or -g, the workspace default scope applies: the",
+    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
+    "  scope); with no Client Config, every registered endpoint.",
     "  --endpoint <name> requests that Service's search capability. The result",
     "  range is decided by the Service's provider configuration and may include",
     "  shared collections; results are not guaranteed to be the endpoint's own",
@@ -194,6 +201,8 @@ export function renderSearchHelp(): string {
     "  ownership.",
     "  --recursive keeps selected endpoints as depth-0 seeds and adds their",
     "  registered authority/context dependencies at depth 1.",
+    "  Human results carry a copyable 'read:'/'uri:' handoff line that",
+    "  'ukp read' accepts directly.",
     "",
   ].join("\n");
 }

@@ -10,7 +10,7 @@ import {
 } from "./commands/diagnose.ts";
 import { executeReadCommand } from "./commands/read.ts";
 import { executeRgCommand } from "./commands/rg.ts";
-import { executeGuideCommand } from "./commands/guide.ts";
+import { executeGuideCommand, GUIDE_TOPICS } from "./commands/guide.ts";
 import { executeInitCommand } from "./commands/init.ts";
 import { executeInspectCommand } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
@@ -167,6 +167,8 @@ export function renderVersionHelp(): string {
   const lines = [
     "Usage: ukp version [options]",
     "",
+    "Show version information.",
+    "",
     "Options:",
     "  -v, --verbose  show debug version details",
     "  -h, --help     show this help",
@@ -189,10 +191,7 @@ export function renderHelp(): string {
     "Endpoint names for --endpoint come from 'ukp list'.",
     "",
     "Guides:",
-    "  ukp guide service     first Service setup, inspect, search, read, and refresh path",
-    "  ukp guide service qmd provider setup for the default QMD provider",
-    "  ukp guide client      use registered Services by default from a workspace",
-    "  ukp guide propose     submit idempotent change proposals to a Service",
+    ...GUIDE_TOPICS.map(([topic, summary]) => `  ukp ${`guide ${topic}`.padEnd(17)} ${summary}`),
     "",
     "Options:",
     "  -h, --help     show this help",
@@ -216,7 +215,9 @@ function executeVersionCommand(args: readonly string[]): CliCommandResult {
     return { exitCode: 0, stdout: renderVersion(), stderr: "" };
   }
 
-  if (args.length === 1 && (args[0] === "-h" || args[0] === "--help")) {
+  // Help wins wherever it appears (option order-independence; same rule as
+  // the commander-wrapped commands via isCommanderHelpIntent).
+  if (args.includes("-h") || args.includes("--help")) {
     return { exitCode: 0, stdout: renderVersionHelp(), stderr: "" };
   }
 

@@ -20,6 +20,8 @@ import {
   renderServiceQmdGuide,
   renderClientGuide,
   renderProposeGuide,
+  renderNavHelp,
+  renderRgHelp,
   runCli,
 } from "../src/cli.ts";
 import { loadManifest } from "../src/config/manifest.ts";
@@ -239,6 +241,88 @@ describe("CLI bootstrap", () => {
     const help: string[] = [];
     expect(runCli(["guide", "service", "qmd", "--help"], (message) => help.push(message))).toBe(0);
     expect(help.join("\n")).toContain("Usage: ukp guide <topic>");
+  });
+
+  // Help-flag order-independence guard (D-074 / ADR 0024 adjudicated fix):
+  // `--help` must win wherever it appears. The pre-fix behavior leaked
+  // commander's `(outputHelp)` sentinel as a usage error with exit 2 on
+  // every commander-wrapped command.
+  test("help flag after positional arguments renders help and exits 0 on every command", () => {
+    const cases: Array<[command: string, preceding: string[]]> = [
+      ["search", ["query"]],
+      ["read", ["ref"]],
+      ["nav", ["path"]],
+      ["rg", ["pattern"]],
+      ["inspect", ["stray"]],
+      ["diagnose", ["stray"]],
+      ["refresh", ["stray"]],
+      ["propose", ["stray"]],
+      ["list", ["stray"]],
+      ["register", ["stray"]],
+      ["unregister", ["name"]],
+      ["init", ["stray"]],
+      ["guide", ["stray"]],
+    ];
+    for (const [command, preceding] of cases) {
+      for (const help of ["-h", "--help"] as const) {
+        const output: string[] = [];
+        const errors: string[] = [];
+        const exitCode = runCli([command, ...preceding, help], (message) => output.push(message), (message) => errors.push(message));
+        expect(exitCode).toBe(0);
+        expect(output.join("\n")).toContain(`Usage: ukp ${command}`);
+        const errorText = errors.join("\n");
+        expect(errorText).toBe("");
+        expect(errorText).not.toContain("(outputHelp)");
+      }
+    }
+  });
+
+  test("init service renders help when --help follows other arguments", () => {
+    const output: string[] = [];
+    expect(runCli(["init", "service", "stray", "--help"], (message) => output.push(message))).toBe(0);
+    expect(output.join("\n")).toContain("Usage: ukp init service");
+  });
+
+  test("version help wins over other flags", () => {
+    const output: string[] = [];
+    expect(runCli(["version", "--verbose", "--help"], (message) => output.push(message))).toBe(0);
+    expect(output.join("\n")).toContain("Usage: ukp version [options]");
+  });
+
+  test("guide usage error advertises the subtopic slot", () => {
+    const errors: string[] = [];
+    expect(runCli(["guide", "nope"], undefined, (message) => errors.push(message))).toBe(2);
+    const errorText = errors.join("\n");
+    expect(errorText).toContain("unknown guide topic 'nope'");
+    expect(errorText).toContain("Usage: ukp guide <topic> [subtopic]");
+  });
+
+  // 2026-09-11 help-cognition sweep copy fixes (agent-eval/unit-docs/
+  // help-cognition-sweep.md): default-scope semantics, name sources, guide
+  // topic descriptions, and the unregister legacy alias all became
+  // load-bearing help text — pin them.
+  test("help documents default scope, name sources, and guide topics (sweep fixes)", () => {
+    // search / rg / refresh share the workspace default scope semantics.
+    for (const render of [renderSearchHelp, renderRgHelp, renderRefreshHelp]) {
+      const help = render();
+      expect(help).toContain("workspace default scope");
+      expect(help).toContain("'ukp inspect' shows the resolved");
+    }
+    expect(renderSearchHelp()).toContain("'read:'/'uri:' handoff line");
+    // Name sources for registry-side identities.
+    expect(renderInitServiceHelp().replace(/\s+/g, " ")).toContain("defaults to the folder basename");
+    const registerHelp: string[] = [];
+    expect(runCli(["register", "--help"], (message) => registerHelp.push(message))).toBe(0);
+    expect(registerHelp.join("\n")).toContain("effective name");
+    // Guide topics are described in guide's own help (single-sourced with root).
+    expect(renderGuideHelp()).toContain("first Service setup, inspect, search, read, and refresh path");
+    expect(renderHelp()).toContain("first Service setup, inspect, search, read, and refresh path");
+    // Version help carries a description line.
+    expect(renderVersionHelp()).toContain("Show version information.");
+    // Unregister legacy positional steers to the canonical flag form.
+    const unregisterHelp: string[] = [];
+    expect(runCli(["unregister", "--help"], (message) => unregisterHelp.push(message))).toBe(0);
+    expect(unregisterHelp.join("\n").replace(/\s+/g, " ")).toContain("prefer the flag form");
   });
 
   test("guide rejects an unknown provider subtopic with recovery guidance", () => {
@@ -490,7 +574,9 @@ describe("CLI bootstrap", () => {
     expect(unregisterOutput.join("\n")).toContain("Usage: ukp unregister");
     expect(unregisterOutput.join("\n")).toContain("--endpoint <name>");
     expect(unregisterOutput.join("\n")).toContain("-c, --endpoint <name>");
-    expect(unregisterOutput.join("\n")).toContain("legacy registered endpoint name");
+    // Legacy positional is named as an alias and steers to the flag form
+    // (2026-09-11 sweep wording fix).
+    expect(unregisterOutput.join("\n").replace(/\s+/g, " ")).toContain("legacy alias for --endpoint <name>; prefer the flag form");
   });
 
   test("search usage errors include recovery guidance", () => {
