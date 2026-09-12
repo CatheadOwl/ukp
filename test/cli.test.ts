@@ -24,6 +24,7 @@ import {
   renderRgHelp,
   runCli,
 } from "../src/cli.ts";
+import { REFRESH_SPEC } from "../src/commands/refresh.ts";
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
@@ -184,6 +185,8 @@ describe("CLI bootstrap", () => {
     expect(help).toContain("-c, --endpoint <name>");
     expect(help).toContain("-g");
     expect(help.replace(/\s+/g, " ")).toContain("takes no value");
+    // ADR 0024 pilot: refresh's root-help summary is fed by its command spec.
+    expect(renderHelp()).toContain(REFRESH_SPEC.summary);
   });
 
   test("guide service is a short provider-agnostic CLI-accessible onboarding guide", () => {

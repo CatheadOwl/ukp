@@ -1,23 +1,23 @@
-import { Command, CommanderError } from "commander";
+import {
+  executeKitCommand,
+  parseKitArgs,
+  renderKitHelp,
+  type KitCommandResult,
+  type KitParsed,
+  type UkpCommandSpec,
+} from "./kit.ts";
 import {
   runRefresh,
   renderRefreshHuman,
-  RefreshUsageError,
   type ParsedRefresh,
   type RefreshAggregateStatus,
   type RefreshContext,
 } from "../capabilities/refresh.ts";
 
 export type { RefreshContext } from "../capabilities/refresh.ts";
-import { ScopeError } from "../scope.ts";
-import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021). */
-export interface RefreshCommandResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
+export interface RefreshCommandResult extends KitCommandResult {}
 
 /** Aggregate classification → exit code (ADR 0021). */
 const REFRESH_EXIT_BY_AGGREGATE: Record<RefreshAggregateStatus, number> = {
@@ -27,84 +27,44 @@ const REFRESH_EXIT_BY_AGGREGATE: Record<RefreshAggregateStatus, number> = {
   "cancelled": 130,
 };
 
-function collectValues(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
-}
+/** Single-source command spec (ADR 0024 pilot command): `summary` feeds the
+ * root help via cli.ts; `usage` feeds both the help header and the
+ * usage-error line; the scope family, singleton detection, help-intent
+ * triage, and catch chain live in kit.ts. */
+export const REFRESH_SPEC: UkpCommandSpec = {
+  name: "refresh",
+  summary: "trigger provider-owned Service maintenance",
+  group: "operations",
+  description: "Trigger provider-owned maintenance for selected Service endpoints.",
+  usage: "[--endpoint <name> ... | -g]",
+  scope: {
+    endpointHelp: "refresh one endpoint; repeat to refresh multiple endpoints",
+    globalHelp: "refresh every endpoint in the Host Registry; takes no value",
+  },
+  helpSuffix: [
+    "",
+    "Scope:",
+    "  With no --endpoint or -g, the workspace default scope applies: the",
+    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
+    "  scope); with no Client Config, every registered endpoint. Maintenance",
+    "  itself is provider-owned: the endpoint selector never maps to a",
+    "  provider collection.",
+    "",
+  ].join("\n"),
+};
 
-function createRefreshCommand(): Command {
-  return new Command("ukp refresh")
-    .exitOverride()
-    .allowUnknownOption(false)
-    .allowExcessArguments(true)
-    .helpOption("-h, --help", "show this help")
-    .usage("[--endpoint <name> ... | -g]")
-    .description("Trigger provider-owned maintenance for selected Service endpoints.")
-    .option(
-      "-c, --endpoint <name>",
-      "refresh one endpoint; repeat to refresh multiple endpoints",
-      collectValues,
-    )
-    .option("-g", "refresh every endpoint in the Host Registry; takes no value");
-}
-
-function parseRefreshCommand(args: readonly string[]): {
-  positionals: string[];
-  endpoints: string[];
-  global?: boolean;
-} {
-  const command = createRefreshCommand()
-    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
-
-  try {
-    command.parse(args, { from: "user" });
-  } catch (error) {
-    if (error instanceof CommanderError) {
-      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
-      throw new RefreshUsageError(error.message.replace(/^error: /, ""));
-    }
-    throw error;
-  }
-
-  const options = command.opts<{
-    endpoint?: string[];
-    g?: boolean;
-  }>();
+function toParsedRefresh(parsed: KitParsed): ParsedRefresh {
   return {
-    positionals: command.args,
-    endpoints: options.endpoint ?? [],
-    global: options.g,
+    options: {
+      explicitEndpoints: parsed.scope.explicitEndpoints,
+      global: parsed.scope.global,
+    },
+    warnings: parsed.scope.warnings,
   };
 }
 
 export function parseRefreshArgs(args: readonly string[]): ParsedRefresh {
-  const parsed = parseRefreshCommand(args);
-  const explicit: string[] = [];
-  const warnings: string[] = [];
-
-  if (countFlagOccurrences(args, "-g") > 1) throw new RefreshUsageError("-g may only be specified once");
-  const [unexpected] = parsed.positionals;
-  if (unexpected !== undefined) {
-    throw new RefreshUsageError(
-      `unexpected argument '${unexpected}'. Use '--endpoint <name>' to select an endpoint; '-g' takes no value.`,
-    );
-  }
-
-  for (const endpoint of parsed.endpoints) {
-    if (explicit.includes(endpoint)) warnings.push(`duplicate endpoint '${endpoint}' ignored`);
-    else explicit.push(endpoint);
-  }
-
-  if (parsed.global && explicit.length > 0) {
-    throw new RefreshUsageError("--endpoint and -g cannot be used together");
-  }
-
-  return {
-    options: {
-      explicitEndpoints: explicit.length > 0 ? explicit : undefined,
-      global: parsed.global ?? false,
-    },
-    warnings,
-  };
+  return toParsedRefresh(parseKitArgs(REFRESH_SPEC, args));
 }
 
 /** CLI composition of the structured outcome (ADR 0021); kept as the test
@@ -120,55 +80,17 @@ export function executeRefresh(parsed: ParsedRefresh, context: RefreshContext): 
 }
 
 export function executeRefreshCommand(args: readonly string[], context: RefreshContext): RefreshCommandResult {
-  if (isHelpRequest(args)) {
-    return { exitCode: 0, stdout: renderRefreshHelp(), stderr: "" };
-  }
-
-  try {
-    return executeRefresh(parseRefreshArgs(args), context);
-  } catch (error) {
-    if (error instanceof HelpRequestError) {
-      return { exitCode: 0, stdout: renderRefreshHelp(), stderr: "" };
-    }
-    if (error instanceof RefreshUsageError) {
-      return { exitCode: 2, stdout: "", stderr: renderRefreshUsageError(error.message) };
-    }
-    if (error instanceof ScopeError) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: [
-          `ukp refresh: ${error.message}`,
-          "Hint: run 'ukp list' to inspect registrations, 'ukp register' from a Service folder to add one, or pass '-g' to explicitly refresh every registered endpoint.",
-          "",
-        ].join("\n"),
-      };
-    }
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `ukp refresh: ${error instanceof Error ? error.message : String(error)}\n`,
-    };
-  }
+  return executeKitCommand(
+    REFRESH_SPEC,
+    args,
+    (parsed) => executeRefresh(toParsedRefresh(parsed), context),
+    {
+      scopeErrorHint:
+        "Hint: run 'ukp list' to inspect registrations, 'ukp register' from a Service folder to add one, or pass '-g' to explicitly refresh every registered endpoint.",
+    },
+  );
 }
 
 export function renderRefreshHelp(): string {
-  return createRefreshCommand().helpInformation() + [
-    "",
-    "Scope:",
-    "  With no --endpoint or -g, the workspace default scope applies: the",
-    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
-    "  scope); with no Client Config, every registered endpoint. Maintenance",
-    "  itself is provider-owned: the endpoint selector never maps to a",
-    "  provider collection.",
-    "",
-  ].join("\n");
-}
-
-export function renderRefreshUsageError(message: string): string {
-  return [
-    `ukp refresh: ${message}`,
-    "Usage: ukp refresh [--endpoint <name> ... | -g]",
-    "Run 'ukp refresh --help' for details.",
-  ].join("\n");
+  return renderKitHelp(REFRESH_SPEC);
 }
