@@ -1,4 +1,3 @@
-import { Command, CommanderError } from "commander";
 import {
   runRg,
   projectRgEnvelope,
@@ -14,7 +13,8 @@ import {
 } from "../capabilities/rg.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
-import { countFlagOccurrences, HelpRequestError, isCommanderHelpIntent, isHelpRequest } from "./flags.ts";
+import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
+import { HelpRequestError, isHelpRequest } from "./flags.ts";
 
 /** CLI-owned command result shape (ADR 0021). */
 export interface RgCommandResult {
@@ -31,124 +31,104 @@ const RG_EXIT_BY_AGGREGATE: Record<RgAggregateStatus, number> = {
   "cancelled": 130,
 };
 
-function collectValues(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
-}
+/** Single-source command spec (ADR 0024). Options-only form (like search):
+ * `-c`/`-g` declared inline so the rendered option order and the error
+ * precedence (limit validation before duplicate warnings, excess before
+ * conflict) stay identical with the pre-kit command. */
+export const RG_SPEC: UkpCommandSpec = {
+  name: "rg",
+  summary: "grep raw endpoint files with ripgrep (no index or declaration needed; results as ukp:// references)",
+  group: "endpoint",
+  description:
+    "Run base lexical search (ripgrep) across one or more Service endpoints. "
+    + "Available on every registered endpoint by default; results are shaped into ukp:// references that 'ukp read' consumes directly. "
+    + "For indexed/semantic search use 'ukp search'.",
+  usage: "[--endpoint <name> ... | -g] <pattern> [--limit <1-1000>] [--count] [--glob <glob>] [--type <type>] [-i] [-- <rg flags>]",
+  arguments: [{ name: "pattern", help: "one non-empty regex pattern; quote to escape the shell" }],
+  options: [
+    { flags: "-c, --endpoint <name>", help: "select one endpoint; repeat to select multiple endpoints", multi: true },
+    { flags: "-g", help: "search every endpoint in the Host Registry; takes no value" },
+    { flags: "--limit <1-1000>", help: `maximum matches per run (default: ${RG_DEFAULT_LIMIT})` },
+    { flags: "--count", help: "count mode: per-file match counts instead of matches" },
+    { flags: "--glob <glob>", help: "glob filter passed to rg (e.g. \"*.md\")" },
+    { flags: "--type <type>", help: "file type filter passed to rg (e.g. md, py)" },
+    { flags: "-i", help: "case-insensitive search" },
+    { flags: "--json", help: "emit the structured response envelope" },
+  ],
+  helpSuffix: [
+    "",
+    "Passthrough:",
+    "  After '--', rg native flags are passed through on an allowlist",
+    "  (-A/-B/-C/-m/--glob/--type/--max-filesize and common boolean flags).",
+    "  Path operands and output-changing flags (--json, -r, --pre, --config)",
+    "  are rejected: the endpoint selector owns scope, UKP owns the output.",
+    "",
+    "Result scope:",
+    "  With no --endpoint or -g, the workspace default scope applies: the",
+    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
+    "  scope); with no Client Config, every registered endpoint. 'Available on",
+    "  every registered endpoint' refers to capability availability, not this",
+    "  default scope.",
+    "  rg scans each endpoint's own files (same visibility root as read/file).",
+    "  'ukp search' covers indexed search where the Service declares a search",
+    "  capability provider.",
+    "",
+  ].join("\n"),
+};
 
-function createRgCommand(): Command {
-  return new Command("ukp rg")
-    .exitOverride()
-    .allowUnknownOption(false)
-    .allowExcessArguments(true)
-    .helpOption("-h, --help", "show this help")
-    .usage("[--endpoint <name> ... | -g] <pattern> [--limit <1-1000>] [--count] [--glob <glob>] [--type <type>] [-i] [-- <rg flags>]")
-    .description(
-      "Run base lexical search (ripgrep) across one or more Service endpoints. "
-        + "Available on every registered endpoint by default; results are shaped into ukp:// references that 'ukp read' consumes directly. "
-        + "For indexed/semantic search use 'ukp search'.",
-    )
-    .argument("[pattern]", "one non-empty regex pattern; quote to escape the shell")
-    .option("-c, --endpoint <name>", "select one endpoint; repeat to select multiple endpoints", collectValues)
-    .option("-g", "search every endpoint in the Host Registry; takes no value")
-    .option("--limit <1-1000>", `maximum matches per run (default: ${RG_DEFAULT_LIMIT})`)
-    .option("--count", "count mode: per-file match counts instead of matches")
-    .option("--glob <glob>", "glob filter passed to rg (e.g. \"*.md\")")
-    .option("--type <type>", "file type filter passed to rg (e.g. md, py)")
-    .option("-i", "case-insensitive search")
-    .option("--json", "emit the structured response envelope");
-}
-
-function parseRgCommand(args: readonly string[]): {
-  positionals: string[];
-  endpoints: string[];
-  global?: boolean;
+interface RgCommandOptions extends Record<string, unknown> {
+  endpoint?: string[];
+  g?: boolean;
   limit?: string;
   count?: boolean;
   glob?: string;
   type?: string;
-  ignoreCase?: boolean;
+  i?: boolean;
   json?: boolean;
-} {
-  const command = createRgCommand()
-    .configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
-
-  try {
-    command.parse(args, { from: "user" });
-  } catch (error) {
-    if (error instanceof CommanderError) {
-      if (isCommanderHelpIntent(error)) throw new HelpRequestError();
-      throw new RgUsageError(error.message.replace(/^error: /, ""));
-    }
-    throw error;
-  }
-
-  const options = command.opts<{
-    endpoint?: string[];
-    g?: boolean;
-    limit?: string;
-    count?: boolean;
-    glob?: string;
-    type?: string;
-    i?: boolean;
-    json?: boolean;
-  }>();
-  return {
-    positionals: command.args,
-    endpoints: options.endpoint ?? [],
-    global: options.g,
-    limit: options.limit,
-    count: options.count,
-    glob: options.glob,
-    type: options.type,
-    ignoreCase: options.i,
-    json: options.json,
-  };
 }
 
 export function parseRgArgs(args: readonly string[]): ParsedRg {
-  const parsed = parseRgCommand(args);
+  const parsed = parseKitArgs<RgCommandOptions>(RG_SPEC, args);
   const explicit: string[] = [];
   const warnings: string[] = [];
 
-  if (countFlagOccurrences(args, "-g") > 1) throw new RgUsageError("-g may only be specified once");
-  if (countFlagOccurrences(args, "--limit") > 1) throw new RgUsageError("--limit may only be specified once");
-  if (countFlagOccurrences(args, "--json") > 1) throw new RgUsageError("--json may only be specified once");
-
+  // Command-side semantic checks, in the pre-kit order: limit validation,
+  // duplicate warnings, excess positional, emptiness, conflict.
   let limit = RG_DEFAULT_LIMIT;
-  if (parsed.limit !== undefined) {
-    if (!/^[0-9]+$/.test(parsed.limit)) throw new RgUsageError("--limit must be a decimal integer");
-    limit = Number(parsed.limit);
+  if (parsed.options.limit !== undefined) {
+    if (!/^[0-9]+$/.test(parsed.options.limit)) throw new KitUsageError("--limit must be a decimal integer");
+    limit = Number(parsed.options.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > RG_MAX_LIMIT) {
-      throw new RgUsageError(`--limit must be between 1 and ${RG_MAX_LIMIT}`);
+      throw new KitUsageError(`--limit must be between 1 and ${RG_MAX_LIMIT}`);
     }
   }
 
-  for (const endpoint of parsed.endpoints) {
+  for (const endpoint of parsed.options.endpoint ?? []) {
     if (explicit.includes(endpoint)) warnings.push(`duplicate endpoint '${endpoint}' ignored`);
     else explicit.push(endpoint);
   }
 
   const [pattern, unexpected] = parsed.positionals;
   if (unexpected !== undefined) {
-    throw new RgUsageError(
+    throw new KitUsageError(
       `unexpected argument '${unexpected}'; rg accepts exactly one pattern. Use '--endpoint <name>' to select an endpoint; '-g' takes no value.`,
     );
   }
-  if (pattern === undefined || pattern.length === 0) throw new RgUsageError("rg pattern must be non-empty");
-  if (parsed.global && explicit.length > 0) {
-    throw new RgUsageError("--endpoint and -g cannot be used together");
+  if (pattern === undefined || pattern.length === 0) throw new KitUsageError("rg pattern must be non-empty");
+  if (parsed.options.g && explicit.length > 0) {
+    throw new KitUsageError("--endpoint and -g cannot be used together");
   }
 
   return {
     request: { query: pattern, limit },
     options: {
       explicitEndpoints: explicit.length > 0 ? explicit : undefined,
-      global: parsed.global ?? false,
-      ...(parsed.glob === undefined ? {} : { glob: parsed.glob }),
-      ...(parsed.type === undefined ? {} : { type: parsed.type }),
-      ...(parsed.ignoreCase === true ? { ignoreCase: true } : {}),
-      ...(parsed.count === true ? { count: true } : {}),
-      ...(parsed.json === true ? { json: true } : {}),
+      global: parsed.options.g ?? false,
+      ...(parsed.options.glob === undefined ? {} : { glob: parsed.options.glob }),
+      ...(parsed.options.type === undefined ? {} : { type: parsed.options.type }),
+      ...(parsed.options.i === true ? { ignoreCase: true } : {}),
+      ...(parsed.options.count === true ? { count: true } : {}),
+      ...(parsed.options.json === true ? { json: true } : {}),
       passthrough: [],
     },
     warnings,
@@ -183,7 +163,9 @@ export function executeRgCommand(args: readonly string[], context: RgContext): R
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderRgHelp(), stderr: "" };
     }
-    if (error instanceof RgUsageError) {
+    if (error instanceof KitUsageError || error instanceof RgUsageError) {
+      // RgUsageError: capability-side passthrough allowlist validation
+      // classifies as usage too — same rendering, exit 2.
       return { exitCode: 2, stdout: "", stderr: renderRgUsageError(error.message) };
     }
     throw error;
@@ -227,31 +209,9 @@ export function executeRgCommand(args: readonly string[], context: RgContext): R
 }
 
 export function renderRgHelp(): string {
-  return createRgCommand().helpInformation() + [
-    "",
-    "Passthrough:",
-    "  After '--', rg native flags are passed through on an allowlist",
-    "  (-A/-B/-C/-m/--glob/--type/--max-filesize and common boolean flags).",
-    "  Path operands and output-changing flags (--json, -r, --pre, --config)",
-    "  are rejected: the endpoint selector owns scope, UKP owns the output.",
-    "",
-    "Result scope:",
-    "  With no --endpoint or -g, the workspace default scope applies: the",
-    "  Client Config's default endpoints ('ukp inspect' shows the resolved",
-    "  scope); with no Client Config, every registered endpoint. 'Available on",
-    "  every registered endpoint' refers to capability availability, not this",
-    "  default scope.",
-    "  rg scans each endpoint's own files (same visibility root as read/file).",
-    "  'ukp search' covers indexed search where the Service declares a search",
-    "  capability provider.",
-    "",
-  ].join("\n");
+  return renderKitHelp(RG_SPEC);
 }
 
 export function renderRgUsageError(message: string): string {
-  return [
-    `ukp rg: ${message}`,
-    "Usage: ukp rg [--endpoint <name> ... | -g] <pattern> [flags] [-- <rg flags>]",
-    "Run 'ukp rg --help' for details.",
-  ].join("\n");
+  return renderKitUsageError(RG_SPEC, message);
 }
