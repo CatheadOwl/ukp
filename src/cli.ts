@@ -16,7 +16,7 @@ import { executeInspectCommand } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
 import { executeNavCommand } from "./commands/nav.ts";
 import { executeProposeCommand } from "./commands/propose.ts";
-import { executeRefreshCommand } from "./commands/refresh.ts";
+import { executeRefreshCommand, REFRESH_SPEC } from "./commands/refresh.ts";
 import { executeSearchCommand } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
@@ -44,7 +44,9 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   guide: "show short operational guides",
   init: "initialize UKP-owned files",
   inspect: "explain current scope and endpoint routing",
-  refresh: "trigger provider-owned Service maintenance",
+  // ADR 0024 pilot: migrated commands feed their root-help summary from the
+  // command spec; unmigrated commands keep hand-written entries.
+  refresh: REFRESH_SPEC.summary,
   register: "register a Service endpoint",
   unregister: "remove a registered endpoint",
   list: "list registered endpoint bindings",
