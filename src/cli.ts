@@ -11,10 +11,10 @@ import {
 } from "./commands/diagnose.ts";
 import { executeReadCommand, READ_SPEC } from "./commands/read.ts";
 import { executeRgCommand, RG_SPEC } from "./commands/rg.ts";
-import { executeGuideCommand, GUIDE_TOPICS } from "./commands/guide.ts";
-import { executeInitCommand } from "./commands/init.ts";
+import { executeGuideCommand, GUIDE_SPEC, GUIDE_TOPICS } from "./commands/guide.ts";
+import { executeInitCommand, INIT_SPEC } from "./commands/init.ts";
 import { executeInspectCommand, INSPECT_SPEC } from "./commands/inspect.ts";
-import { executeListCommand, executeRegisterCommand, executeUnregisterCommand } from "./commands/inventory.ts";
+import { executeListCommand, executeRegisterCommand, executeUnregisterCommand, LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC } from "./commands/inventory.ts";
 import { executeNavCommand, NAV_SPEC } from "./commands/nav.ts";
 import { executeProposeCommand, PROPOSE_SPEC } from "./commands/propose.ts";
 import { executeRefreshCommand, REFRESH_SPEC } from "./commands/refresh.ts";
@@ -40,17 +40,18 @@ export { renderRgHelp } from "./commands/rg.ts";
 // in runCli is unchanged.
 const COMMAND_DESCRIPTIONS: Record<string, string> = {
   // ADR 0024: migrated commands feed their root-help summary from the
-  // command spec; unmigrated commands keep hand-written entries.
+  // command spec; `version` stays hand-written (meta command, deliberate
+  // exception — no usage string, custom help handling).
   diagnose: DIAGNOSE_SPEC.summary,
   read: READ_SPEC.summary,
   rg: RG_SPEC.summary,
-  guide: "show short operational guides",
-  init: "initialize UKP-owned files",
+  guide: GUIDE_SPEC.summary,
+  init: INIT_SPEC.summary,
   inspect: INSPECT_SPEC.summary,
   refresh: REFRESH_SPEC.summary,
-  register: "register a Service endpoint",
-  unregister: "remove a registered endpoint binding (files on disk are untouched)",
-  list: "list registered endpoint bindings",
+  register: REGISTER_SPEC.summary,
+  unregister: UNREGISTER_SPEC.summary,
+  list: LIST_SPEC.summary,
   nav: NAV_SPEC.summary,
   propose: PROPOSE_SPEC.summary,
   search: SEARCH_SPEC.summary,
