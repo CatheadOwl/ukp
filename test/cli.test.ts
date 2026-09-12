@@ -110,6 +110,17 @@ describe("CLI bootstrap", () => {
     expect(help).toContain("remove a registered endpoint binding (files on disk are untouched)");
   });
 
+  // Probe 20260912-root-gloss-and-roles (promoted): the gloss line and the
+  // diagnose/inspect/propose role summaries carry the wiring/scope/write-path
+  // criteria verbatim.
+  test("root help carries the provider gloss and command-role criteria", () => {
+    const help = renderHelp();
+    expect(help).toContain("A Service's declared capabilities are backed by a provider (QMD backs search and refresh today); rg and nav work on endpoint files directly, no provider needed.");
+    expect(help).toContain("check a Service or endpoints for wiring problems (manifest, provider setup)");
+    expect(help).toContain("show which endpoints the current scope selects and their capabilities");
+    expect(help).toContain("submit an idempotent change proposal (the write path into a Service)");
+  });
+
   test("help exits successfully", () => {
     const output: string[] = [];
     expect(runCli(["--help"], (message) => output.push(message))).toBe(0);

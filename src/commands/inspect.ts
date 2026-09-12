@@ -29,7 +29,7 @@ export interface InspectCommandResult {
  * family, singleton detection, and help-intent triage live in kit.ts. */
 export const INSPECT_SPEC: UkpCommandSpec = {
   name: "inspect",
-  summary: "explain current scope and endpoint routing",
+  summary: "show which endpoints the current scope selects and their capabilities",
   group: "operations",
   description: "Explain the current UKP scope, Registry bindings, and Service capabilities.",
   usage: "[--endpoint <name> ... | -g]",

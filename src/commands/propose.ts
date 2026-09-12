@@ -54,7 +54,7 @@ export function executePropose(request: ProposeRequest, context: ProposeContext)
  * --endpoint) and help-intent triage live in kit.ts. */
 export const PROPOSE_SPEC: UkpCommandSpec = {
   name: "propose",
-  summary: "submit an idempotent change proposal",
+  summary: "submit an idempotent change proposal (the write path into a Service)",
   group: "endpoint",
   description: "Submit an idempotent change proposal to one Service endpoint (endpoint names come from 'ukp list').",
   usage: "--endpoint <name> [--id <slug>] --file <path>",
