@@ -43,7 +43,7 @@ export interface RenderDiagnoseOptions {
   includeSearchabilityHint?: boolean;
 }
 
-const SEARCHABILITY_HINT = "hint: diagnose checks wiring, not indexed content; for QMD run qmd init / collection add / update.";
+const SEARCHABILITY_HINT = "hint: diagnose checks wiring, not indexed content; content is searchable after provider setup (see 'ukp guide service qmd').";
 
 /** Single-source command spec (ADR 0024): summary feeds the root help via
  * cli.ts; usage feeds the help header and the usage-error line; the scope

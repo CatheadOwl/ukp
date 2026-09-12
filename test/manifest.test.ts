@@ -52,7 +52,8 @@ describe("Service Manifest and diagnose", () => {
     expect(renderDiagnose(report)).not.toContain("indexed content");
     const diagnoseOutput = renderDiagnose(report, { includeSearchabilityHint: true });
     expect(diagnoseOutput).toContain("hint: diagnose checks wiring, not indexed content");
-    expect(diagnoseOutput).toContain("qmd init / collection add / update");
+    expect(diagnoseOutput).toContain("ukp guide service qmd");
+    expect(diagnoseOutput).not.toMatch(/qmd init|collection add/);
     expect(diagnoseOutput.match(/indexed content/g)).toHaveLength(1);
   });
 

@@ -498,6 +498,8 @@ describe("CLI bootstrap", () => {
     expect(serviceHelp).toContain("[capabilities.search]");
     expect(serviceHelp).toContain("provider = \"qmd\"");
     expect(serviceHelp).toContain("ukp guide service");
+    expect(serviceHelp).toContain("ukp guide service qmd");
+    expect(serviceHelp).not.toContain("qmd init");
   });
 
   test("init service creates the minimal Manifest without Registry, Client Config, or QMD side effects", () => {
@@ -518,8 +520,10 @@ describe("CLI bootstrap", () => {
       expect(manifest).toContain("provider = \"qmd\"");
       expect(output.join("\n")).toContain("initialized Service: valid-service");
       expect(output.join("\n")).toContain("name_source: folder-name");
+      expect(output.join("\n")).toContain("next: ukp guide service qmd");
       expect(output.join("\n")).toContain("next: ukp diagnose");
       expect(output.join("\n")).toContain("next: ukp register");
+      expect(output.join("\n")).not.toContain("qmd init");
       expect(existsSync(registryPath)).toBe(false);
       expect(existsSync(join(service, ".ukp", "client.toml"))).toBe(false);
       expect(existsSync(join(service, ".qmd"))).toBe(false);
