@@ -230,6 +230,31 @@ describe("serve auth", () => {
   });
 });
 
+describe("serve auth admission (RQ-18, deny by default)", () => {
+  test("tokenless startup requires an explicit loopback-only opt-in", async () => {
+    const { serveAuthDecision, executeServeCommand } = await import("../src/commands/serve.ts");
+    // Token present: authorized, auth required.
+    expect(serveAuthDecision("127.0.0.1", ["t1"], false)).toEqual({ ok: true, authRequired: true });
+    // Loopback, no token, no flag: refused with the opt-in hint.
+    const refused = serveAuthDecision("127.0.0.1", [], false);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.reason).toContain("--allow-anonymous");
+    // Explicit loopback opt-in: allowed, anonymous.
+    expect(serveAuthDecision("127.0.0.1", [], true)).toEqual({ ok: true, authRequired: false });
+    // Non-loopback: token always required; the flag does not help.
+    expect(serveAuthDecision("0.0.0.0", [], true).ok).toBe(false);
+
+    // The command layer refuses to start without a token and without the
+    // flag (no server is left behind).
+    const result = executeServeCommand(["--endpoint", "serve-fixture"], {
+      currentDirectory: root,
+      registryPath,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("serve requires authentication");
+  });
+});
+
 describe("serve multi-token (RQ-16)", () => {
   test("any listed token authorizes; unlisted tokens are rejected", async () => {
     const { info } = start({ tokens: ["alice", "bob"] });

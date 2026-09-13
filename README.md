@@ -174,10 +174,25 @@ commands that support global scope.
 ## Remote Deployment
 
 `ukp serve` speaks plain HTTP; TLS and public exposure belong to a reverse
-proxy in front of it (the data plane stays thin). The trust model is public
-PKI — a real domain, or an overlay tailnet that provisions real certificates.
-Plain HTTP is loopback-only by design, and a non-loopback `--host` without a
-token is refused at startup.
+proxy or an SSH tunnel in front of it (the data plane stays thin). The trust
+model is public PKI — a real domain, or an overlay tailnet that provisions
+real certificates. **Authentication is deny-by-default**: serving requires
+`UKP_SERVE_TOKEN`; tokenless serving needs an explicit `--allow-anonymous`
+and is refused off loopback. A reverse proxy on the same host forwards from
+the public side to the loopback bind, so proxied deployments treat the token
+as mandatory (serve cannot see past its own bind address). The full
+real-machine walkthrough (worked example on the author's VPS) lives in the
+repository handbook: `handbooks/ukp-remote-deployment/`.
+
+### Via an SSH tunnel (two personal machines — zero extra components)
+
+SSH provides encryption and authentication; the tunnel maps the remote
+loopback to a local port, so the loopback admission holds naturally.
+
+```bash
+ssh -N -L 18575:127.0.0.1:8570 <host> &
+UKP_ENDPOINT_<NAME>_TOKEN=<token> ukp register --url http://127.0.0.1:18575
+```
 
 ### Behind Caddy (public domain)
 
