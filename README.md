@@ -136,6 +136,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared. |
+| `ukp serve` | Exposes one registered endpoint over HTTP using the ukp-remote wire: a discovery document (`/.well-known/ukp.json`), `POST /v1/search`, and `GET /v1/read`. Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth, and a non-loopback `--host` without a token is refused. |
 
 ### Help commands
 
@@ -155,15 +156,17 @@ commands that support global scope.
 
 - local-first CLI;
 - TOML Service Manifest, Host Registry, and Client Config;
-- onboarding, diagnosis, registration, inspection, search, read, and update
-  command surface;
+- onboarding, diagnosis, registration, inspection, search, read, update, and
+  HTTP serving (`ukp serve`) command surface;
 - QMD-backed `search`, `read`, and `update`;
 - agent-oriented JSON output and artifacts;
 - explicit recursive search over direct authority/context dependencies.
 
 ## Not Yet
 
-- Remote endpoints or a formal network protocol;
+- client-side consumption of remote endpoints (`ukp serve` exposes one
+  endpoint over HTTP today, but `ukp` itself does not yet register or call
+  remote endpoints) and a formal network protocol;
 - semantic search tier (5b), API Search, query rewrite, reranking, or deduplication;
 - full Client Scope with aliases, visibility, inheritance, or profiles;
 - automatic artifact browsing, cleanup, or "select result N" references;

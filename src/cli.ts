@@ -18,6 +18,7 @@ import { executeListCommand, executeRegisterCommand, executeUnregisterCommand, L
 import { executeNavCommand, NAV_SPEC } from "./commands/nav.ts";
 import { executeProposeCommand, PROPOSE_SPEC } from "./commands/propose.ts";
 import { executeUpdateCommand, UPDATE_SPEC } from "./commands/update.ts";
+import { executeServeCommand, SERVE_SPEC } from "./commands/serve.ts";
 import { executeSearchCommand, SEARCH_SPEC } from "./commands/search.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
@@ -48,6 +49,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   guide: GUIDE_SPEC.summary,
   init: INIT_SPEC.summary,
   inspect: INSPECT_SPEC.summary,
+  serve: SERVE_SPEC.summary,
   update: UPDATE_SPEC.summary,
   register: REGISTER_SPEC.summary,
   unregister: UNREGISTER_SPEC.summary,
@@ -76,7 +78,7 @@ export const COMMAND_GROUPS = [
   },
   {
     heading: "Operations commands",
-    commands: ["diagnose", "inspect", "update"],
+    commands: ["diagnose", "inspect", "update", "serve"],
   },
   {
     heading: "Help commands",
@@ -330,6 +332,14 @@ export function runCli(
 
   if (command === "update") {
     return writeCommandResult(executeUpdateCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+      qmdCommand: context.qmdCommand,
+    }), stdout, stderr);
+  }
+
+  if (command === "serve") {
+    return writeCommandResult(executeServeCommand(args.slice(1), {
       currentDirectory,
       registryPath,
       qmdCommand: context.qmdCommand,
