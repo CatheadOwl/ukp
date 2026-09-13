@@ -201,7 +201,7 @@ describe("serve /v1/read", () => {
 
 describe("serve auth", () => {
   test("token-protected /v1 routes reject missing/wrong bearer; discovery stays public", async () => {
-    const { info } = start({ token: "s3cret-token" });
+    const { info } = start({ tokens: ["s3cret-token"] });
     const discovery = await fetch(`${info.url}${DISCOVERY_PATH}`);
     expect(discovery.status).toBe(200);
     expect(((await discovery.json()) as DiscoveryDocument).security.schemes).toEqual(["bearer"]);
@@ -227,6 +227,26 @@ describe("serve auth", () => {
       body: JSON.stringify({ query: "fixture-cad-search-token" }),
     });
     expect(authorized.status).toBe(200);
+  });
+});
+
+describe("serve multi-token (RQ-16)", () => {
+  test("any listed token authorizes; unlisted tokens are rejected", async () => {
+    const { info } = start({ tokens: ["alice", "bob"] });
+    for (const token of ["alice", "bob"]) {
+      const response = await fetch(`${info.url}/v1/search`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ query: "fixture-cad-search-token" }),
+      });
+      expect(response.status).toBe(200);
+    }
+    const rejected = await fetch(`${info.url}/v1/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer carol" },
+      body: JSON.stringify({ query: "fixture-cad-search-token" }),
+    });
+    expect(rejected.status).toBe(401);
   });
 });
 

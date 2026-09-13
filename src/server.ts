@@ -34,10 +34,11 @@ export interface ServeConfig {
   host?: string;
   /** 0 (or undefined → 8570) — 0 binds an ephemeral port for tests. */
   port?: number;
-  /** When set, /v1/* requires `Authorization: Bearer <token>`; the discovery
+  /** When set, /v1/* requires `Authorization: Bearer <token>` matching ANY
+   * listed token (RQ-16 multi-token: `UKP_SERVE_TOKEN=a,b,c`); the discovery
    * document stays public (ADR-REM-003: security is declared, the card is
    * readable without it). */
-  token?: string;
+  tokens?: readonly string[];
 }
 
 export interface DiscoveryDocument {
@@ -239,7 +240,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
           );
         }
         return jsonResponse(
-          buildDiscoveryDocument(loaded, readInstanceUid(serviceFolder), config.token !== undefined),
+          buildDiscoveryDocument(loaded, readInstanceUid(serviceFolder), (config.tokens?.length ?? 0) > 0),
         );
       } catch (error) {
         return jsonResponse(
@@ -250,9 +251,9 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     }
 
     if (url.pathname === "/v1/search" || url.pathname === "/v1/read") {
-      if (config.token !== undefined) {
+      if ((config.tokens?.length ?? 0) > 0) {
         const authorization = request.headers.get("authorization");
-        if (authorization !== `Bearer ${config.token}`) {
+        if (!config.tokens!.some((token) => authorization === `Bearer ${token}`)) {
           return jsonResponse(
             errorBody("auth-failure", "missing or invalid bearer token (Authorization: Bearer <token>)"),
             401,
@@ -286,7 +287,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     url: `http://${host}:${server.port ?? (config.port ?? 8570)}`,
     host,
     port: server.port ?? (config.port ?? 8570),
-    authRequired: config.token !== undefined,
+    authRequired: (config.tokens?.length ?? 0) > 0,
   };
   return { server, info };
 }

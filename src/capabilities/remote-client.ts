@@ -27,6 +27,13 @@ function remoteTimeoutMs(): number {
   return Number.isSafeInteger(value) && value >= 1000 ? value : 60_000;
 }
 
+/** TOFU mismatch policy (RQ-17): `warn` (default) appends a warning and
+ * continues; `block` refuses the endpoint until it is explicitly
+ * re-registered. */
+function tofuMode(): "warn" | "block" {
+  return process.env.UKP_TOFU === "block" ? "block" : "warn";
+}
+
 export function remoteBaseOf(binding: RegistryBinding): string {
   if (binding.kind !== "remote" || binding.url === undefined) {
     throw new RemoteTransportError(`endpoint '${binding.name}' is not a remote binding`);
@@ -101,10 +108,13 @@ export async function fetchDiscoveryDocumentAt(
   }
   const warnings: string[] = [];
   if (options.pinnedUid !== undefined && record.instance_uid !== options.pinnedUid) {
-    // TOFU: warn loudly, never silently trust the new identity (ADR-REM-003).
-    warnings.push(
-      `endpoint '${label}' identity changed (pinned ${options.pinnedUid}, served ${String(record.instance_uid)}); re-register with 'ukp register --url' if this replacement is intended`,
-    );
+    // TOFU (ADR-REM-003, RQ-17): warn by default, refuse under UKP_TOFU=block —
+    // never silently trust the new identity.
+    const detail = `endpoint '${label}' identity changed (pinned ${options.pinnedUid}, served ${String(record.instance_uid)}); re-register with 'ukp register --url' if this replacement is intended`;
+    if (tofuMode() === "block") {
+      throw new RemoteTransportError(`${detail} (refused: UKP_TOFU=block)`);
+    }
+    warnings.push(detail);
   }
   const schemes = (record.security as { schemes?: unknown } | undefined)?.schemes;
   return {

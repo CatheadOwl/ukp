@@ -170,6 +170,57 @@ commands that support global scope.
 
 - remote operation of `nav` / `rg` / `update` / `propose` (explicit
   not-yet-remote-enabled errors today) and a formal network protocol;
+
+## Remote Deployment
+
+`ukp serve` speaks plain HTTP; TLS and public exposure belong to a reverse
+proxy in front of it (the data plane stays thin). The trust model is public
+PKI — a real domain, or an overlay tailnet that provisions real certificates.
+Plain HTTP is loopback-only by design, and a non-loopback `--host` without a
+token is refused at startup.
+
+### Behind Caddy (public domain)
+
+```
+# Caddyfile — automatic Let's Encrypt
+kb.example.com {
+    reverse_proxy 127.0.0.1:8570
+}
+```
+
+```bash
+UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 127.0.0.1 --port 8570
+# on the consumer machine:
+UKP_ENDPOINT_<NAME>_TOKEN=<token> ukp register --url https://kb.example.com
+```
+
+### Via Tailscale (two machines on any network — including the same LAN)
+
+Enable HTTPS certificates on your tailnet once (admin console: DNS →
+MagicDNS → HTTPS Certificates); Tailscale then provisions Let's Encrypt
+certificates for your `*.ts.net` hostnames.
+
+```bash
+# both machines: tailscale up (same tailnet)
+# server machine:
+UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 127.0.0.1 --port 8570
+tailscale serve --bg --https=443 http://127.0.0.1:8570
+# consumer machine:
+UKP_ENDPOINT_<NAME>_TOKEN=<token> ukp register --url https://<machine>.<tailnet>.ts.net
+```
+
+The overlay covers LAN and roaming machines alike; a fully offline LAN (no
+coordination reachability) is the one gap — a dedicated private-CA recipe is
+deferred until that is a real constraint.
+
+### Hardening posture
+
+- rate limiting, IP allowlists, and audit logging live at the proxy layer —
+  the `ukp` core stays thin;
+- multiple client tokens: comma-separate them — `UKP_SERVE_TOKEN=alice,bob`
+  (any listed token authorizes);
+- identity pinning is TOFU on `instance_uid`: a changed endpoint warns by
+  default; set `UKP_TOFU=block` on hostile networks to refuse it outright.
 - semantic search tier (5b), API Search, query rewrite, reranking, or deduplication;
 - full Client Scope with aliases, visibility, inheritance, or profiles;
 - automatic artifact browsing, cleanup, or "select result N" references;
