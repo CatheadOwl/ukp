@@ -784,6 +784,39 @@ function writeQmdReferenceSidecar(
   });
 }
 
+/** Inline reference payload for artifact-less surfaces (ukp_remote serve,
+ * RQ-07: remote responses inline the reference data — the serving side holds
+ * no artifact root). Same mapping as the sidecar; `source_artifact` is
+ * omitted because there is no artifact. Undefined when the provider output is
+ * not a parseable JSON array, matching the sidecar's fallback semantics. */
+export interface InlineSearchReferences {
+  schema: "ukp.search.references.v1";
+  endpoint: string;
+  results: Array<QmdReferenceMapping & { index: number }>;
+}
+
+export function buildInlineReferences(
+  endpointName: string,
+  endpointFolder: string,
+  providerOutput: string,
+): InlineSearchReferences | undefined {
+  let nativeResults: unknown;
+  try {
+    nativeResults = JSON.parse(providerOutput);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(nativeResults)) return undefined;
+  return {
+    schema: "ukp.search.references.v1",
+    endpoint: endpointName,
+    results: nativeResults.map((result, index) => ({
+      index,
+      ...mapQmdResultToReference(endpointName, endpointFolder, result),
+    })),
+  };
+}
+
 function runJsonMode(
   parsed: ParsedSearch,
   context: SearchContext,
