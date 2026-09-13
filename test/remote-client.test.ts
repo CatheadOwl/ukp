@@ -221,6 +221,30 @@ describe("remote search (mixed driver)", () => {
     expect(result.stdout).not.toContain("read: ukp read --endpoint outside-endpoint");
   });
 
+  test("a remote endpoint without search declared skips with a visible reason (ali dogfood finding)", async () => {
+    // A served endpoint that declares only propose: search must skip cleanly
+    // with the reason on stderr — not a silent exit 1 (found on the real
+    // cross-machine ali test, 2026-09-13).
+    const plainFolder = join(root, "plain-svc");
+    mkdirSync(join(plainFolder, ".ukp"), { recursive: true });
+    writeFileSync(
+      join(plainFolder, ".ukp", "service.toml"),
+      'name = "plain-endpoint"\n\n[capabilities.propose]\nprovider = "file"\n',
+      "utf8",
+    );
+    registerAt(serverRegistryPath, "plain-endpoint", plainFolder);
+    const { info } = startRemote({ endpointName: "plain-endpoint" });
+    registerRemoteAt(registryPath, { name: "plain-endpoint", url: info.url });
+    const result = await asResult(executeSearchCommand(["anything", "-c", "plain-endpoint"], {
+      currentDirectory: root,
+      registryPath,
+      qmdCommand,
+    }));
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("plain-endpoint");
+    expect(result.stderr).toContain("declares no search capability");
+  });
+
   test("aggregates a failed remote endpoint with exit 1 and preserves other endpoints", async () => {
     const { info } = startRemote();
     registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
