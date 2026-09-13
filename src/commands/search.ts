@@ -7,9 +7,13 @@ import {
   type ParsedSearch,
   type SearchAggregateStatus,
   type SearchContext,
+  type SearchEndpointOutcome,
+  type SearchResult,
 } from "../capabilities/search.ts";
+import { fetchDiscoveryDocument, remoteSearch, remoteTokenFor } from "../capabilities/remote-client.ts";
+import { isRemoteBinding, readRegistry } from "../registry.ts";
+import { resolveScope, ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
-import { ScopeError } from "../scope.ts";
 import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
 import { HelpRequestError, isHelpRequest } from "./flags.ts";
 
@@ -125,13 +129,37 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
   };
 }
 
-export function executeSearchCommand(args: readonly string[], context: SearchContext): SearchCommandResult {
+/** Remote-in-scope detection (sync): when the selected scope contains remote
+ * bindings, execution switches to the async mixed driver — local endpoints
+ * keep the exact sync runSearch path (zero contract change), remote
+ * endpoints run over the wire. The conditional-async seam is the ukp_remote
+ * W2 migration boundary; full async-native execution is a later refactor. */
+function selectedRemoteBindings(parsed: ParsedSearch, context: SearchContext) {
+  const registry = readRegistry(context.registryPath);
+  const scope = resolveScope({
+    currentDirectory: context.currentDirectory,
+    registry,
+    explicitEndpoints: parsed.options.explicitEndpoints,
+    global: parsed.options.global,
+  });
+  return { registry, scope, remotes: scope.bindings.filter(isRemoteBinding) };
+}
+
+export function executeSearchCommand(
+  args: readonly string[],
+  context: SearchContext,
+): SearchCommandResult | Promise<SearchCommandResult> {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderSearchHelp(), stderr: "" };
   }
 
   try {
-    return executeHumanSearch(parseSearchArgs(args), context);
+    const parsed = parseSearchArgs(args);
+    const { scope, remotes } = selectedRemoteBindings(parsed, context);
+    if (remotes.length === 0) {
+      return executeHumanSearch(parsed, context);
+    }
+    return executeMixedSearch(parsed, context, scope, remotes);
   } catch (error) {
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderSearchHelp(), stderr: "" };
@@ -152,13 +180,95 @@ export function executeSearchCommand(args: readonly string[], context: SearchCon
   }
 }
 
-/** CLI composition of the structured outcome (ADR 0021): the shared renders
- * plus the aggregate → exit-code mapping. Kept as the test entry so suites
- * exercise the exact adapter path the `ukp search` bin takes. */
-export function executeHumanSearch(parsed: ParsedSearch, context: SearchContext): SearchCommandResult {
-  const result = runSearch(parsed, context);
+/** Mixed local+remote execution: locals via the unchanged sync runSearch,
+ * remotes via discovery-check + POST /v1/search, merged in scope order under
+ * the D-036 aggregation. */
+async function executeMixedSearch(
+  parsed: ParsedSearch,
+  context: SearchContext,
+  scope: ReturnType<typeof resolveScope>,
+  remotes: ReturnType<typeof selectedRemoteBindings>["remotes"],
+): Promise<SearchCommandResult> {
+  const remoteNames = new Set(remotes.map((binding) => binding.name));
+  const localNames = scope.bindings.filter((binding) => !remoteNames.has(binding.name)).map((b) => b.name);
+  const warnings: string[] = [...parsed.warnings, ...scope.warnings];
+
+  let localResult: SearchResult | undefined;
+  if (localNames.length > 0) {
+    localResult = runSearch(
+      {
+        ...parsed,
+        options: { ...parsed.options, explicitEndpoints: localNames, global: false },
+        warnings: [...warnings],
+      },
+      context,
+    );
+  }
+
+  const remoteOutcomes = new Map<string, SearchEndpointOutcome>();
+  for (const binding of remotes) {
+    const token = remoteTokenFor(binding.name);
+    try {
+      const discovery = await fetchDiscoveryDocument(binding, token);
+      warnings.push(...discovery.warnings);
+      if (discovery.bearerRequired && token === undefined) {
+        warnings.push(
+          `endpoint '${binding.name}' requires a bearer token; set UKP_ENDPOINT_${binding.name.toUpperCase().replace(/-/g, "_")}_TOKEN`,
+        );
+      }
+      if (!("search" in discovery.doc.capabilities)) {
+        remoteOutcomes.set(binding.name, {
+          name: binding.name,
+          provider: null,
+          status: "skipped",
+          message: `endpoint '${binding.name}' declares no search capability`,
+        });
+        continue;
+      }
+      const execution = await remoteSearch(binding, token, parsed.request.query, parsed.request.limit);
+      remoteOutcomes.set(binding.name, {
+        ...execution.outcome,
+        ...(execution.results.length > 0 ? { providerOutput: JSON.stringify(execution.results) } : {}),
+        ...(execution.references !== undefined
+          ? { remoteUris: execution.references.map((entry) => entry.ukp_uri) }
+          : {}),
+      });
+    } catch (error) {
+      remoteOutcomes.set(binding.name, {
+        name: binding.name,
+        provider: null,
+        status: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const byName = new Map((localResult?.endpoints ?? []).map((outcome) => [outcome.name, outcome]));
+  const endpoints: SearchEndpointOutcome[] = scope.bindings.map(
+    (binding) => byName.get(binding.name) ?? remoteOutcomes.get(binding.name)!,
+  );
+  const statuses = endpoints.map((outcome) => outcome.status);
+  const aggregate: SearchAggregateStatus = statuses.includes("cancelled")
+    ? "cancelled"
+    : statuses.includes("failed")
+      ? "provider-failure"
+      : statuses.includes("succeeded")
+        ? "succeeded"
+        : "no-success";
+  const merged: SearchResult = {
+    query: parsed.request.query,
+    limit: parsed.request.limit,
+    ...(localResult?.runId !== undefined ? { runId: localResult.runId } : {}),
+    endpoints,
+    warnings,
+    aggregate,
+  };
+  return renderSearchCommandResult(parsed.options.json, merged);
+}
+
+function renderSearchCommandResult(json: boolean, result: SearchResult): SearchCommandResult {
   const exitCode = SEARCH_EXIT_BY_AGGREGATE[result.aggregate];
-  if (parsed.options.json) {
+  if (json) {
     return { exitCode, stdout: renderSearchJson(projectSearchEnvelope(result)), stderr: "" };
   }
   return {
@@ -166,6 +276,13 @@ export function executeHumanSearch(parsed: ParsedSearch, context: SearchContext)
     stdout: renderSearchHuman(result),
     stderr: result.warnings.length > 0 ? `${result.warnings.join("\n")}\n` : "",
   };
+}
+
+/** CLI composition of the structured outcome (ADR 0021): the shared renders
+ * plus the aggregate → exit-code mapping. Kept as the test entry so suites
+ * exercise the exact adapter path the `ukp search` bin takes. */
+export function executeHumanSearch(parsed: ParsedSearch, context: SearchContext): SearchCommandResult {
+  return renderSearchCommandResult(parsed.options.json, runSearch(parsed, context));
 }
 
 export function renderSearchHelp(): string {

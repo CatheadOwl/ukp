@@ -261,12 +261,27 @@ function writeVersionCommandResult(
   }
 }
 
+/** Conditional-async dispatch shim (ukp_remote W2): local-only invocations
+ * stay fully synchronous (returning a number); scopes that include remote
+ * endpoints resolve over the network and return a promise. The bin entry
+ * awaits promises; sync callers (tests) see numbers unchanged. */
+function writeCommandResultMaybeAsync(
+  result: CliCommandResult | Promise<CliCommandResult>,
+  stdout: (message?: unknown) => void,
+  stderr: (message?: unknown) => void,
+): number | Promise<number> {
+  if (result instanceof Promise) {
+    return result.then((resolved) => writeCommandResult(resolved, stdout, stderr));
+  }
+  return writeCommandResult(result, stdout, stderr);
+}
+
 export function runCli(
   args: readonly string[],
   stdout = console.log,
   stderr = console.error,
   context: CliContext = {},
-): number {
+): number | Promise<number> {
   const [command] = args;
   const currentDirectory = context.currentDirectory ?? process.cwd();
   const registryPath = context.registryPath ?? join(homedir(), ".ukp", "registry.toml");
@@ -297,7 +312,7 @@ export function runCli(
   }
 
   if (command === "read") {
-    return writeCommandResult(executeReadCommand(args.slice(1), {
+    return writeCommandResultMaybeAsync(executeReadCommand(args.slice(1), {
       currentDirectory,
       registryPath,
       qmdCommand: context.qmdCommand,
@@ -323,7 +338,7 @@ export function runCli(
   }
 
   if (command === "register") {
-    return writeCommandResult(executeRegisterCommand(args.slice(1), {
+    return writeCommandResultMaybeAsync(executeRegisterCommand(args.slice(1), {
       currentDirectory,
       registryPath,
       resolveProvider: context.resolveProvider,
@@ -354,7 +369,7 @@ export function runCli(
   }
 
   if (command === "list") {
-    return writeCommandResult(executeListCommand(args.slice(1), {
+    return writeCommandResultMaybeAsync(executeListCommand(args.slice(1), {
       currentDirectory,
       registryPath,
     }), stdout, stderr);
@@ -383,7 +398,7 @@ export function runCli(
   }
 
   if (command === "search") {
-    return writeCommandResult(executeSearchCommand(args.slice(1), {
+    return writeCommandResultMaybeAsync(executeSearchCommand(args.slice(1), {
       currentDirectory,
       registryPath,
       qmdCommand: context.qmdCommand,
@@ -399,5 +414,12 @@ export function runCli(
 }
 
 if (import.meta.main) {
-  process.exitCode = runCli(process.argv.slice(2));
+  const exitCode = runCli(process.argv.slice(2));
+  if (exitCode instanceof Promise) {
+    exitCode.then((code) => {
+      process.exitCode = code;
+    });
+  } else {
+    process.exitCode = exitCode;
+  }
 }

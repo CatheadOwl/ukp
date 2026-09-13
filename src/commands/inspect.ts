@@ -1,5 +1,5 @@
 import { loadManifest } from "../config/manifest.ts";
-import { readRegistry, type RegistryBinding } from "../registry.ts";
+import { isRemoteBinding, localPathOf, readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope, ScopeError, type ResolvedScope } from "../scope.ts";
 import {
   defaultProviderResolver,
@@ -63,8 +63,14 @@ function inspectBinding(
   binding: RegistryBinding,
   resolveProvider: ProviderResolver | undefined,
 ): { status: "ok" | "unavailable"; report: DiagnoseReport } | { status: "failed"; message: string } {
+  if (isRemoteBinding(binding)) {
+    return {
+      status: "failed",
+      message: `remote endpoint '${binding.name}' (${binding.url}): inspect deep-dive is local-only in ukp_remote W2; capabilities show in 'ukp list'`,
+    };
+  }
   try {
-    const service = loadManifest(binding.path);
+    const service = loadManifest(localPathOf(binding));
     const report = {
       service,
       capabilities: evaluateServiceCapabilities(service, resolveProvider ?? defaultProviderResolver),

@@ -13,7 +13,7 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ENDPOINT_NAME, loadManifest, type ManifestCapability } from "../config/manifest.ts";
 import { resolveFileNativeCapability, unsupportedFileNativeProviderMessage } from "../config/file-native.ts";
-import { readRegistry } from "../registry.ts";
+import { isRemoteBinding, localPathOf, readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { acquireLock, LockBusyError, releaseLock } from "../fslock.ts";
 
@@ -287,7 +287,8 @@ export type ProposeErrorClass =
   | "no-endpoint"
   | "endpoint-name-mismatch"
   | "capability-undeclared"
-  | "submission-file-unreadable";
+  | "submission-file-unreadable"
+  | "provider-unsupported";
 
 export interface ProposeFailure {
   errorClass: ProposeErrorClass;
@@ -372,8 +373,17 @@ export function runPropose(request: ProposeRequest, context: ProposeContext): Pr
   if (!binding) {
     return { ok: false, failure: { errorClass: "no-endpoint", message: "no endpoint selected" } };
   }
+  if (isRemoteBinding(binding)) {
+    return {
+      ok: false,
+      failure: {
+        errorClass: "provider-unsupported",
+        message: `endpoint '${binding.name}' is remote (${binding.url}); propose is not yet remote-enabled (ukp_remote W3)`,
+      },
+    };
+  }
 
-  const service = loadManifest(binding.path);
+  const service = loadManifest(localPathOf(binding));
   if (service.effectiveName !== binding.name) {
     return {
       ok: false,

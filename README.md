@@ -115,8 +115,8 @@ display concern only: every command stays a flat `ukp <verb>`.
 
 | Command | What it does |
 |---|---|
-| `ukp search` | Runs indexed search through the endpoint's search provider (currently QMD; a semantic tier is a future provider tier); `--recursive` expands direct authority/context dependencies. |
-| `ukp read` | Reads an endpoint-scoped resource reference from one registered local Service. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
+| `ukp search` | Runs indexed search through the endpoint's search provider (currently QMD; a semantic tier is a future provider tier); `--recursive` expands direct authority/context dependencies. Works on remote endpoints too: results hand off via `ukp://` references. |
+| `ukp read` | Reads an endpoint-scoped resource reference from one registered Service — local or remote. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
 | `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
 | `ukp rg` | Runs base lexical search (ripgrep) across endpoints — available on every registered endpoint by default (a missing rg binary degrades to a skip, never a fault); results are shaped into `read`-ready `ukp://` references; `--count` lists per-file counts; `--` passes rg flags through on an allowlist. |
 | `ukp propose` | Creates a proposal file in a target endpoint's proposal folder, dispatching via the file provider; resubmitting the same id updates the same proposal (created/unchanged/updated, revision bump). |
@@ -126,8 +126,8 @@ display concern only: every command stays a flat `ukp <verb>`.
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. |
-| `ukp list` | Lists registered endpoint bindings. |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url>` registers a remote `ukp serve` endpoint: the name and instance identity come from its discovery document and are pinned TOFU-style. |
+| `ukp list` | Lists registered endpoint bindings (local paths and remote urls, with per-endpoint declared capabilities). |
 
 ### Operations commands
 
@@ -158,15 +158,18 @@ commands that support global scope.
 - TOML Service Manifest, Host Registry, and Client Config;
 - onboarding, diagnosis, registration, inspection, search, read, update, and
   HTTP serving (`ukp serve`) command surface;
+- remote endpoint consumption (ukp-remote wire v1): serve one endpoint over
+  HTTP, register it from another machine with `ukp register --url`, then
+  `search`/`read`/`list` against it (`ukp://` handoffs, TOFU identity pin,
+  bearer tokens via `UKP_ENDPOINT_<NAME>_TOKEN`);
 - QMD-backed `search`, `read`, and `update`;
 - agent-oriented JSON output and artifacts;
 - explicit recursive search over direct authority/context dependencies.
 
 ## Not Yet
 
-- client-side consumption of remote endpoints (`ukp serve` exposes one
-  endpoint over HTTP today, but `ukp` itself does not yet register or call
-  remote endpoints) and a formal network protocol;
+- remote operation of `nav` / `rg` / `update` / `propose` (explicit
+  not-yet-remote-enabled errors today) and a formal network protocol;
 - semantic search tier (5b), API Search, query rewrite, reranking, or deduplication;
 - full Client Scope with aliases, visibility, inheritance, or profiles;
 - automatic artifact browsing, cleanup, or "select result N" references;

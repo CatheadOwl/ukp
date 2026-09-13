@@ -12,6 +12,12 @@ import {
   type LineRange,
 } from "../capabilities/read.ts";
 import { isValidPin } from "../capabilities/rename-recovery.ts";
+import {
+  fetchDiscoveryDocument,
+  remoteRead,
+  remoteTokenFor,
+} from "../capabilities/remote-client.ts";
+import { isRemoteBinding, readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
 import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
 import { HelpRequestError, isHelpRequest } from "./flags.ts";
@@ -352,23 +358,28 @@ function renderJsonOutput(request: ReadRequest, outcome: ReadOutcome): ReadComma
   };
 }
 
-export function executeReadCommand(args: readonly string[], context: ReadContext): ReadCommandResult {
+export function executeReadCommand(
+  args: readonly string[],
+  context: ReadContext,
+): ReadCommandResult | Promise<ReadCommandResult> {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderReadHelp(), stderr: "" };
   }
 
   try {
     const { request, format } = parseReadWithFormat(args);
+    // Remote branch (ukp_remote W2): endpoint-scoped and ukp:// reads on a
+    // remote binding route through the remote transport; the absolute-path
+    // tier never carries a remote endpoint. The sync contract for local
+    // reads is unchanged (conditional-async seam, same as search).
+    if (request.endpoint !== undefined) {
+      const binding = readRegistry(context.registryPath).find((entry) => entry.name === request.endpoint);
+      if (binding !== undefined && isRemoteBinding(binding)) {
+        return executeRemoteRead(request, format, binding);
+      }
+    }
     const outcome = runRead(request, context);
-    if (format === "json") return renderJsonOutput(request, outcome);
-    const human = renderReadHuman(outcome);
-    const recovery = outcome.ok ? outcome.result.recovery : outcome.failure.recovery;
-    return {
-      exitCode: outcome.ok ? 0 : READ_EXIT_BY_ERROR_CLASS[outcome.failure.errorClass],
-      stdout: human.body,
-      stderr: human.diagnostics,
-      ...(recovery !== undefined ? { recovery } : {}),
-    };
+    return renderReadOutcome(request, outcome, format, []);
   } catch (error) {
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderReadHelp(), stderr: "" };
@@ -387,6 +398,134 @@ export function executeReadCommand(args: readonly string[], context: ReadContext
       stderr: `ukp read: ${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
+}
+
+/** Shared render tail for the sync and remote read paths (byte-identical to
+ * the pre-remote adapter when `warnings` is empty). */
+function renderReadOutcome(
+  request: ReadRequest,
+  outcome: ReadOutcome,
+  format: "json" | undefined,
+  warnings: string[],
+): ReadCommandResult {
+  if (format === "json") {
+    const base = renderJsonOutput(request, outcome);
+    if (warnings.length === 0) return base;
+    return { ...base, stderr: `${base.stderr}${warnings.join("\n")}\n` };
+  }
+  const human = renderReadHuman(outcome);
+  const recovery = outcome.ok ? outcome.result.recovery : outcome.failure.recovery;
+  const diagnostics = warnings.length > 0
+    ? `${human.diagnostics}${human.diagnostics === "" || human.diagnostics.endsWith("\n") ? "" : "\n"}${warnings.join("\n")}\n`
+    : human.diagnostics;
+  return {
+    exitCode: outcome.ok ? 0 : READ_EXIT_BY_ERROR_CLASS[outcome.failure.errorClass],
+    stdout: human.body,
+    stderr: diagnostics,
+    ...(recovery !== undefined ? { recovery } : {}),
+  };
+}
+
+function remoteTokenHint(endpointName: string): string {
+  return `endpoint '${endpointName}' requires a bearer token; set UKP_ENDPOINT_${endpointName.toUpperCase().replace(/-/g, "_")}_TOKEN`;
+}
+
+/** Wire error class → ReadErrorClass. Word-level classes pass through;
+ * transport-only verdicts (auth-failure, identity-mismatch, route misses)
+ * fold into provider-unavailable with the specifics preserved in the
+ * message (ukp_remote W2 mapping decision, workline-recorded). */
+function mapRemoteReadErrorClass(errorClass: string | undefined): ReadErrorClass {
+  if (errorClass === "resource-missing") return "resource-missing";
+  if (errorClass === "provider-timeout") return "provider-timeout";
+  if (errorClass === "usage-error") return "usage-error";
+  return "provider-unavailable";
+}
+
+async function executeRemoteRead(
+  request: ReadRequest,
+  format: "json" | undefined,
+  binding: RegistryBinding,
+): Promise<ReadCommandResult> {
+  const token = remoteTokenFor(binding.name);
+  const warnings: string[] = [];
+  try {
+    const discovery = await fetchDiscoveryDocument(binding, token);
+    warnings.push(...discovery.warnings);
+    if (discovery.bearerRequired && token === undefined) warnings.push(remoteTokenHint(binding.name));
+  } catch (error) {
+    return renderReadOutcome(
+      request,
+      {
+        ok: false,
+        failure: {
+          errorClass: "provider-unavailable",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      },
+      format,
+      warnings,
+    );
+  }
+
+  if (request.fromRef !== undefined) {
+    return renderReadOutcome(
+      request,
+      {
+        ok: false,
+        failure: {
+          errorClass: "provider-incompatible",
+          message: "--from document-relative references are local-only; remote reads take an endpoint-relative ref or a ukp:// URI (ukp_remote W2)",
+        },
+      },
+      format,
+      warnings,
+    );
+  }
+
+  const params = {
+    ref: request.path,
+    ...(request.lines !== undefined
+      ? { lines: `${request.lines.start}${request.lines.count !== undefined ? `:${request.lines.count}` : ""}` }
+      : {}),
+    ...(request.pin !== undefined ? { pin: request.pin } : {}),
+  };
+  let result;
+  try {
+    result = await remoteRead(binding, token, params);
+  } catch (error) {
+    return renderReadOutcome(
+      request,
+      {
+        ok: false,
+        failure: {
+          errorClass: "provider-unavailable",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      },
+      format,
+      warnings,
+    );
+  }
+  if (result.ok) {
+    return renderReadOutcome(
+      request,
+      { ok: true, result: { content: result.content, recoveryWarnings: [] } },
+      format,
+      warnings,
+    );
+  }
+  return renderReadOutcome(
+    request,
+    {
+      ok: false,
+      failure: {
+        errorClass: mapRemoteReadErrorClass(result.errorClass),
+        message: result.errorMessage ?? `remote read failed (status ${result.status})`,
+      },
+    },
+    format,
+    warnings,
+  );
 }
 
 export function renderReadHelp(): string {
