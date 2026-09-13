@@ -251,7 +251,7 @@ describe("remote search (mixed driver)", () => {
   });
 
   test("bearer-token endpoint: missing token fails the remote endpoint with the env hint", async () => {
-    const { info } = startRemote({ token: "w2-secret" });
+    const { info } = startRemote({ tokens: ["w2-secret"] });
     registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
     delete process.env.UKP_ENDPOINT_SERVE_FIXTURE_TOKEN;
     const denied = await asResult(executeSearchCommand(["fixture-cad-search-token", "-c", "serve-fixture"], {
@@ -273,6 +273,38 @@ describe("remote search (mixed driver)", () => {
       expect(allowed.stdout).toContain("read: ukp read ukp://serve-fixture/documents/cad-notes.md#L1");
     } finally {
       delete process.env.UKP_ENDPOINT_SERVE_FIXTURE_TOKEN;
+    }
+  });
+});
+
+describe("TOFU block mode (RQ-17, UKP_TOFU=block)", () => {
+  test("identity mismatch refuses search and read instead of warning", async () => {
+    const { info } = startRemote();
+    registerRemoteAt(registryPath, {
+      name: "serve-fixture",
+      url: info.url,
+      instance_uid: "00000000-0000-0000-0000-000000000000",
+    });
+    process.env.UKP_TOFU = "block";
+    try {
+      const search = await asResult(executeSearchCommand(["fixture-cad-search-token", "-c", "serve-fixture"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand,
+      }));
+      expect(search.exitCode).toBe(1);
+      expect(search.stderr).toContain("identity changed");
+      expect(search.stderr).toContain("UKP_TOFU=block");
+
+      const read = await asResult(executeReadCommand(["--endpoint", "serve-fixture", "documents/cad-notes.md"], {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand,
+      }));
+      expect(read.exitCode).toBe(1);
+      expect(read.stderr).toContain("UKP_TOFU=block");
+    } finally {
+      delete process.env.UKP_TOFU;
     }
   });
 });

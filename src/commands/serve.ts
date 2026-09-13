@@ -14,7 +14,14 @@ export interface ServeCommandContext {
   registryPath: string;
   qmdCommand?: readonly string[];
   /** Overrides `process.env.UKP_SERVE_TOKEN` for tests. */
-  token?: string;
+  tokens?: readonly string[];
+}
+
+/** `UKP_SERVE_TOKEN=a,b,c` (RQ-16): comma-separated, trimmed, empty entries
+ * dropped — any listed token authorizes. */
+function parseServeTokens(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  return raw.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
 }
 
 /** Single-source command spec (ADR 0024): long-running host command — the
@@ -44,8 +51,14 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "",
     "Auth:",
     "  Set UKP_SERVE_TOKEN to require 'Authorization: Bearer <token>' on /v1",
-    "  routes; the discovery document stays public. A non-loopback --host",
-    "  without a token is refused.",
+    "  routes; the discovery document stays public. Comma-separate multiple",
+    "  tokens (UKP_SERVE_TOKEN=alice,bob). A non-loopback --host without a",
+    "  token is refused.",
+    "",
+    "  Loopback-without-token is the testing/dogfood posture, not the way to",
+    "  consume a same-machine endpoint — register its local path instead.",
+    "  serve speaks plain HTTP; TLS and public exposure belong to a reverse",
+    "  proxy (see README: Remote Deployment).",
     "",
   ].join("\n"),
 };
@@ -94,8 +107,8 @@ export function executeServeCommand(
 ): KitCommandResult {
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
     const { endpoint, host, port } = toParsedServe(parsed);
-    const token = context.token ?? process.env.UKP_SERVE_TOKEN;
-    if (!isLoopback(host) && token === undefined) {
+    const tokens = context.tokens ?? parseServeTokens(process.env.UKP_SERVE_TOKEN);
+    if (!isLoopback(host) && tokens.length === 0) {
       throw new Error(
         `refusing to serve '${endpoint}' on non-loopback ${host} without a token: set UKP_SERVE_TOKEN`,
       );
@@ -107,7 +120,7 @@ export function executeServeCommand(
       qmdCommand: context.qmdCommand,
       host,
       port,
-      ...(token !== undefined ? { token } : {}),
+      ...(tokens.length > 0 ? { tokens } : {}),
     });
     const stop = () => {
       console.error(`ukp serve: stopped (${info.url})`);

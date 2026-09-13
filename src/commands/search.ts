@@ -191,7 +191,7 @@ async function executeMixedSearch(
 ): Promise<SearchCommandResult> {
   const remoteNames = new Set(remotes.map((binding) => binding.name));
   const localNames = scope.bindings.filter((binding) => !remoteNames.has(binding.name)).map((b) => b.name);
-  const warnings: string[] = [...parsed.warnings, ...scope.warnings];
+  const baseWarnings: string[] = [...parsed.warnings, ...scope.warnings];
 
   let localResult: SearchResult | undefined;
   if (localNames.length > 0) {
@@ -199,11 +199,14 @@ async function executeMixedSearch(
       {
         ...parsed,
         options: { ...parsed.options, explicitEndpoints: localNames, global: false },
-        warnings: [...warnings],
+        warnings: [...baseWarnings],
       },
       context,
     );
   }
+  // Local run warnings (provider failures, duplicate-endpoint notes) carry
+  // into the merged view; remote-phase warnings append after them.
+  const warnings: string[] = localResult !== undefined ? [...localResult.warnings] : [...baseWarnings];
 
   const remoteOutcomes = new Map<string, SearchEndpointOutcome>();
   for (const binding of remotes) {
@@ -234,11 +237,15 @@ async function executeMixedSearch(
           : {}),
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Local failures surface via warnings (D-036 render contract); remote
+      // transport failures join them so stderr stays the failure channel.
+      warnings.push(`endpoint '${binding.name}' provider failed: ${message}`);
       remoteOutcomes.set(binding.name, {
         name: binding.name,
         provider: null,
         status: "failed",
-        message: error instanceof Error ? error.message : String(error),
+        message,
       });
     }
   }
