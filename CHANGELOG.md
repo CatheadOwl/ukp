@@ -2,32 +2,37 @@
 
 All notable public changes to UKP will be documented in this file.
 
-## [Unreleased]
+## [0.1.0] - unreleased
 
-### Changed
-
-- Rename the `refresh` command and capability to `update`: the command is now
-  `ukp update`, Service Manifests declare `[capabilities.update]`, and the
-  `refresh` capability/provider route becomes `update/qmd`. The old spelling is
-  removed rather than kept as an alias (no external users; same approach as the
-  earlier `get` → `read` rename).
-- Rename the provider timeout override environment variable to
-  `UKP_UPDATE_TIMEOUT_MS`.
-- Human output now reports `capability: update` and `status: updated`.
-
-## [0.1.0] - 2026-08-22
+The first public release; the date is set when the package is published.
 
 ### Added
 
-- Prepare the first public `@catheadowl/ukp` package shape.
-- Ship the local-first CLI surface for Service onboarding, diagnosis,
-  registration, inspection, search, get, and refresh.
-- Support QMD-backed `search`, `get`, and `refresh` provider adapters.
-- Include agent-oriented JSON output and provider-native artifact references.
-- Add public GitHub Actions templates for CI and npm trusted publishing.
+- Local-first CLI for named Knowledge Service endpoints, with TOML Service
+  Manifest, Host Registry, and Client Config.
+- Endpoint commands: `ukp search` (indexed search through the endpoint's search
+  provider, with `--recursive` over direct authority/context dependencies),
+  `ukp read` (endpoint-scoped resource references, layered rename recovery, and
+  `ukp-pin` content-hash verification), `ukp nav`, `ukp rg` (base lexical search
+  over endpoint files), and `ukp propose` (idempotent change proposals through
+  the file provider).
+- Registry commands: `ukp init service`, `ukp register`, `ukp unregister`, and
+  `ukp list`.
+- Operations commands: `ukp diagnose`, `ukp inspect`, and `ukp update`.
+- Help commands: `ukp version`, `ukp guide service`, `ukp guide service qmd`,
+  `ukp guide client`, and `ukp guide propose`.
+- `ukp://<endpoint>/<relative-path>` addressing as a durable reference form,
+  with provider-backed reading through the QMD adapter.
+- Agent-oriented `--format json` output, reference sidecars, and
+  provider-native artifacts.
+- Public GitHub Actions templates for CI and npm trusted publishing.
 
 ### Notes
 
 - This is an MVP/demo-but-usable release, not a stable 1.0 protocol.
-- Remote endpoints, semantic search tier, API Search, full Client Scope, and
-  standalone binary distribution are not included yet.
+- QMD collection, index, ranking, and maintenance stay provider-owned.
+- Not included: Remote endpoints or a formal network protocol; the semantic
+  search tier, API Search, query rewrite, reranking, or deduplication; full
+  Client Scope with aliases, visibility, inheritance, or profiles; automatic
+  artifact browsing, cleanup, or result-selection references; standalone binary
+  distribution.

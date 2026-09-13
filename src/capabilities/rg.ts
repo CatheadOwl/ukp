@@ -7,7 +7,7 @@ import { readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { isInsideRealRoot } from "../path-safety.ts";
 
-// rg capability (ADR-RG-001..004, workunits/ukp_rg): an independent atomic
+// rg capability (ADR-RG-001..004): an independent atomic
 // capability parallel to `search` — base lexical search over the endpoint's
 // own files via ripgrep. Thin shaping only (vision principle 6): UKP owns
 // name→cwd resolution, scope boundaries, and output shaping into
