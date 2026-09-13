@@ -21,14 +21,73 @@ import { acquireLock, LockBusyError, releaseLock } from "./fslock.ts";
 
 const bindingSchema = z.object({
   name: z.string().min(1),
-  path: z.string().min(1),
+  path: z.string().min(1).optional(),
+  /** Discriminator written only for remote bindings (D-077); absence = local. */
+  kind: z.literal("remote").optional(),
+  url: z.string().min(1).optional(),
+  instance_uid: z.string().min(1).optional(),
 }).strict();
 
 const registrySchema = z.object({
   endpoints: z.array(bindingSchema),
 }).strict();
 
-export type RegistryBinding = z.infer<typeof bindingSchema>;
+/** Binding union over the `kind` axis (D-077). Local bindings keep the
+ * historical `{name, path}` shape (no injected `kind` field), so parsed
+ * locals stay byte-identical to the pre-remote era; remote bindings carry
+ * `kind: "remote"` with `url` and an optional TOFU-pinned `instance_uid`.
+ * Field exclusivity is enforced by validateBindings, not the type. */
+export interface RegistryBinding {
+  name: string;
+  /** Local canonical absolute path (local bindings only). */
+  path?: string;
+  kind?: "remote";
+  url?: string;
+  instance_uid?: string;
+}
+
+export function isRemoteBinding(binding: RegistryBinding): boolean {
+  return binding.kind === "remote";
+}
+
+/** Local path accessor with a classified error for remote bindings — the
+ * single narrowing point local-filesystem consumers route through. */
+export function localPathOf(binding: RegistryBinding): string {
+  if (binding.kind === "remote" || binding.path === undefined) {
+    throw new RegistryError(
+      `endpoint '${binding.name}' is a remote binding (${binding.url}); it has no local Service folder`,
+    );
+  }
+  return binding.path;
+}
+
+export function isLoopbackHttpUrl(raw: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:") return false;
+  const host = parsed.hostname.toLowerCase();
+  return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+}
+
+/** Remote URL admission (ADR-REM-003 §7): https always; plain http only on
+ * loopback (local dogfood). Enforced at registration AND at call time. */
+export function assertRemoteUrlAllowed(raw: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new RegistryError(`remote endpoint url is not a valid absolute URL: ${raw}`);
+  }
+  if (parsed.protocol === "https:") return;
+  if (parsed.protocol === "http:" && isLoopbackHttpUrl(raw)) return;
+  throw new RegistryError(
+    `remote endpoint url must be https (plain http is loopback-only): ${raw}`,
+  );
+}
 
 export class RegistryError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -49,17 +108,33 @@ export class RegistryBusyError extends RegistryError {
 function validateBindings(endpoints: readonly RegistryBinding[]): RegistryBinding[] {
   const names = new Set<string>();
   const paths = new Set<string>();
+  const urls = new Set<string>();
   for (const endpoint of endpoints) {
     if (!ENDPOINT_NAME.test(endpoint.name)) {
       throw new RegistryError(`invalid endpoint name '${endpoint.name}'`);
     }
-    if (!isAbsolute(endpoint.path)) {
-      throw new RegistryError(`registry path must be absolute: ${endpoint.path}`);
+    if (endpoint.kind === "remote") {
+      if (endpoint.path !== undefined) {
+        throw new RegistryError(`remote binding '${endpoint.name}' must not carry a local path`);
+      }
+      if (endpoint.url === undefined) {
+        throw new RegistryError(`remote binding '${endpoint.name}' requires a url`);
+      }
+      assertRemoteUrlAllowed(endpoint.url);
+      if (urls.has(endpoint.url)) throw new RegistryError(`duplicate remote endpoint url '${endpoint.url}'`);
+      urls.add(endpoint.url);
+    } else {
+      if (endpoint.url !== undefined || endpoint.instance_uid !== undefined) {
+        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid)`);
+      }
+      if (endpoint.path === undefined || !isAbsolute(endpoint.path)) {
+        throw new RegistryError(`registry path must be absolute: ${endpoint.path ?? "(missing)"}`);
+      }
+      if (paths.has(endpoint.path)) throw new RegistryError(`duplicate endpoint location '${endpoint.path}'`);
+      paths.add(endpoint.path);
     }
     if (names.has(endpoint.name)) throw new RegistryError(`duplicate endpoint name '${endpoint.name}'`);
-    if (paths.has(endpoint.path)) throw new RegistryError(`duplicate endpoint location '${endpoint.path}'`);
     names.add(endpoint.name);
-    paths.add(endpoint.path);
   }
   return [...endpoints].sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
 }
@@ -90,9 +165,24 @@ export function readRegistry(registryPath: string): RegistryBinding[] {
   }
 }
 
+/** Canonical serialization (configuration-contracts 规范序列化): local rows
+ * `{name, path}`, remote rows `{name, kind, url, instance_uid?}` — key order
+ * is insertion order, so build plain ordered objects before stringify. */
+function toSerializableBinding(binding: RegistryBinding): Record<string, string> {
+  if (binding.kind === "remote") {
+    return {
+      name: binding.name,
+      kind: "remote",
+      url: binding.url!,
+      ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
+    };
+  }
+  return { name: binding.name, path: binding.path! };
+}
+
 export function serializeRegistry(endpoints: readonly RegistryBinding[]): string {
   const sorted = validateBindings(endpoints);
-  const value = { endpoints: sorted };
+  const value = { endpoints: sorted.map(toSerializableBinding) };
   const encoded = stringify(value);
   // Re-parse serializer output through the same validation pipeline.
   parseRegistry(encoded, "serialized registry");
@@ -100,15 +190,48 @@ export function serializeRegistry(endpoints: readonly RegistryBinding[]): string
 }
 
 export function registerBinding(endpoints: readonly RegistryBinding[], binding: RegistryBinding): RegistryBinding[] {
-  const canonical: RegistryBinding = { name: binding.name, path: realpathSync(binding.path) };
+  if (binding.kind === "remote") return registerRemoteBinding(endpoints, binding);
+  const canonical: RegistryBinding = { name: binding.name, path: realpathSync(binding.path!) };
   const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
   if (sameName) {
-    if (sameName.path === canonical.path) return validateBindings(endpoints);
-    throw new RegistryError(`endpoint name '${canonical.name}' is already bound to ${sameName.path}`);
+    if (sameName.kind !== "remote" && sameName.path === canonical.path) return validateBindings(endpoints);
+    throw new RegistryError(
+      `endpoint name '${canonical.name}' is already bound to ${sameName.kind === "remote" ? sameName.url : sameName.path}`,
+    );
   }
-  const samePath = endpoints.find((endpoint) => endpoint.path === canonical.path);
+  const samePath = endpoints.find((endpoint) => endpoint.kind !== "remote" && endpoint.path === canonical.path);
   if (samePath) {
     throw new RegistryError(`Service location is already bound to '${samePath.name}'`);
+  }
+  return validateBindings([...endpoints, canonical]);
+}
+
+/** Remote registration (D-077): name comes from the discovery document
+ * (RQ-14), instance_uid is the TOFU pin. Idempotent on same name+url. */
+export function registerRemoteBinding(
+  endpoints: readonly RegistryBinding[],
+  binding: RegistryBinding,
+): RegistryBinding[] {
+  const canonical: RegistryBinding = {
+    name: binding.name,
+    kind: "remote",
+    url: binding.url!,
+    ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
+  };
+  const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
+  if (sameName) {
+    if (sameName.kind === "remote" && sameName.url === canonical.url) {
+      // Same name+url re-registration refreshes the TOFU pin (service
+      // replacement is an explicit re-register, ADR-REM-003).
+      return validateBindings([...endpoints.filter((e) => e.name !== canonical.name), canonical]);
+    }
+    throw new RegistryError(
+      `endpoint name '${canonical.name}' is already bound to ${sameName.kind === "remote" ? sameName.url : sameName.path}`,
+    );
+  }
+  const sameUrl = endpoints.find((endpoint) => endpoint.kind === "remote" && endpoint.url === canonical.url);
+  if (sameUrl) {
+    throw new RegistryError(`remote endpoint url is already bound to '${sameUrl.name}'`);
   }
   return validateBindings([...endpoints, canonical]);
 }
@@ -170,6 +293,13 @@ export function registerAt(registryPath: string, name: string, servicePath: stri
   const canonicalPath = realpathSync(servicePath);
   if (!statSync(canonicalPath).isDirectory()) throw new RegistryError(`Service location is not a directory: ${servicePath}`);
   return mutateRegistry(registryPath, (current) => registerBinding(current, { name, path: canonicalPath }));
+}
+
+export function registerRemoteAt(
+  registryPath: string,
+  binding: { name: string; url: string; instance_uid?: string },
+): RegistryBinding[] {
+  return mutateRegistry(registryPath, (current) => registerRemoteBinding(current, binding));
 }
 
 export function unregisterAt(registryPath: string, name: string): RegistryBinding[] {

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { loadManifest } from "../config/manifest.ts";
-import { readRegistry } from "../registry.ts";
+import { isRemoteBinding, localPathOf, readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, providerTimeoutMs, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
 import { isValidPin, pinFromSourceDocument, recoverRenamedResource, type RecoveryCandidate } from "./rename-recovery.ts";
@@ -230,10 +230,11 @@ function resolveDocRelativeReference(fromRef: string, reference: string): string
  */
 function resolveAbsoluteReference(
   reference: string,
-  registry: readonly { name: string; path: string }[],
+  registry: readonly RegistryBinding[],
 ): { endpoint: string; route: string } {
   const matches: { endpoint: string; route: string }[] = [];
   for (const binding of registry) {
+    if (isRemoteBinding(binding) || binding.path === undefined) continue;
     let service: ReturnType<typeof loadManifest>;
     try {
       service = loadManifest(binding.path);
@@ -722,8 +723,16 @@ function executeResolvedRead(
   if (!binding) {
     return readFailure("no-endpoint", "no endpoint selected");
   }
+  if (isRemoteBinding(binding)) {
+    // Defensive: the read adapter routes remote endpoints through the
+    // remote transport before runRead is reached.
+    return readFailure(
+      "provider-incompatible",
+      `endpoint '${binding.name}' is remote (${binding.url}); remote reads route through the remote transport`,
+    );
+  }
 
-  const service = loadManifest(binding.path);
+  const service = loadManifest(localPathOf(binding));
   if (service.effectiveName !== binding.name) {
     return readFailure(
       "endpoint-name-mismatch",

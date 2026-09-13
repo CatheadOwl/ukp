@@ -3,7 +3,15 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { executeReadCommand } from "../src/commands/read.ts";
+import { executeReadCommand as executeReadCommandMaybeAsync, type ReadCommandResult } from "../src/commands/read.ts";
+
+// ukp_remote W2 conditional-async seam: local reads stay synchronous; this
+// wrapper keeps the call sites untouched (see read.test.ts for the pattern).
+function executeReadCommand(args: readonly string[], context: Parameters<typeof executeReadCommandMaybeAsync>[1]): ReadCommandResult {
+  const result = executeReadCommandMaybeAsync(args, context);
+  if (result instanceof Promise) throw new Error("local read unexpectedly took the async path");
+  return result;
+}
 import { registerAt } from "../src/registry.ts";
 import { isValidPin, pinHashOf } from "../src/capabilities/rename-recovery.ts";
 

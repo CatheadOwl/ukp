@@ -2,7 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { executeReadCommand, parseReadArgs } from "../src/commands/read.ts";
+import { executeReadCommand as executeReadCommandMaybeAsync, parseReadArgs, type ReadCommandResult } from "../src/commands/read.ts";
+
+// ukp_remote W2 conditional-async seam: every pre-existing test here is a
+// local read, which stays fully synchronous. This wrapper keeps the 60+
+// call sites untouched and fails loudly if a local case ever goes async.
+function executeReadCommand(args: readonly string[], context: Parameters<typeof executeReadCommandMaybeAsync>[1]): ReadCommandResult {
+  const result = executeReadCommandMaybeAsync(args, context);
+  if (result instanceof Promise) throw new Error("local read unexpectedly took the async path");
+  return result;
+}
 import { registerAt } from "../src/registry.ts";
 import { buildQmdInvocation, stripQmdHeader } from "../src/capabilities/qmd.ts";
 

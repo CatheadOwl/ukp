@@ -17,7 +17,7 @@ import {
   type LoadedManifest,
   type ManifestDependency,
 } from "../config/manifest.ts";
-import { readRegistry, type RegistryBinding } from "../registry.ts";
+import { isRemoteBinding, localPathOf, readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { isAbsoluteShapedPath, isInsideRealRoot } from "../path-safety.ts";
 import { buildQmdInvocation, defaultQmdCommand, isDocidBody, providerTimeoutMs, stripDocidHash } from "./qmd.ts";
@@ -102,6 +102,10 @@ export interface SearchEndpointOutcome {
   references_artifact?: string;
   references_format?: "ukp-search-references-v1";
   error_artifact?: string;
+  /** Remote endpoints only (ukp_remote W2): server-declared `ukp_uri` per
+   * result index (RQ-06/RQ-09 — the server owns containment). Internal
+   * renderer input like `folder`, never part of the envelope. */
+  remoteUris?: ReadonlyArray<string | undefined>;
 }
 
 /** ADR 0021 structured outcome: everything both render modes and future
@@ -190,9 +194,20 @@ function planSearch(parsed: ParsedSearch, context: SearchContext): {
     binding: RegistryBinding,
     traversal?: TraversalProvenance,
   ): PlannedEndpoint => {
+    if (isRemoteBinding(binding)) {
+      // Adapter responsibility: remote endpoints execute through the remote
+      // transport (commands/search.ts mixed driver); the local planner only
+      // records the skip defensively.
+      return {
+        name: binding.name,
+        provider: null,
+        status: "skipped",
+        warning: "remote endpoints execute via the remote transport; the local planner skipped it",
+      };
+    }
     let service;
     try {
-      service = loadManifest(binding.path);
+      service = loadManifest(localPathOf(binding));
     } catch (error) {
       if (!isStaleServiceBinding(error)) throw error;
       const detail = error instanceof Error ? error.message : String(error);
@@ -669,11 +684,16 @@ function renderResultUnit(
   endpointName: string,
   endpointFolder: string,
   result: unknown,
+  remoteUri?: string,
+  remoteEndpoint = false,
 ): string {
   const providerLocation = providerLocationOf(result);
   const docid = docidOf(result);
   const line = lineOf(result);
-  const ukpUri = ukpUriOf(providerLocation, endpointName, endpointFolder);
+  // Remote endpoints carry the server-declared ukp_uri (RQ-06/RQ-09): it is
+  // the handoff key, so the read line addresses the URI directly and the
+  // local docid serves provenance only.
+  const ukpUri = remoteUri ?? ukpUriOf(providerLocation, endpointName, endpointFolder);
   const title = rawTitleOf(result);
   const base = basenameOf(providerLocation);
   const location = base ? (line ? `${base}:${line}` : base) : "";
@@ -687,13 +707,18 @@ function renderResultUnit(
 
   const lines = [`${unitIndex}. ${identity}`];
   if (excerpt && excerpt !== fallback) lines.push(`   ${excerpt.replace(/\n/g, "\n   ")}`);
-  if (docid) {
+  if (remoteUri !== undefined) {
+    lines.push(`   read: ukp read ${remoteUri}${line ? `#L${line}` : ""}`);
+  } else if (docid && !remoteEndpoint) {
+    // Remote endpoints never hand off via docid (RQ-09: session-scoped
+    // fingerprint, meaningless across the wire) — a result without a
+    // server-declared ukp_uri has no remote read route at all.
     const key = line ? `${docid}:${line}` : docid;
     lines.push(`   read: ukp read --endpoint ${endpointName} ${key}`);
   } else {
     lines.push(`   (no direct read — provider-managed result)`);
   }
-  if (ukpUri) lines.push(`   uri: ${ukpUri}`);
+  if (ukpUri && remoteUri === undefined) lines.push(`   uri: ${ukpUri}`);
   return lines.join("\n");
 }
 
@@ -705,7 +730,12 @@ function renderResultUnit(
  * empty array renders `(no matches)`. Units are separated by a blank line so
  * each `N.` block reads as one self-contained chunk even with multi-line excerpts.
  */
-function renderResultUnits(providerOutput: string, endpointName: string, endpointFolder: string): string | null {
+function renderResultUnits(
+  providerOutput: string,
+  endpointName: string,
+  endpointFolder: string,
+  remoteUris?: ReadonlyArray<string | undefined>,
+): string | null {
   let nativeResults: unknown;
   try {
     nativeResults = JSON.parse(providerOutput);
@@ -715,7 +745,7 @@ function renderResultUnits(providerOutput: string, endpointName: string, endpoin
   if (!Array.isArray(nativeResults)) return null;
   if (nativeResults.length === 0) return "(no matches)";
   return nativeResults
-    .map((result, index) => renderResultUnit(index + 1, endpointName, endpointFolder, result))
+    .map((result, index) => renderResultUnit(index + 1, endpointName, endpointFolder, result, remoteUris?.[index], remoteUris !== undefined))
     .join("\n\n");
 }
 
@@ -1062,7 +1092,10 @@ export function renderSearchHuman(result: SearchResult): string {
         endpoint.folder
           ? (renderResultUnits(endpoint.providerOutput, endpoint.name, endpoint.folder)
             ?? renderFallbackProviderBlock(endpoint.providerOutput, endpoint.name))
-          : renderFallbackProviderBlock(endpoint.providerOutput, endpoint.name),
+          : endpoint.remoteUris !== undefined
+            ? (renderResultUnits(endpoint.providerOutput, endpoint.name, "", endpoint.remoteUris)
+              ?? renderFallbackProviderBlock(endpoint.providerOutput, endpoint.name))
+            : renderFallbackProviderBlock(endpoint.providerOutput, endpoint.name),
       );
     } else if (endpoint.providerExitStatus === 0) {
       lines.push("(no matches)");

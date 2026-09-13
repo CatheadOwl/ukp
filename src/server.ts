@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 import { loadManifest, type LoadedManifest } from "./config/manifest.ts";
-import { readRegistry } from "./registry.ts";
+import { localPathOf, readRegistry } from "./registry.ts";
 import { FILE_NATIVE_CAPABILITIES } from "./config/file-native.ts";
 import {
   buildInlineReferences,
@@ -206,10 +206,12 @@ export function startUkpServer(config: ServeConfig): StartedServe {
       `endpoint '${config.endpointName}' is not registered (Host Registry: ${config.registryPath}); run 'ukp list' to inspect registrations`,
     );
   }
+  // serve exposes a local Service folder; remote bindings are refused here.
+  const serviceFolder = localPathOf(binding);
   // RQ-14 symmetry: the served binding name must equal the manifest's
   // effective name, mirroring the local `effectiveName === binding.name`
   // assertion — checked at startup and on every discovery fetch.
-  const startupManifest = loadManifest(binding.path);
+  const startupManifest = loadManifest(serviceFolder);
   if (startupManifest.effectiveName !== binding.name) {
     throw new ServeSetupError(
       `identity mismatch: binding '${binding.name}' resolves to a Service declaring '${startupManifest.effectiveName}'`,
@@ -226,7 +228,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
       try {
         // Fresh manifest per fetch: same per-invocation freshness as the
         // local file-based loader (no server-side caching in v1).
-        const loaded = loadManifest(binding.path);
+        const loaded = loadManifest(serviceFolder);
         if (loaded.effectiveName !== binding.name) {
           return jsonResponse(
             errorBody(
@@ -237,7 +239,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
           );
         }
         return jsonResponse(
-          buildDiscoveryDocument(loaded, readInstanceUid(binding.path), config.token !== undefined),
+          buildDiscoveryDocument(loaded, readInstanceUid(serviceFolder), config.token !== undefined),
         );
       } catch (error) {
         return jsonResponse(
@@ -258,7 +260,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
         }
       }
       return url.pathname === "/v1/search"
-        ? await handleSearch(request, config, binding.name, binding.path)
+        ? await handleSearch(request, config, binding.name, serviceFolder)
         : handleRead(url, request, config, binding.name);
     }
 
@@ -279,8 +281,8 @@ export function startUkpServer(config: ServeConfig): StartedServe {
 
   const info: ServeInfo = {
     endpoint: binding.name,
-    folder: binding.path,
-    instanceUid: readInstanceUid(binding.path),
+    folder: serviceFolder,
+    instanceUid: readInstanceUid(serviceFolder),
     url: `http://${host}:${server.port ?? (config.port ?? 8570)}`,
     host,
     port: server.port ?? (config.port ?? 8570),
@@ -330,7 +332,23 @@ async function handleSearch(
   const references = first !== undefined && first.folder !== undefined && typeof first.providerOutput === "string"
     ? buildInlineReferences(endpointName, first.folder, first.providerOutput)
     : undefined;
-  return jsonResponse({ ...envelope, ...(references !== undefined ? { references } : {}) });
+  // Provider-native results array (ADR-REM-002 W2 amendment): the client's
+  // human renderer needs result-unit material (title/snippet) that the
+  // references mapping does not carry — this is providerOutput's wire form.
+  let results: unknown[] | undefined;
+  if (typeof first?.providerOutput === "string") {
+    try {
+      const parsed = JSON.parse(first.providerOutput);
+      if (Array.isArray(parsed)) results = parsed;
+    } catch {
+      // Non-JSON provider output (fallback render path locally) — omit.
+    }
+  }
+  return jsonResponse({
+    ...envelope,
+    ...(references !== undefined ? { references } : {}),
+    ...(results !== undefined ? { results } : {}),
+  });
 }
 
 function handleRead(url: URL, request: Request, config: ServeConfig, endpointName: string): Response {

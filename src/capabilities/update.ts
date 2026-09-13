@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { loadClientConfig, findNearestClientConfig } from "../config/client.ts";
 import { loadManifest } from "../config/manifest.ts";
-import { readRegistry, type RegistryBinding } from "../registry.ts";
+import { isRemoteBinding, localPathOf, readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
 import { buildQmdInvocation, defaultQmdCommand, updateTimeoutMs } from "./qmd.ts";
 
@@ -147,8 +147,17 @@ function planUpdate(parsed: ParsedUpdate, context: UpdateContext): {
   }
 
   for (const binding of bindings) {
+    if (isRemoteBinding(binding)) {
+      plan.push({
+        name: binding.name,
+        provider: null,
+        status: "skipped",
+        message: `endpoint '${binding.name}' is remote (${binding.url}); update is not yet remote-enabled (ukp_remote W3)`,
+      });
+      continue;
+    }
     try {
-      const service = loadManifest(binding.path);
+      const service = loadManifest(localPathOf(binding));
       if (service.effectiveName !== binding.name) {
         plan.push({
           name: binding.name,

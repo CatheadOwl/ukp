@@ -1,9 +1,7 @@
 import { findNearestClientConfig, loadClientConfig } from "./config/client.ts";
+import type { RegistryBinding } from "./registry.ts";
 
-export interface RegistryBinding {
-  name: string;
-  path: string;
-}
+export type { RegistryBinding };
 
 export interface DanglingEndpoint {
   name: string;

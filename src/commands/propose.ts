@@ -26,6 +26,7 @@ const PROPOSE_EXIT_BY_ERROR_CLASS: Record<ProposeErrorClass, number> = {
   "endpoint-name-mismatch": 1,
   "capability-undeclared": 1,
   "submission-file-unreadable": 1,
+  "provider-unsupported": 1,
 };
 
 /** CLI composition of the structured outcome (ADR 0021); kept as the test

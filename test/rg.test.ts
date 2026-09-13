@@ -147,7 +147,9 @@ describe("ukp rg command surface", () => {
       const envelope = JSON.parse(rgResult.stdout);
       const uri = envelope.endpoints[0].matches[0].ukp_uri;
       const { executeReadCommand } = await import("../src/commands/read.ts");
-      const read = executeReadCommand([uri], { currentDirectory: root, registryPath: context.registryPath });
+      const readMaybeAsync = executeReadCommand([uri], { currentDirectory: root, registryPath: context.registryPath });
+      if (readMaybeAsync instanceof Promise) throw new Error("local read unexpectedly took the async path");
+      const read = readMaybeAsync;
       expect(read.exitCode).toBe(0);
       expect(read.stdout).toContain("the needle line");
     } finally {

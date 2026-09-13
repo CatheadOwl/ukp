@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadManifest } from "../config/manifest.ts";
 import { resolveExternalToolCapability, EXTERNAL_PROVIDER } from "../config/external-tool.ts";
-import { readRegistry } from "../registry.ts";
+import { isRemoteBinding, localPathOf, readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { isInsideRealRoot } from "../path-safety.ts";
 
@@ -197,7 +197,12 @@ function planRg(parsed: ParsedRg, context: RgContext): { plan: PlannedEndpoint[]
   const warnings = [...parsed.warnings, ...scope.warnings];
   const plan: PlannedEndpoint[] = [];
   for (const binding of scope.bindings) {
-    const service = loadManifest(binding.path);
+    if (isRemoteBinding(binding)) {
+      throw new RgPlanningError(
+        `endpoint '${binding.name}' is remote (${binding.url}); rg is not yet remote-enabled (ukp_remote W3)`,
+      );
+    }
+    const service = loadManifest(localPathOf(binding));
     if (service.effectiveName !== binding.name) {
       throw new RgPlanningError(
         `endpoint '${binding.name}' no longer matches Service effective name '${service.effectiveName}'`,
