@@ -618,7 +618,7 @@ function readTargetWithLines(targetPath: string, request: ReadRequest): ReadOutc
       return readFailure("resource-disappeared", "resource disappeared during lookup");
     }
     // A directory tail resolves as a path but is not a readable resource; the
-    // failure must state that in product terms instead of leaking the Node
+    // failure must state that in operator-facing terms instead of leaking the Node
     // errno (`EISDIR: illegal operation on a directory, read`) as the surface.
     if (error instanceof Error && "code" in error && error.code === "EISDIR") {
       return readFailure(
@@ -657,7 +657,7 @@ export function runRead(request: ReadRequest, context: ReadContext): ReadOutcome
   }
 
   // Tolerant-addressing pre-pass (ADR-URI-001): the caller's address encoding
-  // is the product's job, never a shape the agent must pre-normalize. Two
+  // is UKP's job, never a shape the agent must pre-normalize. Two
   // explicit tiers — an absolute filesystem path mapped against the Registry
   // (endpoint inferred), and a document-relative reference resolved against
   // --from. Both rewrite the request to the canonical endpoint+route and

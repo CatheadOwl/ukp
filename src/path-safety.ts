@@ -1,7 +1,7 @@
 import { isAbsolute, relative, win32 } from "node:path";
 
-// Path-safety primitives (ADR 0023 / D-073, spec product/specs/
-// path-safety-primitives.md): three pure, error-class-neutral checks shared
+// Path-safety primitives (ADR 0023 / D-073, promoted spec
+// `path-safety-primitives`): three pure, error-class-neutral checks shared
 // by the file-facing capabilities. The module owns the *verdicts* only —
 // failure semantics (usage error vs silent drop), root semantics
 // (`allowRoot`), realpath fallbacks and existence checks are per-capability
