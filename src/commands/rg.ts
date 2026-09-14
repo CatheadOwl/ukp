@@ -10,8 +10,19 @@ import {
   type ParsedRg,
   type RgAggregateStatus,
   type RgContext,
+  type RgEndpointOutcome,
+  type RgResult,
 } from "../capabilities/rg.ts";
-import { ScopeError } from "../scope.ts";
+import { EXTERNAL_PROVIDER } from "../config/external-tool.ts";
+import {
+  fetchDiscoveryDocument,
+  openRemoteTransport,
+  remoteRg,
+  resolveRemoteToken,
+  type RemoteTransportHandle,
+} from "../capabilities/remote-client.ts";
+import { isRemoteBinding, readRegistry, type RegistryBinding } from "../registry.ts";
+import { resolveScope, ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
 import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
 import { HelpRequestError, isHelpRequest } from "./flags.ts";
@@ -147,7 +158,10 @@ export function splitRgPassthrough(args: readonly string[]): { commandArgs: stri
   };
 }
 
-export function executeRgCommand(args: readonly string[], context: RgContext): RgCommandResult {
+export function executeRgCommand(
+  args: readonly string[],
+  context: RgContext,
+): RgCommandResult | Promise<RgCommandResult> {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderRgHelp(), stderr: "" };
   }
@@ -173,40 +187,160 @@ export function executeRgCommand(args: readonly string[], context: RgContext): R
   }
 
   try {
-    const result = runRg(parsed, context);
-    const view = renderRgHuman(result);
-    if (parsed.options.json === true) {
-      return {
-        exitCode: RG_EXIT_BY_AGGREGATE[result.aggregate],
-        stdout: `${JSON.stringify(projectRgEnvelope(result, parsed.options.count === true), null, 2)}\n`,
-        stderr: view.diagnostics,
-      };
+    // Remote-in-scope detection (sync, ukp_remote W6): mirrors search's
+    // conditional-async seam — local endpoints keep the exact sync runRg
+    // path, remote endpoints run over the wire in the mixed driver.
+    const registry = readRegistry(context.registryPath);
+    const scope = resolveScope({
+      currentDirectory: context.currentDirectory,
+      registry,
+      explicitEndpoints: parsed.options.explicitEndpoints,
+      global: parsed.options.global,
+    });
+    const remotes = scope.bindings.filter(isRemoteBinding);
+    if (remotes.length === 0) {
+      return renderRgCommandResult(parsed, runRg(parsed, context));
     }
-    return {
-      exitCode: RG_EXIT_BY_AGGREGATE[result.aggregate],
-      stdout: view.body,
-      stderr: view.diagnostics,
-    };
+    // The mixed driver starts with a SYNC local runRg whose typed errors
+    // (ScopeError/RgPlanningError/ManifestError) would otherwise escape the
+    // try/catch as a promise rejection — the same catch renders both paths.
+    return executeMixedRg(parsed, context, scope, remotes).catch(renderRgCommandError);
   } catch (error) {
-    if (error instanceof ScopeError) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `ukp rg: ${error.message}\nRun 'ukp list' to inspect registrations and 'ukp register' from a Service folder, then retry.\n`,
-      };
-    }
-    if (error instanceof RgPlanningError) {
-      return { exitCode: 1, stdout: "", stderr: `ukp rg: ${error.message}\n` };
-    }
-    if (error instanceof ManifestError) {
-      return { exitCode: 1, stdout: "", stderr: `ukp rg: ${error.message}\n` };
-    }
+    return renderRgCommandError(error);
+  }
+}
+
+/** Error rendering shared by the sync path and the mixed driver's rejection
+ * tail: typed planning/scope/manifest failures get the classified renders,
+ * anything else the generic `ukp rg:` line. */
+function renderRgCommandError(error: unknown): RgCommandResult {
+  if (error instanceof ScopeError) {
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `ukp rg: ${error instanceof Error ? error.message : String(error)}\n`,
+      stderr: `ukp rg: ${error.message}\nRun 'ukp list' to inspect registrations and 'ukp register' from a Service folder, then retry.\n`,
     };
   }
+  if (error instanceof RgPlanningError) {
+    return { exitCode: 1, stdout: "", stderr: `ukp rg: ${error.message}\n` };
+  }
+  if (error instanceof ManifestError) {
+    return { exitCode: 1, stdout: "", stderr: `ukp rg: ${error.message}\n` };
+  }
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: `ukp rg: ${error instanceof Error ? error.message : String(error)}\n`,
+  };
+}
+
+function renderRgCommandResult(parsed: ParsedRg, result: RgResult): RgCommandResult {
+  const view = renderRgHuman(result);
+  if (parsed.options.json === true) {
+    return {
+      exitCode: RG_EXIT_BY_AGGREGATE[result.aggregate],
+      stdout: `${JSON.stringify(projectRgEnvelope(result, parsed.options.count === true), null, 2)}\n`,
+      stderr: view.diagnostics,
+    };
+  }
+  return {
+    exitCode: RG_EXIT_BY_AGGREGATE[result.aggregate],
+    stdout: view.body,
+    stderr: view.diagnostics,
+  };
+}
+
+/** Mixed local+remote execution (ukp_remote W6, mirrors search's driver):
+ * locals via the unchanged sync runRg narrowed to local names, remotes via
+ * discovery-check + GET /v1/rg, merged in scope order under the D-036
+ * aggregation. */
+async function executeMixedRg(
+  parsed: ParsedRg,
+  context: RgContext,
+  scope: ReturnType<typeof resolveScope>,
+  remotes: RegistryBinding[],
+): Promise<RgCommandResult> {
+  const remoteNames = new Set(remotes.map((binding) => binding.name));
+  const localNames = scope.bindings.filter((binding) => !remoteNames.has(binding.name)).map((binding) => binding.name);
+  const baseWarnings: string[] = [...parsed.warnings, ...scope.warnings];
+
+  let localResult: RgResult | undefined;
+  if (localNames.length > 0) {
+    localResult = runRg(
+      {
+        ...parsed,
+        options: { ...parsed.options, explicitEndpoints: localNames, global: false },
+        warnings: [...baseWarnings],
+      },
+      context,
+    );
+  }
+  const warnings: string[] = localResult !== undefined ? [...localResult.warnings] : [...baseWarnings];
+  // An interrupted local run cancels the remaining endpoints — runRg's
+  // interrupt semantics extend across the mixed driver (remotes never start).
+  const interrupted = localResult?.endpoints.some((outcome) => outcome.status === "interrupted") ?? false;
+
+  const remoteOutcomes = new Map<string, RgEndpointOutcome>();
+  for (const binding of remotes) {
+    if (interrupted) {
+      remoteOutcomes.set(binding.name, { name: binding.name, provider: EXTERNAL_PROVIDER, status: "cancelled" });
+      continue;
+    }
+    const token = resolveRemoteToken(binding);
+    let transport: RemoteTransportHandle | undefined;
+    try {
+      transport = await openRemoteTransport(binding, { registryPath: context.registryPath });
+      const discovery = await fetchDiscoveryDocument(binding, transport, token);
+      warnings.push(...discovery.warnings);
+      if (discovery.bearerRequired && token === undefined) {
+        warnings.push(
+          `endpoint '${binding.name}' requires a bearer token; pass --token at registration or set UKP_ENDPOINT_${binding.name.toUpperCase().replace(/-/g, "_")}_TOKEN`,
+        );
+      }
+      const execution = await remoteRg(binding, transport, token, {
+        query: parsed.request.query,
+        limit: parsed.request.limit,
+        ...(parsed.options.glob !== undefined ? { glob: parsed.options.glob } : {}),
+        ...(parsed.options.type !== undefined ? { type: parsed.options.type } : {}),
+        ...(parsed.options.ignoreCase === true ? { ignoreCase: true } : {}),
+        ...(parsed.options.count === true ? { count: true } : {}),
+        passthrough: parsed.options.passthrough,
+      });
+      remoteOutcomes.set(binding.name, execution.outcome);
+      warnings.push(...execution.warnings);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(`endpoint '${binding.name}' rg failed: ${message}`);
+      remoteOutcomes.set(binding.name, {
+        name: binding.name,
+        provider: EXTERNAL_PROVIDER,
+        status: "failed",
+        message,
+      });
+    } finally {
+      transport?.close();
+    }
+  }
+
+  const byName = new Map((localResult?.endpoints ?? []).map((outcome) => [outcome.name, outcome]));
+  const endpoints: RgEndpointOutcome[] = scope.bindings.map(
+    (binding) => byName.get(binding.name) ?? remoteOutcomes.get(binding.name)!,
+  );
+  const statuses = endpoints.map((outcome) => outcome.status);
+  const aggregate: RgAggregateStatus = statuses.includes("cancelled") || statuses.includes("interrupted")
+    ? "cancelled"
+    : statuses.includes("failed")
+      ? "failed"
+      : statuses.some((status) => status === "succeeded" || status === "no_matches")
+        ? "succeeded"
+        : "no-success";
+  return renderRgCommandResult(parsed, {
+    query: parsed.request.query,
+    limit: parsed.request.limit,
+    endpoints,
+    warnings,
+    aggregate,
+  });
 }
 
 export function renderRgHelp(): string {

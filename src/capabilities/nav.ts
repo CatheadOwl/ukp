@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { loadManifest, type ManifestCapability } from "../config/manifest.ts";
 import { resolveFileNativeCapability, unsupportedFileNativeProviderMessage } from "../config/file-native.ts";
-import { isRemoteBinding, localPathOf, readRegistry } from "../registry.ts";
+import { localPathOf, readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { isInsideRealRoot, splitEndpointRelativeSegments } from "../path-safety.ts";
 
@@ -654,15 +654,9 @@ export function runNav(request: NavRequest, context: NavContext): NavOutcome {
   if (!binding) {
     return { ok: false, failure: { errorClass: "no-endpoint", message: "no endpoint selected" } };
   }
-  if (isRemoteBinding(binding)) {
-    return {
-      ok: false,
-      failure: {
-        errorClass: "provider-unsupported",
-        message: `endpoint '${binding.name}' is remote (${binding.url}); nav is file-native and not yet remote-enabled (ukp_remote W3)`,
-      },
-    };
-  }
+  // Remote bindings are routed to the remote transport by the surface
+  // adapter before this point (ukp_remote W6); reaching here with one means
+  // a programmatic caller — localPathOf gives it the classified refusal.
 
   const service = loadManifest(localPathOf(binding));
   if (service.effectiveName !== binding.name) {

@@ -5,6 +5,9 @@ import { DISCOVERY_PATH, PROTOCOL_NAME, type DiscoveryDocument } from "../server
 import { assertRemoteUrlAllowed, parseSshUrl, refreshRemoteTlsCert, type RegistryBinding } from "../registry.ts";
 import { spkiPinOf } from "./tls-identity.ts";
 import type { SearchEndpointOutcome } from "./search.ts";
+import type { NavEnvelope } from "./nav.ts";
+import { EXTERNAL_PROVIDER } from "../config/external-tool.ts";
+import type { RgEndpointOutcome, RgMatch, RgCountEntry } from "./rg.ts";
 
 /** Remote transport for the client side (ukp-remote wire v1, ADR-REM-002/003;
  * ukp_remote W2). All calls fetch fresh (no cross-invocation cache), carry the
@@ -470,5 +473,148 @@ export async function remoteRead(
     ...(error !== undefined && typeof error.class === "string" ? { errorClass: error.class } : {}),
     ...(error !== undefined && typeof error.message === "string" ? { errorMessage: error.message } : {}),
     reference: typeof record.reference === "string" ? record.reference : (params.ref ?? params.uri ?? ""),
+  };
+}
+
+export interface RemoteNavResult {
+  status: number;
+  /** Success marker: the nav envelope itself (ukp.nav.v1) — it has no `ok`
+   * field, so schema presence is the verdict. */
+  ok: boolean;
+  envelope?: NavEnvelope;
+  /** Transport-shape error fields for failures (class/message). */
+  errorClass?: string;
+  errorMessage?: string;
+}
+
+/** GET /v1/nav — raw transport; classification into NavFailure happens in
+ * the nav adapter (commands/nav.ts) where the local vocabulary lives. */
+export async function remoteNav(
+  transport: RemoteTransportHandle,
+  token: string | undefined,
+  params: { path?: string; depth?: number },
+): Promise<RemoteNavResult> {
+  const base = transport.base;
+  const search = new URLSearchParams();
+  if (params.path !== undefined) search.set("path", params.path);
+  if (params.depth !== undefined) search.set("depth", String(params.depth));
+  const query = search.size > 0 ? `?${search.toString()}` : "";
+  const { status, body } = await fetchJson(`${base}/v1/nav${query}`, {
+    headers: authorizationHeaders(token),
+  }, transport.tls);
+  const record = asRecord(body, `${base}/v1/nav`);
+  const error = record.error as { class?: unknown; message?: unknown } | undefined;
+  // Shape gate (read precedent validates what it consumes): a body claiming
+  // the schema but missing the rendered fields would crash the shared
+  // renderers downstream — treat it as a failed call, not a success.
+  const ok = record.schema === "ukp.nav.v1"
+    && Array.isArray(record.entries)
+    && Array.isArray(record.diagnostics);
+  return {
+    status,
+    ok,
+    ...(ok ? { envelope: record as unknown as NavEnvelope } : {}),
+    ...(!ok && error !== undefined && typeof error.class === "string" ? { errorClass: error.class } : {}),
+    ...(!ok && error !== undefined && typeof error.message === "string" ? { errorMessage: error.message } : {}),
+  };
+}
+
+export interface RemoteRgExecution {
+  outcome: RgEndpointOutcome;
+  /** Envelope-level warnings from the server run (scope/duplicate notes —
+   * usually empty server-side; endpoint failures live in the outcome). */
+  warnings: string[];
+}
+
+function remoteRgMatches(raw: unknown): RgMatch[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.flatMap((entry): RgMatch[] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const match = entry as Record<string, unknown>;
+    if (typeof match.path !== "string") return [];
+    return [{
+      path: match.path,
+      ...(typeof match.line === "number" ? { line: match.line } : {}),
+      ...(typeof match.text === "string" ? { text: match.text } : {}),
+      ...(typeof match.ukp_uri === "string" ? { ukp_uri: match.ukp_uri } : {}),
+    }];
+  });
+}
+
+function remoteRgCounts(raw: unknown): RgCountEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.flatMap((entry): RgCountEntry[] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const count = entry as Record<string, unknown>;
+    if (typeof count.path !== "string" || typeof count.count !== "number") return [];
+    return [{ path: count.path, count: count.count }];
+  });
+}
+
+const RG_WIRE_STATUSES = new Set(["succeeded", "no_matches", "skipped", "failed", "interrupted", "cancelled"]);
+
+/** GET /v1/rg — single-endpoint outcome in the local RgEndpointOutcome
+ * vocabulary (provider is rg's external tier regardless of transport). */
+export async function remoteRg(
+  binding: RegistryBinding,
+  transport: RemoteTransportHandle,
+  token: string | undefined,
+  params: {
+    query: string;
+    limit: number;
+    glob?: string;
+    type?: string;
+    ignoreCase?: boolean;
+    count?: boolean;
+    passthrough: readonly string[];
+  },
+): Promise<RemoteRgExecution> {
+  const base = transport.base;
+  const search = new URLSearchParams({ query: params.query, limit: String(params.limit) });
+  if (params.glob !== undefined) search.set("glob", params.glob);
+  if (params.type !== undefined) search.set("type", params.type);
+  if (params.ignoreCase === true) search.set("i", "1");
+  if (params.count === true) search.set("count", "1");
+  for (const arg of params.passthrough) search.append("passthrough", arg);
+  const { status, body } = await fetchJson(`${base}/v1/rg?${search.toString()}`, {
+    headers: authorizationHeaders(token),
+  }, transport.tls);
+  const record = asRecord(body, `${base}/v1/rg`);
+  const error = record.error as { class?: unknown; message?: unknown } | undefined;
+
+  if (status === 401) {
+    return { outcome: { name: binding.name, provider: EXTERNAL_PROVIDER, status: "failed", message: authMessage(token) }, warnings: [] };
+  }
+  if (error !== undefined) {
+    // Route-level failure: an older serve without /v1/rg answers 404
+    // not-found; anything else keeps the server's message.
+    const message = typeof error.message === "string"
+      ? error.message
+      : `remote rg failed (status ${status})`;
+    return { outcome: { name: binding.name, provider: EXTERNAL_PROVIDER, status: "failed", message }, warnings: [] };
+  }
+  const envelope = record.endpoints as Array<Record<string, unknown>> | undefined;
+  const entry = Array.isArray(envelope) ? envelope[0] : undefined;
+  if (entry === undefined) {
+    return {
+      outcome: { name: binding.name, provider: EXTERNAL_PROVIDER, status: "failed", message: `remote rg returned no endpoint result (status ${status})` },
+      warnings: [],
+    };
+  }
+  const wireStatus = typeof entry.status === "string" && RG_WIRE_STATUSES.has(entry.status) ? entry.status : "failed";
+  const matches = remoteRgMatches(entry.matches);
+  const counts = remoteRgCounts(entry.counts);
+  const warnings = Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [];
+  return {
+    outcome: {
+      name: binding.name,
+      provider: EXTERNAL_PROVIDER,
+      status: wireStatus as RgEndpointOutcome["status"],
+      ...(typeof entry.message === "string" ? { message: entry.message } : {}),
+      ...(matches !== undefined ? { matches } : {}),
+      ...(counts !== undefined ? { counts } : {}),
+      ...(entry.truncated === true ? { truncated: true } : {}),
+    },
+    warnings,
   };
 }

@@ -31,7 +31,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
   name: "serve",
   summary: "serve one endpoint over HTTP for remote UKP clients",
   group: "operations",
-  description: "Expose one registered endpoint over HTTP using the ukp-remote wire: a discovery document, search, and read.",
+  description: "Expose one registered endpoint over HTTP using the ukp-remote wire: a discovery document, search, read, nav, and rg.",
   usage: "--endpoint <name> [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>]",
   singleEndpoint: {
     endpointHelp: "the registered endpoint to expose",
@@ -52,6 +52,8 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "                                protocol version, instance identity)",
     "  POST /v1/search              {query, limit} -> ukp.search.v1 envelope",
     "  GET  /v1/read?ref=…|uri=…    endpoint-relative ref or ukp:// URI",
+    "  GET  /v1/nav?path=&depth=    markdown route view (ukp.nav.v1)",
+    "  GET  /v1/rg?query=…          lexical search (ukp.rg.v1, ukp_uri handoff)",
     "",
     "Auth (deny by default, RQ-18):",
     "  Serving requires UKP_SERVE_TOKEN (comma-separate several: alice,bob;",

@@ -8,7 +8,7 @@ import {
   type NavContext,
   type NavRequest,
 } from "../src/capabilities/nav.ts";
-import { executeNavCommand, parseNavArgs, renderNavHelp } from "../src/commands/nav.ts";
+import { executeNavCommand as executeNavCommandMaybeAsync, parseNavArgs, renderNavHelp, type NavCommandResult } from "../src/commands/nav.ts";
 import { NavUsageError } from "../src/capabilities/nav.ts";
 // Parse-layer usage errors surface as kit usage errors since the ADR 0024
 // migration; the capability's NavUsageError remains for the re-validation
@@ -16,6 +16,15 @@ import { NavUsageError } from "../src/capabilities/nav.ts";
 import { KitUsageError } from "../src/commands/kit.ts";
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
+
+// ukp_remote W6 conditional-async seam (read.test.ts precedent): every test
+// here is a local nav, which stays fully synchronous. This wrapper keeps
+// the call sites untouched and fails loudly if a local case ever goes async.
+function executeNavCommand(args: readonly string[], context: Parameters<typeof executeNavCommandMaybeAsync>[1]): NavCommandResult {
+  const result = executeNavCommandMaybeAsync(args, context);
+  if (result instanceof Promise) throw new Error("local nav unexpectedly took the async path");
+  return result;
+}
 
 function createNavService(root: string, name: string, provider = "file"): string {
   const folder = join(root, `${name}-service`);

@@ -10,10 +10,12 @@ import {
   serializeRegistry,
   unregisterAt,
 } from "../src/registry.ts";
-import { startUkpServer, type StartedServe } from "../src/server.ts";
+import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../src/server.ts";
 import { executeListCommand, executeRegisterCommand } from "../src/commands/inventory.ts";
 import { executeSearchCommand } from "../src/commands/search.ts";
 import { executeReadCommand } from "../src/commands/read.ts";
+import { executeNavCommand } from "../src/commands/nav.ts";
+import { executeRgCommand } from "../src/commands/rg.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
 // ukp_remote W2 client-side tests. The "remote" is real: startUkpServer (the
@@ -481,6 +483,217 @@ describe("ukp list with remote rows", () => {
 });
 
 // ---------------------------------------------------------------------------
+// W6: nav + rg remote-ization. The guards are gone — success paths double as
+// guard-removal regressions ("not yet remote-enabled" must never appear).
+// rg availability gate: an UNCAPPED verdict probe (the product's
+// rgExecutableAvailable carries a 5s timeout — on this machine a node-path
+// rg spawn can cost ~9s, which would make the probe report "unavailable"
+// exactly when the tests are slowest and silently skip them). The rg tests
+// carry explicit 30s timeouts to absorb that spawn tax.
+
+const rgAvailable = Bun.spawnSync(["rg", "--version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+describe("remote nav (ukp_remote W6)", () => {
+  test("nav runs against a remote endpoint: depth, json, and miss mapping", async () => {
+    const { info } = startRemote();
+    registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
+    const context = { currentDirectory: root, registryPath };
+
+    const rootNav = await asResult(executeNavCommand(["--endpoint", "serve-fixture"], context));
+    expect(rootNav.exitCode).toBe(0);
+    expect(rootNav.stdout).toContain("endpoint: serve-fixture (root: ., depth: 0)");
+    expect(rootNav.stdout).toContain("[truncated: 1] documents");
+    expect(rootNav.stderr).not.toContain("not yet remote");
+
+    const deep = await asResult(executeNavCommand(["--endpoint", "serve-fixture", "--depth", "1"], context));
+    expect(deep.exitCode).toBe(0);
+    expect(deep.stdout).toContain("documents/cad-notes.md");
+
+    const json = await asResult(executeNavCommand(["--endpoint", "serve-fixture", "--json"], context));
+    expect(json.exitCode).toBe(0);
+    expect(json.stdout).toContain('"schema": "ukp.nav.v1"');
+
+    const miss = await asResult(executeNavCommand(["--endpoint", "serve-fixture", "missing"], context));
+    expect(miss.exitCode).toBe(1);
+    expect(miss.stderr).toContain("was not found in endpoint 'serve-fixture'");
+  });
+
+  test("unreachable nav endpoint maps to provider-unavailable with exit 1", async () => {
+    registerRemoteAt(registryPath, { name: "dead-remote", url: "http://127.0.0.1:9" });
+    const result = await asResult(executeNavCommand(["--endpoint", "dead-remote"], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("unreachable");
+  });
+
+  test("a 401 on /v1/nav folds to provider-unsupported and carries the env hint", async () => {
+    const { info } = startRemote({ tokens: ["w6-secret"] });
+    registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
+    delete process.env.UKP_ENDPOINT_SERVE_FIXTURE_TOKEN;
+    const result = await asResult(executeNavCommand(["--endpoint", "serve-fixture"], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("UKP_ENDPOINT_SERVE_FIXTURE_TOKEN");
+    expect(result.stderr).toContain("bearer token");
+  });
+});
+
+describe("remote rg (ukp_remote W6)", () => {
+  test.skipIf(!rgAvailable)(
+    "rg runs against a remote endpoint with uri handoff lines; count and json modes",
+    async () => {
+      const { info } = startRemote();
+      registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
+      const context = { currentDirectory: root, registryPath };
+
+      const result = await asResult(executeRgCommand(["CAD", "-c", "serve-fixture"], context));
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("== serve-fixture ==");
+      expect(result.stdout).toContain("documents/cad-notes.md:1");
+      expect(result.stdout).toContain("uri: ukp://serve-fixture/documents/cad-notes.md");
+      expect(result.stderr).not.toContain("not yet remote");
+
+      const count = await asResult(executeRgCommand(["CAD", "-c", "serve-fixture", "--count"], context));
+      expect(count.exitCode).toBe(0);
+      // Both fixture lines carry the token ("# CAD notes" / "CAD fixture note content.").
+      expect(count.stdout).toContain("documents/cad-notes.md: 2");
+
+      const json = await asResult(executeRgCommand(["CAD", "-c", "serve-fixture", "--json"], context));
+      expect(json.exitCode).toBe(0);
+      expect(json.stdout).toContain('"schema": "ukp.rg.v1"');
+    },
+    30000,
+  );
+
+  test.skipIf(!rgAvailable)(
+    "mixed local+remote rg keeps both endpoints; a dead remote fails visibly without hiding locals",
+    async () => {
+      const { info } = startRemote();
+      registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
+      // A local Service whose manifest name matches its binding (RQ-14): the
+      // shared serve fixture declares "serve-fixture", so the local arm gets
+      // its own folder.
+      const localFolder = join(root, "local-fixture-svc");
+      mkdirSync(join(localFolder, ".ukp"), { recursive: true });
+      mkdirSync(join(localFolder, "documents"), { recursive: true });
+      writeFileSync(
+        join(localFolder, ".ukp", "service.toml"),
+        'name = "local-fixture"\n\n[capabilities.rg]\n',
+        "utf8",
+      );
+      writeFileSync(join(localFolder, "documents", "local-note.md"), "# Local CAD note\n", "utf8");
+      registerLocal("local-fixture", localFolder);
+      const context = { currentDirectory: root, registryPath };
+
+      const mixed = await asResult(executeRgCommand(
+        ["CAD", "-c", "serve-fixture", "-c", "local-fixture"],
+        context,
+      ));
+      expect(mixed.exitCode).toBe(0);
+      expect(mixed.stdout).toContain("== serve-fixture ==");
+      expect(mixed.stdout).toContain("== local-fixture ==");
+
+      registerRemoteAt(registryPath, { name: "dead-remote", url: "http://127.0.0.1:9" });
+      const withDead = await asResult(executeRgCommand(
+        ["CAD", "-c", "serve-fixture", "-c", "dead-remote"],
+        context,
+      ));
+      expect(withDead.exitCode).toBe(1);
+      expect(withDead.stdout).toContain("== serve-fixture ==");
+      expect(withDead.stdout).toContain("== dead-remote ==");
+      expect(withDead.stderr).toContain("dead-remote");
+    },
+    30000,
+  );
+
+  test("a local manifest failure inside a mixed scope renders as a classified error, not a rejection", async () => {
+    // W6 review finding: the mixed driver starts with a sync local runRg
+    // whose typed errors would escape the command's try/catch as a promise
+    // rejection (raw stack at the bin) — the .catch tail must render them.
+    const { info } = startRemote();
+    registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
+    const brokenFolder = join(root, "broken-svc");
+    mkdirSync(join(brokenFolder, ".ukp"), { recursive: true });
+    writeFileSync(join(brokenFolder, ".ukp", "service.toml"), "name = \n", "utf8");
+    registerLocal("broken-local", brokenFolder);
+    const result = await asResult(executeRgCommand(
+      ["CAD", "-c", "serve-fixture", "-c", "broken-local"],
+      { currentDirectory: root, registryPath },
+    ));
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("ukp rg:");
+    expect(result.stderr).toContain("broken");
+  });
+
+  test("a 401 on /v1/rg fails that endpoint with the env hint", async () => {
+    const { info } = startRemote({ tokens: ["w6-secret"] });
+    registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
+    delete process.env.UKP_ENDPOINT_SERVE_FIXTURE_TOKEN;
+    const result = await asResult(executeRgCommand(["CAD", "-c", "serve-fixture"], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(result.exitCode).toBe(1);
+    // Search-precedent split: the endpoint-specific env hint is the adapter
+    // warning (stderr); the outcome message keeps the generic placeholder.
+    expect(result.stdout).toContain("== serve-fixture ==");
+    expect(result.stdout).toContain("status: failed");
+    expect(result.stderr).toContain("UKP_ENDPOINT_SERVE_FIXTURE_TOKEN");
+  });
+
+  test("an older serve without the nav/rg routes degrades to failed calls, not crashes", async () => {
+    // ADR-REM-002 §10 downgrade path: the stub speaks a valid discovery
+    // document but 404s the /v1/nav and /v1/rg routes (a pre-W6 serve).
+    const stub = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname === DISCOVERY_PATH) {
+          return Response.json({
+            protocol: "ukp-remote",
+            protocol_version: "1",
+            instance_uid: "00000000-0000-0000-0000-000000000000",
+            name: "old-serve",
+            capabilities: {
+              read: { provider: "file", derived: true },
+              nav: { provider: "file", derived: true },
+            },
+            security: { schemes: [] },
+          });
+        }
+        return Response.json(
+          { error: { class: "not-found", message: `no such route '${url.pathname}'` } },
+          { status: 404 },
+        );
+      },
+    });
+    registerRemoteAt(registryPath, { name: "old-serve", url: `http://127.0.0.1:${stub.port}` });
+    try {
+      const nav = await asResult(executeNavCommand(["--endpoint", "old-serve"], {
+        currentDirectory: root,
+        registryPath,
+      }));
+      expect(nav.exitCode).toBe(1);
+      expect(nav.stderr).toContain("no such route '/v1/nav'");
+
+      const rg = await asResult(executeRgCommand(["CAD", "-c", "old-serve"], {
+        currentDirectory: root,
+        registryPath,
+      }));
+      expect(rg.exitCode).toBe(1);
+      expect(rg.stdout).toContain("== old-serve ==");
+      expect(rg.stdout).toContain("no such route '/v1/rg'");
+    } finally {
+      stub.stop(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // W5' / D-079: self-signed TLS pinning lifecycle. Real openssl-signed certs
 // (Bun.spawn bypasses shell path mangling), the real startUkpServer with TLS,
 // and the real register/search adapters — the full bare-IP rehearsal path.
@@ -641,5 +854,9 @@ describe("remote TLS identity (W5' / D-079)", () => {
       ));
       expect(searchAfter.exitCode).toBe(0);
     },
+    // Three openssl self-signs + three servers + several wire searches; the
+    // 5s default only holds on a warm, unloaded machine (observed flaky on
+    // Windows cold start).
+    30000,
   );
 });

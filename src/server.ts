@@ -12,16 +12,33 @@ import {
 } from "./capabilities/search.ts";
 import { projectReadEnvelope, runRead, type ReadRequest } from "./capabilities/read.ts";
 import { parseReadArgs } from "./commands/read.ts";
+import { parseNavArgs } from "./commands/nav.ts";
+import {
+  runNav,
+  projectNavEnvelope,
+  NavUsageError,
+  type NavRequest,
+} from "./capabilities/nav.ts";
+import {
+  runRg,
+  projectRgEnvelope,
+  RG_DEFAULT_LIMIT,
+  RG_MAX_LIMIT,
+  validateRgPassthrough,
+  RgUsageError,
+  type ParsedRg,
+} from "./capabilities/rg.ts";
 import { KitUsageError } from "./commands/kit.ts";
 
 /** ukp-remote wire v1 server core (ADR-REM-001/002/003, ukp_remote W1
  * slice): exposes ONE registered endpoint over HTTP — a discovery document
- * (manifest projection + protocol version + instance identity) plus the two
- * read-side capability routes. The capability layer runs unchanged behind
- * the routes (provider/transport axes stay orthogonal): search via `runSearch`
- * with a single-endpoint scope, read via `runRead`. There is no session, no
- * streaming, and no server-side artifact: responses inline the reference
- * data (RQ-07) and generate a serve-scoped run id. */
+ * (manifest projection + protocol version + instance identity) plus the
+ * read-side capability routes (search/read since W1, nav/rg since W6). The
+ * capability layer runs unchanged behind the routes (provider/transport
+ * axes stay orthogonal): search via `runSearch` with a single-endpoint
+ * scope, read via `runRead`, nav via `runNav`, rg via `runRg`. There is no
+ * session, no streaming, and no server-side artifact: responses inline the
+ * reference data (RQ-07) and generate a serve-scoped run id. */
 
 export const PROTOCOL_NAME = "ukp-remote";
 export const PROTOCOL_VERSION = "1";
@@ -150,6 +167,22 @@ function readHttpStatus(errorClass: string): number {
   return 500;
 }
 
+/** Same verdict carrier for nav's failure vocabulary (W6): a missed route
+ * root is a 404, addressing a non-directory is a client fault, and the
+ * identity/config classes say "this service cannot answer right now". */
+function navHttpStatus(errorClass: string): number {
+  if (errorClass === "route-root-not-found") return 404;
+  if (errorClass === "route-root-not-directory") return 400;
+  if (
+    errorClass === "provider-unsupported"
+    || errorClass === "no-endpoint"
+    || errorClass === "endpoint-name-mismatch"
+  ) {
+    return 503;
+  }
+  return 500;
+}
+
 function parseSearchBody(raw: unknown): { query: string; limit: number } | { error: string } {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { error: "request body must be a JSON object: {\"query\": string, \"limit\"?: integer}" };
@@ -206,6 +239,90 @@ function parseReadParams(
     };
   }
   return { request };
+}
+
+/** Wire nav params → NavRequest via the command-layer parser (same
+ * single-source stance as read: depth form/range and route-path lexical
+ * validation live in one place). Serve fixes the endpoint. */
+function parseNavParams(
+  endpointName: string,
+  path: string | null,
+  depth: string | null,
+): { request: NavRequest } | { error: string } {
+  const args = [
+    "--endpoint",
+    endpointName,
+    ...(path !== null ? [path] : []),
+    ...(depth !== null ? ["--depth", depth] : []),
+  ];
+  try {
+    return { request: parseNavArgs(args) };
+  } catch (error) {
+    if (error instanceof KitUsageError || error instanceof NavUsageError) {
+      return { error: error.message };
+    }
+    throw error;
+  }
+}
+
+/** Wire rg params → ParsedRg with serve-fixed scope. Params are flat (no
+ * argv reconstruction needed): query/limit/glob/type/i/count map onto
+ * ParsedRg directly and passthrough re-validates against the same
+ * allowlist (ADR-RG-002) before any endpoint work starts. */
+function parseRgParams(
+  endpointName: string,
+  url: URL,
+): { parsed: ParsedRg } | { error: string } {
+  const query = url.searchParams.get("query");
+  if (query === null || query.length === 0) {
+    return { error: "'query' is required and must be a non-empty pattern" };
+  }
+  let limit = RG_DEFAULT_LIMIT;
+  const rawLimit = url.searchParams.get("limit");
+  if (rawLimit !== null) {
+    if (!/^[0-9]+$/.test(rawLimit)) return { error: "'limit' must be a decimal integer" };
+    limit = Number(rawLimit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > RG_MAX_LIMIT) {
+      return { error: `'limit' must be between 1 and ${RG_MAX_LIMIT}` };
+    }
+  }
+  const passthrough = url.searchParams.getAll("passthrough");
+  try {
+    validateRgPassthrough(passthrough);
+  } catch (error) {
+    if (error instanceof RgUsageError) return { error: error.message };
+    throw error;
+  }
+  // Boolean params are strictly "1"/"0" — same strictness as query/limit, so
+  // a hand-crafted `i=true` is a visible usage error, not a silent mode miss.
+  const booleanOf = (name: string): boolean | { error: string } => {
+    const raw = url.searchParams.get(name);
+    if (raw === null) return false;
+    if (raw === "1") return true;
+    if (raw === "0") return false;
+    return { error: `'${name}' must be 1 or 0` };
+  };
+  const ignoreCase = booleanOf("i");
+  if (typeof ignoreCase === "object") return ignoreCase;
+  const count = booleanOf("count");
+  if (typeof count === "object") return count;
+  const glob = url.searchParams.get("glob");
+  const type = url.searchParams.get("type");
+  return {
+    parsed: {
+      request: { query, limit },
+      options: {
+        explicitEndpoints: [endpointName],
+        global: false,
+        ...(glob !== null ? { glob } : {}),
+        ...(type !== null ? { type } : {}),
+        ...(ignoreCase ? { ignoreCase: true } : {}),
+        ...(count ? { count: true } : {}),
+        passthrough,
+      },
+      warnings: [],
+    },
+  };
 }
 
 export interface StartedServe {
@@ -300,7 +417,12 @@ export function startUkpServer(config: ServeConfig): StartedServe {
       }
     }
 
-    if (url.pathname === "/v1/search" || url.pathname === "/v1/read") {
+    if (
+      url.pathname === "/v1/search"
+      || url.pathname === "/v1/read"
+      || url.pathname === "/v1/nav"
+      || url.pathname === "/v1/rg"
+    ) {
       if ((config.tokens?.length ?? 0) > 0) {
         const authorization = request.headers.get("authorization");
         if (!config.tokens!.some((token) => authorization === `Bearer ${token}`)) {
@@ -310,15 +432,22 @@ export function startUkpServer(config: ServeConfig): StartedServe {
           );
         }
       }
-      return url.pathname === "/v1/search"
-        ? await handleSearch(request, config, binding.name, serviceFolder)
-        : handleRead(url, request, config, binding.name);
+      if (url.pathname === "/v1/search") {
+        return await handleSearch(request, config, binding.name, serviceFolder);
+      }
+      if (url.pathname === "/v1/read") {
+        return handleRead(url, request, config, binding.name);
+      }
+      if (url.pathname === "/v1/nav") {
+        return handleNav(url, request, config, binding.name);
+      }
+      return handleRg(url, request, config, binding.name);
     }
 
     return jsonResponse(
       errorBody(
         "not-found",
-        `no such route '${url.pathname}' (ukp-remote v1: GET ${DISCOVERY_PATH}, POST /v1/search, GET /v1/read)`,
+        `no such route '${url.pathname}' (ukp-remote v1: GET ${DISCOVERY_PATH}, POST /v1/search, GET /v1/read, GET /v1/nav, GET /v1/rg)`,
       ),
       404,
     );
@@ -430,4 +559,46 @@ function handleRead(url: URL, request: Request, config: ServeConfig, endpointNam
     return jsonResponse({ ...envelope, content: outcome.result.content });
   }
   return jsonResponse(envelope, readHttpStatus(envelope.error?.class ?? "error"));
+}
+
+/** GET /v1/nav?path=&depth= → the nav envelope IS the response (W6): the
+ * client renders it through the same renderNavHuman/renderNavJson path as a
+ * local run. Failures use the transport error shape with nav's classes. */
+function handleNav(url: URL, request: Request, config: ServeConfig, endpointName: string): Response {
+  if (request.method !== "GET") {
+    return jsonResponse(errorBody("method-not-allowed", "/v1/nav is a GET route"), 405);
+  }
+  const parsed = parseNavParams(endpointName, url.searchParams.get("path"), url.searchParams.get("depth"));
+  if ("error" in parsed) {
+    return jsonResponse(errorBody("usage-error", parsed.error), 400);
+  }
+  const outcome = runNav(parsed.request, {
+    currentDirectory: config.currentDirectory,
+    registryPath: config.registryPath,
+  });
+  if (outcome.ok) {
+    return jsonResponse(projectNavEnvelope(outcome.result));
+  }
+  return jsonResponse(
+    errorBody(outcome.failure.errorClass, outcome.failure.message),
+    navHttpStatus(outcome.failure.errorClass),
+  );
+}
+
+/** GET /v1/rg?query=… → the single-endpoint rg envelope (W6). Failures are
+ * per-endpoint data inside the envelope (D-036), so the route always
+ * answers 200 — same stance as /v1/search. */
+function handleRg(url: URL, request: Request, config: ServeConfig, endpointName: string): Response {
+  if (request.method !== "GET") {
+    return jsonResponse(errorBody("method-not-allowed", "/v1/rg is a GET route"), 405);
+  }
+  const parsed = parseRgParams(endpointName, url);
+  if ("error" in parsed) {
+    return jsonResponse(errorBody("usage-error", parsed.error), 400);
+  }
+  const result = runRg(parsed.parsed, {
+    currentDirectory: config.currentDirectory,
+    registryPath: config.registryPath,
+  });
+  return jsonResponse(projectRgEnvelope(result, parsed.parsed.options.count === true));
 }

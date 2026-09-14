@@ -376,7 +376,7 @@ export function runCli(
   }
 
   if (command === "nav") {
-    return writeCommandResult(executeNavCommand(args.slice(1), {
+    return writeCommandResultMaybeAsync(executeNavCommand(args.slice(1), {
       currentDirectory,
       registryPath,
     }), stdout, stderr);
@@ -390,7 +390,7 @@ export function runCli(
   }
 
   if (command === "rg") {
-    return writeCommandResult(executeRgCommand(args.slice(1), {
+    return writeCommandResultMaybeAsync(executeRgCommand(args.slice(1), {
       currentDirectory,
       registryPath,
       rgCommand: context.rgCommand,
