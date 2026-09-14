@@ -32,7 +32,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
   summary: "serve one endpoint over HTTP for remote UKP clients",
   group: "operations",
   description: "Expose one registered endpoint over HTTP using the ukp-remote wire: a discovery document, search, and read.",
-  usage: "--endpoint <name> [--host <addr>] [--port <n>]",
+  usage: "--endpoint <name> [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>]",
   singleEndpoint: {
     endpointHelp: "the registered endpoint to expose",
     unsupportedHelp: "serve exposes exactly one endpoint; -g is not supported",
@@ -40,6 +40,9 @@ export const SERVE_SPEC: UkpCommandSpec = {
   options: [
     { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
     { flags: "--port <n>", help: "listen port (default 8570)" },
+    { flags: "--tls", help: "serve HTTPS with a self-signed identity (auto-generated under .ukp/tls/, SAN covers this host's addresses; clients pin it at registration)" },
+    { flags: "--tls-cert <pem>", help: "TLS certificate (chain) PEM path — Let's Encrypt, mkcert, or a private CA; pair with --tls-key" },
+    { flags: "--tls-key <pem>", help: "TLS private key PEM path; pair with --tls-cert" },
     { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing only; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
   ],
   helpSuffix: [
@@ -60,9 +63,13 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "",
     "  Loopback-without-token is the testing/dogfood posture, not the way to",
     "  consume a same-machine endpoint — register its local path instead.",
-    "  serve speaks plain HTTP; TLS and public exposure belong to a reverse",
-    "  proxy or an SSH tunnel (see the repository handbook: Remote",
-    "  Deployment).",
+    "  TLS (W5'): pass --tls to serve HTTPS with a self-signed identity",
+    "  (generated under .ukp/tls/, SAN covers this host's addresses; remote",
+    "  clients TOFU-pin it at registration and refresh by re-registering), or",
+    "  --tls-cert/--tls-key for your own certificate (Let's Encrypt — IP",
+    "  certs available since 2026-01 —, mkcert, a private CA). Plain HTTP",
+    "  remains loopback-only by admission; public exposure needs TLS or the",
+    "  ssh:// transport.",
     "",
   ].join("\n"),
 };
@@ -101,6 +108,9 @@ function renderServeBanner(info: ServeInfo): string {
     `  listening: ${info.url}`,
     `  discovery: ${info.url}${DISCOVERY_PATH}`,
     `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback only)"}`,
+    ...(info.tls !== undefined
+      ? [`  tls: ${info.tls.source === "operator" ? "operator certificate" : `self-signed identity (${info.tls.source})`} ${info.tls.pin} (SAN: ${info.tls.san})`]
+      : []),
     "",
   ].join("\n");
 }
@@ -136,6 +146,15 @@ export function executeServeCommand(
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
     const { endpoint, host, port } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
+    const options = parsed.options as { tls?: boolean; tlsCert?: string; tlsKey?: string };
+    // TLS flag family (W5'): --tls and --tls-cert/--tls-key are mutually
+    // exclusive; the explicit pair must arrive complete.
+    if (options.tls === true && (options.tlsCert !== undefined || options.tlsKey !== undefined)) {
+      throw new KitUsageError("--tls and --tls-cert/--tls-key are mutually exclusive");
+    }
+    if (options.tls !== true && (options.tlsCert !== undefined) !== (options.tlsKey !== undefined)) {
+      throw new KitUsageError("--tls-cert and --tls-key are used together");
+    }
     const tokens = context.tokens ?? parseServeTokens(process.env.UKP_SERVE_TOKEN);
     const decision = serveAuthDecision(host, tokens, allowAnonymous);
     if (!decision.ok) {
@@ -149,6 +168,11 @@ export function executeServeCommand(
       host,
       port,
       ...(tokens.length > 0 ? { tokens } : {}),
+      ...(options.tls === true
+        ? { tls: { mode: "self-signed" as const } }
+        : options.tlsCert !== undefined && options.tlsKey !== undefined
+          ? { tls: { mode: "certificates" as const, certPath: options.tlsCert, keyPath: options.tlsKey } }
+          : {}),
     });
     const stop = () => {
       console.error(`ukp serve: stopped (${info.url})`);

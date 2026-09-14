@@ -219,7 +219,7 @@ async function executeMixedSearch(
     const token = resolveRemoteToken(binding);
     let transport: RemoteTransportHandle | undefined;
     try {
-      transport = await openRemoteTransport(binding);
+      transport = await openRemoteTransport(binding, { registryPath: context.registryPath });
       const discovery = await fetchDiscoveryDocument(binding, transport, token);
       warnings.push(...discovery.warnings);
       if (discovery.bearerRequired && token === undefined) {

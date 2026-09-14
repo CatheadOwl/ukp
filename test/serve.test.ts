@@ -309,3 +309,57 @@ describe("serve argument parsing", () => {
     expect(() => parseServeArgs(["-g"])).toThrow("serve requires --endpoint <name>");
   });
 });
+
+// ---------------------------------------------------------------------------
+// W5' / D-079: serve-side TLS. --tls self-signs through the local openssl
+// (Bun.spawn bypasses shell path mangling, so tests sign on every platform
+// that has openssl); --tls-cert/--tls-key serve operator certificates.
+
+const opensslAvailable =
+  Bun.spawnSync(["openssl", "version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+describe("serve TLS (W5' / D-079)", () => {
+  test.skipIf(!opensslAvailable)("--tls generates a self-signed identity, persists it, and reuses it on restart", async () => {
+    const { spkiPinOf } = await import("../src/capabilities/tls-identity.ts");
+    const first = start({ tls: { mode: "self-signed" } });
+    expect(first.info.url.startsWith("https://")).toBe(true);
+    expect(first.info.tls?.source).toBe("generated");
+    const certPem = readFileSync(join(serviceFolder, ".ukp", "tls", "cert.pem"), "utf8");
+    expect(first.info.tls?.pin).toBe(spkiPinOf(certPem));
+
+    // Plain fetch rejects the self-signed chain; an anchored fetch (what a
+    // registered client does) serves the discovery document.
+    await expect(fetch(`${first.info.url}${DISCOVERY_PATH}`)).rejects.toThrow();
+    const response = await fetch(`${first.info.url}${DISCOVERY_PATH}`, { tls: { ca: certPem } });
+    const doc = (await response.json()) as DiscoveryDocument;
+    expect(doc.protocol).toBe("ukp-remote");
+
+    first.server.stop(true);
+    const second = start({ tls: { mode: "self-signed" } });
+    expect(second.info.tls?.source).toBe("persisted");
+    expect(second.info.tls?.pin).toBe(first.info.tls?.pin);
+  });
+
+  test("explicit certificates with unreadable paths fail setup before listening", () => {
+    expect(() =>
+      start({
+        tls: {
+          mode: "certificates",
+          certPath: join(root, "missing.cert.pem"),
+          keyPath: join(root, "missing.key.pem"),
+        },
+      }),
+    ).toThrow("TLS material");
+  });
+
+  test("--tls and --tls-cert/--tls-key flag family validation (usage errors, no listener)", async () => {
+    const { executeServeCommand } = await import("../src/commands/serve.ts");
+    const context = { currentDirectory: root, registryPath, qmdCommand, tokens: ["t"] };
+    const clash = executeServeCommand(["--endpoint", "serve-fixture", "--tls", "--tls-cert", "x.pem"], context);
+    expect(clash.exitCode).toBe(2);
+    expect(clash.stderr).toContain("--tls and --tls-cert/--tls-key are mutually exclusive");
+    const half = executeServeCommand(["--endpoint", "serve-fixture", "--tls-cert", "x.pem"], context);
+    expect(half.exitCode).toBe(2);
+    expect(half.stderr).toContain("--tls-cert and --tls-key are used together");
+  });
+});

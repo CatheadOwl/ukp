@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const capabilitiesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "capabilities");
 
 /** Files already holding the ADR 0021 contract. */
-const MIGRATED = new Set(["nav.ts", "qmd.ts", "remote-client.ts", "rename-recovery.ts", "search.ts", "read.ts", "update.ts", "propose.ts", "rg.ts"]);
+const MIGRATED = new Set(["nav.ts", "qmd.ts", "remote-client.ts", "rename-recovery.ts", "search.ts", "read.ts", "update.ts", "propose.ts", "rg.ts", "tls-identity.ts"]);
 
 /** Files still carrying CLI-shaped returns; remove an entry here and add it
  * to MIGRATED in the same change that migrates it. The set is empty — every
@@ -23,10 +23,10 @@ const PENDING = new Set<string>([]);
 // A CLI-shaped return constructs `stdout:` / `stderr:` / `exitCode:` object
 // members. Word-boundary + colon keeps comments, provider spawnSync results
 // (`result.stdout` reads), and `stdio:`/`stdoutFd` identifiers out of scope;
-// the `"ignore"` negative lookahead keeps Bun.spawn stdio config
-// (`stdout: "ignore"`) out of scope — that is process plumbing, not a
-// CLI-shaped return.
-const CLI_SHAPED_RETURN = /\b(exitCode|stdout|stderr)\s*:(?!\s*"ignore")/;
+// the `"ignore"`/`"pipe"` negative lookahead keeps Bun.spawn stdio config
+// (`stdout: "ignore"`, `stderr: "pipe"`) out of scope — that is process
+// plumbing, not a CLI-shaped return.
+const CLI_SHAPED_RETURN = /\b(exitCode|stdout|stderr)\s*:(?!\s*"(ignore|pipe)")/;
 const COMMANDER_IMPORT = /from\s+["']commander["']/;
 
 function capabilityFiles(): string[] {

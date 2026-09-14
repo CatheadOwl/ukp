@@ -1,6 +1,9 @@
-import { connect } from "node:net";
+import { connect as netConnect, isIP } from "node:net";
+import { connect as tlsConnect } from "node:tls";
+import { X509Certificate } from "node:crypto";
 import { DISCOVERY_PATH, PROTOCOL_NAME, type DiscoveryDocument } from "../server.ts";
-import { assertRemoteUrlAllowed, parseSshUrl, type RegistryBinding } from "../registry.ts";
+import { assertRemoteUrlAllowed, parseSshUrl, refreshRemoteTlsCert, type RegistryBinding } from "../registry.ts";
+import { spkiPinOf } from "./tls-identity.ts";
 import type { SearchEndpointOutcome } from "./search.ts";
 
 /** Remote transport for the client side (ukp-remote wire v1, ADR-REM-002/003;
@@ -48,6 +51,10 @@ export interface RemoteTransportHandle {
   /** Releases per-invocation resources (kills an ephemeral tunnel); noop for
    * direct connections. */
   close: () => void;
+  /** TLS anchor for https bases (W5' / D-079): present when the binding
+   * carries a pinned certificate; all fetches on this handle verify against
+   * it. Mutated in place by the renewal re-anchor. */
+  tls?: RemoteTlsAnchor;
 }
 
 function freePort(): Promise<number> {
@@ -68,7 +75,7 @@ function portAccepts(hostname: string, port: number, timeoutMs: number): Promise
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve) => {
     const attempt = () => {
-      const socket = connect({ host: hostname, port }, () => {
+      const socket = netConnect({ host: hostname, port }, () => {
         socket.destroy();
         resolve(true);
       });
@@ -82,14 +89,87 @@ function portAccepts(hostname: string, port: number, timeoutMs: number): Promise
   });
 }
 
+/** TLS trust state for one invocation (W5' / D-079): `ca` is the pinned
+ * certificate PEM handed to fetch as the trust anchor; `pin` is the RFC 7469
+ * SPKI pin used to distinguish "server renewed its certificate, same key"
+ * (re-anchor and continue) from "identity changed" (hard block). */
+export interface RemoteTlsAnchor {
+  ca: string;
+  pin?: string;
+  /** Endpoint label for the identity-changed error; absent at registration
+   * (the name is not known yet — it comes from the discovery document). */
+  name?: string;
+  /** When set, a successful re-anchor persists the new PEM into the binding. */
+  registryPath?: string;
+}
+
+export interface RemoteTlsProbe {
+  /** Verified against the system trust store + hostname (public-CA path). */
+  authorized: boolean;
+  certPem: string;
+  spkiPin: string;
+}
+
+/** Registration-time TLS probe (W5'): for https urls, capture the peer
+ * certificate before the first fetch. authorized=true means a public CA
+ * chain validates (no pinning); false means self-signed/private — the client
+ * TOFU-pins the certificate as trust anchor plus its SPKI as identity.
+ * Non-https urls (ssh:// tunnel, loopback http) return undefined: transport
+ * security comes from SSH or locality, not TLS. */
+export async function probeRemoteTls(url: string): Promise<RemoteTlsProbe | undefined> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new RemoteTransportError(`remote endpoint url is not a valid absolute URL: ${url}`);
+  }
+  if (parsed.protocol !== "https:") return undefined;
+  const port = parsed.port === "" ? 443 : Number(parsed.port);
+  const host = parsed.hostname;
+  return await new Promise<RemoteTlsProbe>((resolve, reject) => {
+    const socket = tlsConnect(
+      {
+        host,
+        port,
+        // SNI must be a name, not an IP (node:tls rejects IP servernames);
+        // IP-addressed certificates verify through the SAN, not SNI.
+        ...(isIP(host) === 0 ? { servername: host } : {}),
+        rejectUnauthorized: false,
+      },
+      () => {
+        const peer = socket.getPeerCertificate();
+        socket.destroy();
+        if (peer === undefined || peer.raw === undefined || peer.raw.length === 0) {
+          reject(new RemoteTransportError(`remote endpoint presented no TLS certificate: ${url}`));
+          return;
+        }
+        resolve({
+          authorized: socket.authorized === true,
+          certPem: new X509Certificate(peer.raw).toString(),
+          spkiPin: spkiPinOf(peer.raw),
+        });
+      },
+    );
+    socket.setTimeout(10_000, () => {
+      socket.destroy();
+      reject(new RemoteTransportError(`TLS probe timed out: ${url}`));
+    });
+    socket.on("error", (error) => {
+      reject(new RemoteTransportError(`TLS probe failed: ${url} (${error instanceof Error ? error.message : String(error)})`));
+    });
+  });
+}
+
 /** Ensure a usable wire base for one invocation (D-078 transparent ssh):
  * http/https urls are used directly; `ssh://host[:port]` opens an ephemeral
  * local forward over SSH (encryption + host auth come from the user's SSH
  * config/keys), waits for readiness, and returns the tunnel endpoint.
- * `sshCommand` is a test injection point for the ssh binary invocation. */
+ * https bindings with a pinned certificate carry their TLS anchor on the
+ * handle. `sshCommand` is a test injection point for the ssh binary
+ * invocation; `registryPath` lets the renewal re-anchor persist. */
 export async function openRemoteTransport(
   binding: RegistryBinding,
-  options: { sshCommand?: readonly string[] } = {},
+  options: { sshCommand?: readonly string[]; registryPath?: string } = {},
 ): Promise<RemoteTransportHandle> {
   if (binding.kind !== "remote" || binding.url === undefined) {
     throw new RemoteTransportError(`endpoint '${binding.name}' is not a remote binding`);
@@ -97,7 +177,19 @@ export async function openRemoteTransport(
   assertRemoteUrlAllowed(binding.url);
   const ssh = parseSshUrl(binding.url);
   if (ssh === undefined) {
-    return { base: binding.url.replace(/\/+$/, ""), close: () => {} };
+    const tls = binding.url.startsWith("https://") && binding.tls_cert !== undefined
+      ? {
+          ca: binding.tls_cert,
+          ...(binding.tls_pin !== undefined ? { pin: binding.tls_pin } : {}),
+          name: binding.name,
+          ...(options.registryPath !== undefined ? { registryPath: options.registryPath } : {}),
+        }
+      : undefined;
+    return {
+      base: binding.url.replace(/\/+$/, ""),
+      close: () => {},
+      ...(tls !== undefined ? { tls } : {}),
+    };
   }
   const localPort = await freePort();
   const argv = [
@@ -126,22 +218,86 @@ function authorizationHeaders(token: string | undefined): Record<string, string>
   return token === undefined ? {} : { authorization: `Bearer ${token}` };
 }
 
-async function fetchJson(url: string, init: RequestInit): Promise<{ status: number; body: unknown }> {
-  let response: Response;
-  try {
-    response = await fetch(url, { ...init, signal: AbortSignal.timeout(remoteTimeoutMs()) });
-  } catch (error) {
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
+function unreachableError(url: string, error: unknown): RemoteTransportError {
+  const code = (error as { code?: unknown }).code;
+  const detail = error instanceof Error ? error.message : String(error);
+  return new RemoteTransportError(
+    `remote endpoint unreachable: ${url} (${detail}${typeof code === "string" && code !== "" ? ` [${code}]` : ""})`,
+  );
+}
+
+/** Renewal re-anchor attempt (W5' / D-079, 裁决点 B): after a fetch-phase
+ * failure with an anchor present, probe the CURRENT peer certificate.
+ * Same SPKI pin → server renewed its certificate keeping the key: swap the
+ * anchor (and persist) and let the caller retry once, invisibly. Different
+ * pin → identity change (reinstall or MITM): hard block. Unreachable probe
+ * → the original failure stands. */
+async function reanchorFromProbe(url: string, anchor: RemoteTlsAnchor): Promise<boolean> {
+  const probe = await probeRemoteTls(url).catch(() => undefined);
+  if (probe === undefined) return false;
+  if (anchor.pin !== undefined && probe.spkiPin !== anchor.pin) {
     throw new RemoteTransportError(
-      `remote endpoint unreachable: ${url} (${error instanceof Error ? error.message : String(error)})`,
+      `remote '${anchor.name ?? "endpoint"}' TLS identity changed — pinned ${anchor.pin}, got ${probe.spkiPin}; if the server was reinstalled this is expected: refresh trust with 'ukp register --url <url> --token <token>'`,
     );
   }
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw new RemoteTransportError(`remote endpoint returned a non-JSON body (status ${response.status}): ${url}`);
+  anchor.ca = probe.certPem;
+  if (anchor.registryPath !== undefined && anchor.name !== undefined) {
+    try {
+      refreshRemoteTlsCert(anchor.registryPath, anchor.name, probe.certPem);
+    } catch {
+      // persistence is best-effort: the in-memory anchor already unblocks
+      // this invocation; the next renewal re-anchors again.
+    }
   }
-  return { status: response.status, body };
+  return true;
+}
+
+/** Fetch + JSON-decode with one transparent renewal re-anchor: a pinned
+ * https anchor turns a certificate-verification fetch failure into a probe —
+ * same SPKI keeps going (anchor swapped in place), a different SPKI blocks. */
+async function fetchJson(
+  url: string,
+  init: RequestInit,
+  anchor?: RemoteTlsAnchor,
+): Promise<{ status: number; body: unknown }> {
+  const attempt = async (ca?: string, wrap = true): Promise<{ status: number; body: unknown }> => {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(remoteTimeoutMs()),
+        ...(ca !== undefined ? { tls: { ca } } : {}),
+      } as RequestInit);
+    } catch (error) {
+      // wrap=false keeps the raw error so the anchored caller can classify
+      // it (TLS verification failure → re-anchor probe) before wrapping.
+      if (!wrap) throw error;
+      throw unreachableError(url, error);
+    }
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new RemoteTransportError(`remote endpoint returned a non-JSON body (status ${response.status}): ${url}`);
+    }
+    return { status: response.status, body };
+  };
+
+  if (anchor === undefined) return await attempt();
+  try {
+    return await attempt(anchor.ca, false);
+  } catch (error) {
+    if (error instanceof RemoteTransportError) throw error; // non-JSON body: not a TLS event
+    if (isTimeoutError(error)) throw unreachableError(url, error);
+    // Re-anchoring needs a pinned identity: only the SPKI pin distinguishes
+    // "renewed certificate, same key" from "different identity".
+    if (anchor.pin !== undefined && await reanchorFromProbe(url, anchor)) return await attempt(anchor.ca);
+    throw unreachableError(url, error);
+  }
 }
 
 function asRecord(body: unknown, url: string): Record<string, unknown> {
@@ -168,18 +324,20 @@ export async function fetchDiscoveryDocument(
     name: binding.name,
     ...(binding.instance_uid !== undefined ? { pinnedUid: binding.instance_uid } : {}),
     ...(token !== undefined ? { token } : {}),
+    ...(transport.tls !== undefined ? { tlsAnchor: transport.tls } : {}),
   });
 }
 
 /** URL-addressed variant for registration (the name is not known yet — it
- * comes FROM this document per RQ-14). */
+ * comes FROM this document per RQ-14). `tlsAnchor` carries the registration
+ * probe's captured certificate for self-signed servers (W5'). */
 export async function fetchDiscoveryDocumentAt(
   url: string,
-  options: { name?: string; pinnedUid?: string; token?: string } = {},
+  options: { name?: string; pinnedUid?: string; token?: string; tlsAnchor?: RemoteTlsAnchor } = {},
 ): Promise<DiscoveryFetch> {
   const base = url.replace(/\/+$/, "");
   const label = options.name ?? base;
-  const { body } = await fetchJson(`${base}${DISCOVERY_PATH}`, { headers: authorizationHeaders(options.token) });
+  const { body } = await fetchJson(`${base}${DISCOVERY_PATH}`, { headers: authorizationHeaders(options.token) }, options.tlsAnchor);
   const record = asRecord(body, `${base}${DISCOVERY_PATH}`);
   if (record.protocol !== PROTOCOL_NAME) {
     throw new RemoteTransportError(`endpoint '${label}' at ${base} is not a ukp-remote service (protocol: ${String(record.protocol)})`);
@@ -229,7 +387,7 @@ export async function remoteSearch(
     method: "POST",
     headers: { "content-type": "application/json", ...authorizationHeaders(token) },
     body: JSON.stringify({ query, limit }),
-  });
+  }, transport.tls);
   const record = asRecord(body, `${base}/v1/search`);
   const envelope = record.endpoints as Array<Record<string, unknown>> | undefined;
   const entry = Array.isArray(envelope) ? envelope[0] : undefined;
@@ -302,7 +460,7 @@ export async function remoteRead(
   if (params.pin !== undefined) search.set("pin", params.pin);
   const { status, body } = await fetchJson(`${base}/v1/read?${search.toString()}`, {
     headers: authorizationHeaders(token),
-  });
+  }, transport.tls);
   const record = asRecord(body, `${base}/v1/read`);
   const error = record.error as { class?: unknown; message?: unknown } | undefined;
   return {
