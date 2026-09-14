@@ -10,7 +10,14 @@ import {
   unregisterAt,
   type RegistryBinding,
 } from "../registry.ts";
-import { fetchDiscoveryDocument, fetchDiscoveryDocumentAt, remoteTokenFor } from "../capabilities/remote-client.ts";
+import {
+  fetchDiscoveryDocument,
+  fetchDiscoveryDocumentAt,
+  openRemoteTransport,
+  remoteTokenFor,
+  resolveRemoteToken,
+  type RemoteTransportHandle,
+} from "../capabilities/remote-client.ts";
 import {
   KitUsageError,
   parseKitArgs,
@@ -43,7 +50,8 @@ export const REGISTER_SPEC: UkpCommandSpec = {
   usage: "[options]",
   strictArguments: true,
   options: [
-    { flags: "--url <url>", help: "register a remote ukp-serve endpoint (https, or loopback http); the endpoint name comes from its discovery document" },
+    { flags: "--url <url>", help: "register a remote ukp-serve endpoint (https, ssh://host[:port], or loopback http); the endpoint name comes from its discovery document" },
+    { flags: "--token <token>", help: "store the bearer token in the binding (plaintext, 0600 registry file); UKP_ENDPOINT_<NAME>_TOKEN overrides it at call time" },
   ],
   helpSuffix: [
     "",
@@ -123,9 +131,9 @@ export function executeRegisterCommand(
   }
 
   try {
-    const parsed = parseKitArgs<{ url?: string }>(REGISTER_SPEC, args);
+    const parsed = parseKitArgs<{ url?: string; token?: string }>(REGISTER_SPEC, args);
     if (parsed.options.url !== undefined) {
-      return executeRegisterRemote(parsed.options.url, context);
+      return executeRegisterRemote(parsed.options.url, parsed.options.token, context);
     }
     const report = diagnoseService(context.currentDirectory, context.resolveProvider);
     registerAt(context.registryPath, report.service.effectiveName, report.service.folder);
@@ -150,16 +158,22 @@ export function executeRegisterCommand(
   }
 }
 
-/** Remote registration (D-077 / spec endpoint-registration): name comes from
- * the discovery document (RQ-14 strict equality holds from day one), the
- * instance uid is the TOFU pin. */
+/** Remote registration (D-077/D-078 / spec endpoint-registration): name comes
+ * from the discovery document (RQ-14 strict equality holds from day one), the
+ * instance uid is the TOFU pin; ssh:// urls register through a transparent
+ * ephemeral tunnel, and --token stores the credential in the binding. */
 async function executeRegisterRemote(
   url: string,
+  token: string | undefined,
   context: InventoryCommandContext,
 ): Promise<InventoryCommandResult> {
+  let transport: RemoteTransportHandle | undefined;
   try {
     assertRemoteUrlAllowed(url);
-    const discovery = await fetchDiscoveryDocumentAt(url);
+    transport = await openRemoteTransport({ name: "(registering)", kind: "remote", url });
+    const discovery = await fetchDiscoveryDocumentAt(transport.base, {
+      ...(token !== undefined ? { token } : {}),
+    });
     const name = discovery.doc.name;
     if (!ENDPOINT_NAME.test(name)) {
       throw new Error(`discovery document declares an invalid endpoint name '${name}'`);
@@ -171,19 +185,25 @@ async function executeRegisterRemote(
       name,
       url,
       instance_uid: discovery.doc.instance_uid,
+      ...(token !== undefined ? { token } : {}),
     });
+    const envToken = remoteTokenFor(name);
     const lines = [
       `registered (remote): ${name}`,
       `url: ${url}`,
       `instance_uid: ${discovery.doc.instance_uid}`,
       ...(discovery.doc.description !== undefined ? [`description: ${discovery.doc.description}`] : []),
-      ...(discovery.bearerRequired && remoteTokenFor(name) === undefined
-        ? [`note: this endpoint requires a bearer token; set UKP_ENDPOINT_${name.toUpperCase().replace(/-/g, "_")}_TOKEN`]
-        : []),
+      ...(token !== undefined
+        ? [`auth: token stored in registry binding (plaintext; env UKP_ENDPOINT_${name.toUpperCase().replace(/-/g, "_")}_TOKEN overrides)`]
+        : discovery.bearerRequired && envToken === undefined
+          ? [`note: this endpoint requires a bearer token; pass --token or set UKP_ENDPOINT_${name.toUpperCase().replace(/-/g, "_")}_TOKEN`]
+          : []),
     ];
     return { exitCode: 0, stdout: lines.join("\n"), stderr: "" };
   } catch (error) {
     return { exitCode: 1, stdout: "", stderr: `ukp register: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    transport?.close();
   }
 }
 
@@ -248,8 +268,10 @@ function renderListOutput(rows: ReadonlyArray<{ line: string; warning?: string }
  * inventory semantics as an unreadable local manifest. */
 async function renderRemoteListRow(endpoint: RegistryBinding): Promise<{ line: string; warning?: string }> {
   const url = endpoint.url!;
+  let transport: RemoteTransportHandle | undefined;
   try {
-    const discovery = await fetchDiscoveryDocument(endpoint, remoteTokenFor(endpoint.name));
+    transport = await openRemoteTransport(endpoint);
+    const discovery = await fetchDiscoveryDocument(endpoint, transport, resolveRemoteToken(endpoint));
     const extras = Object.entries(discovery.doc.capabilities)
       .filter(([, capability]) => capability.derived !== true)
       .map(([name]) => name)
@@ -262,6 +284,8 @@ async function renderRemoteListRow(endpoint: RegistryBinding): Promise<{ line: s
       line: `${endpoint.name}\t${url}\t(unavailable)`,
       warning: `endpoint '${endpoint.name}' capabilities unavailable: ${headline}`,
     };
+  } finally {
+    transport?.close();
   }
 }
 

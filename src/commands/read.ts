@@ -14,8 +14,11 @@ import {
 import { isValidPin } from "../capabilities/rename-recovery.ts";
 import {
   fetchDiscoveryDocument,
+  openRemoteTransport,
   remoteRead,
   remoteTokenFor,
+  resolveRemoteToken,
+  type RemoteTransportHandle,
 } from "../capabilities/remote-client.ts";
 import { isRemoteBinding, readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
@@ -446,13 +449,16 @@ async function executeRemoteRead(
   format: "json" | undefined,
   binding: RegistryBinding,
 ): Promise<ReadCommandResult> {
-  const token = remoteTokenFor(binding.name);
+  const token = resolveRemoteToken(binding);
   const warnings: string[] = [];
+  let transport: RemoteTransportHandle | undefined;
   try {
-    const discovery = await fetchDiscoveryDocument(binding, token);
+    transport = await openRemoteTransport(binding);
+    const discovery = await fetchDiscoveryDocument(binding, transport, token);
     warnings.push(...discovery.warnings);
     if (discovery.bearerRequired && token === undefined) warnings.push(remoteTokenHint(binding.name));
   } catch (error) {
+    transport?.close();
     return renderReadOutcome(
       request,
       {
@@ -491,7 +497,7 @@ async function executeRemoteRead(
   };
   let result;
   try {
-    result = await remoteRead(binding, token, params);
+    result = await remoteRead(transport, token, params);
   } catch (error) {
     return renderReadOutcome(
       request,
@@ -505,6 +511,8 @@ async function executeRemoteRead(
       format,
       warnings,
     );
+  } finally {
+    transport.close();
   }
   if (result.ok) {
     return renderReadOutcome(

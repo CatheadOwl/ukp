@@ -22,8 +22,11 @@ const PENDING = new Set<string>([]);
 
 // A CLI-shaped return constructs `stdout:` / `stderr:` / `exitCode:` object
 // members. Word-boundary + colon keeps comments, provider spawnSync results
-// (`result.stdout` reads), and `stdio:`/`stdoutFd` identifiers out of scope.
-const CLI_SHAPED_RETURN = /\b(exitCode|stdout|stderr)\s*:/;
+// (`result.stdout` reads), and `stdio:`/`stdoutFd` identifiers out of scope;
+// the `"ignore"` negative lookahead keeps Bun.spawn stdio config
+// (`stdout: "ignore"`) out of scope — that is process plumbing, not a
+// CLI-shaped return.
+const CLI_SHAPED_RETURN = /\b(exitCode|stdout|stderr)\s*:(?!\s*"ignore")/;
 const COMMANDER_IMPORT = /from\s+["']commander["']/;
 
 function capabilityFiles(): string[] {

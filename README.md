@@ -126,7 +126,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url>` registers a remote `ukp serve` endpoint: the name and instance identity come from its discovery document and are pinned TOFU-style. |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url> [--token <t>]` registers a remote `ukp serve` endpoint (`https://`, `ssh://host[:port]` with transparent tunneling, or loopback `http://`): the name and instance identity come from its discovery document and are pinned TOFU-style; `--token` stores the credential in the binding (env overrides at call time). |
 | `ukp list` | Lists registered endpoint bindings (local paths and remote urls, with per-endpoint declared capabilities). |
 
 ### Operations commands
@@ -184,14 +184,16 @@ as mandatory (serve cannot see past its own bind address). The full
 real-machine walkthrough (worked example on the author's VPS) lives in the
 repository handbook: `handbooks/ukp-remote-deployment/`.
 
-### Via an SSH tunnel (two personal machines — zero extra components)
+### Via SSH (two personal machines — zero extra components, zero ceremony)
 
-SSH provides encryption and authentication; the tunnel maps the remote
-loopback to a local port, so the loopback admission holds naturally.
+The `ssh://` URL scheme makes the transport transparent: ukp opens an
+ephemeral SSH tunnel per invocation (key auth from your SSH config), so a
+registered remote endpoint behaves exactly like a local one — no manual
+tunnel, no env ceremony once the token is stored.
 
 ```bash
-ssh -N -L 18575:127.0.0.1:8570 <host> &
-UKP_ENDPOINT_<NAME>_TOKEN=<token> ukp register --url http://127.0.0.1:18575
+ukp register --url ssh://<host>:8570 --token <token>   # once; TOFU + token stored
+ukp read --endpoint <name> notes/x.md                   # just works, like local
 ```
 
 ### Behind Caddy (public domain)

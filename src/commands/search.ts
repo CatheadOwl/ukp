@@ -10,7 +10,13 @@ import {
   type SearchEndpointOutcome,
   type SearchResult,
 } from "../capabilities/search.ts";
-import { fetchDiscoveryDocument, remoteSearch, remoteTokenFor } from "../capabilities/remote-client.ts";
+import {
+  fetchDiscoveryDocument,
+  openRemoteTransport,
+  remoteSearch,
+  resolveRemoteToken,
+  type RemoteTransportHandle,
+} from "../capabilities/remote-client.ts";
 import { isRemoteBinding, readRegistry } from "../registry.ts";
 import { resolveScope, ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
@@ -210,13 +216,15 @@ async function executeMixedSearch(
 
   const remoteOutcomes = new Map<string, SearchEndpointOutcome>();
   for (const binding of remotes) {
-    const token = remoteTokenFor(binding.name);
+    const token = resolveRemoteToken(binding);
+    let transport: RemoteTransportHandle | undefined;
     try {
-      const discovery = await fetchDiscoveryDocument(binding, token);
+      transport = await openRemoteTransport(binding);
+      const discovery = await fetchDiscoveryDocument(binding, transport, token);
       warnings.push(...discovery.warnings);
       if (discovery.bearerRequired && token === undefined) {
         warnings.push(
-          `endpoint '${binding.name}' requires a bearer token; set UKP_ENDPOINT_${binding.name.toUpperCase().replace(/-/g, "_")}_TOKEN`,
+          `endpoint '${binding.name}' requires a bearer token; pass --token at registration or set UKP_ENDPOINT_${binding.name.toUpperCase().replace(/-/g, "_")}_TOKEN`,
         );
       }
       if (!("search" in discovery.doc.capabilities)) {
@@ -232,7 +240,7 @@ async function executeMixedSearch(
         });
         continue;
       }
-      const execution = await remoteSearch(binding, token, parsed.request.query, parsed.request.limit);
+      const execution = await remoteSearch(binding, transport, token, parsed.request.query, parsed.request.limit);
       remoteOutcomes.set(binding.name, {
         ...execution.outcome,
         ...(execution.results.length > 0 ? { providerOutput: JSON.stringify(execution.results) } : {}),
@@ -251,6 +259,8 @@ async function executeMixedSearch(
         status: "failed",
         message,
       });
+    } finally {
+      transport?.close();
     }
   }
 
