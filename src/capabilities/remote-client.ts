@@ -1,5 +1,6 @@
+import { connect } from "node:net";
 import { DISCOVERY_PATH, PROTOCOL_NAME, type DiscoveryDocument } from "../server.ts";
-import { assertRemoteUrlAllowed, type RegistryBinding } from "../registry.ts";
+import { assertRemoteUrlAllowed, parseSshUrl, type RegistryBinding } from "../registry.ts";
 import type { SearchEndpointOutcome } from "./search.ts";
 
 /** Remote transport for the client side (ukp-remote wire v1, ADR-REM-002/003;
@@ -19,6 +20,13 @@ export function remoteTokenFor(endpointName: string): string | undefined {
   return process.env[`UKP_ENDPOINT_${endpointName.toUpperCase().replace(/-/g, "_")}_TOKEN`];
 }
 
+/** Credential resolution (D-078): env wins, the stored binding token is the
+ * fallback — injected credentials (CI/agent env) never get shadowed by the
+ * file, while the file keeps interactive use zero-ceremony. */
+export function resolveRemoteToken(binding: RegistryBinding): string | undefined {
+  return remoteTokenFor(binding.name) ?? binding.token;
+}
+
 /** `UKP_REMOTE_TIMEOUT_MS` mirrors `UKP_PROVIDER_TIMEOUT_MS` (60s default). */
 function remoteTimeoutMs(): number {
   const raw = process.env.UKP_REMOTE_TIMEOUT_MS;
@@ -34,12 +42,84 @@ function tofuMode(): "warn" | "block" {
   return process.env.UKP_TOFU === "block" ? "block" : "warn";
 }
 
-export function remoteBaseOf(binding: RegistryBinding): string {
+export interface RemoteTransportHandle {
+  /** Wire base the client actually fetches (tunnel endpoint or the url itself). */
+  base: string;
+  /** Releases per-invocation resources (kills an ephemeral tunnel); noop for
+   * direct connections. */
+  close: () => void;
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const listener = Bun.listen({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: { data: () => {}, open: () => {}, close: () => {}, drain: () => {}, error: () => {} },
+    });
+    const port = listener.port;
+    listener.stop(true);
+    if (port > 0) resolve(port);
+    else reject(new RemoteTransportError("unable to allocate a local tunnel port"));
+  });
+}
+
+function portAccepts(hostname: string, port: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const attempt = () => {
+      const socket = connect({ host: hostname, port }, () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.on("error", () => {
+        socket.destroy();
+        if (Date.now() > deadline) resolve(false);
+        else setTimeout(attempt, 120);
+      });
+    };
+    attempt();
+  });
+}
+
+/** Ensure a usable wire base for one invocation (D-078 transparent ssh):
+ * http/https urls are used directly; `ssh://host[:port]` opens an ephemeral
+ * local forward over SSH (encryption + host auth come from the user's SSH
+ * config/keys), waits for readiness, and returns the tunnel endpoint.
+ * `sshCommand` is a test injection point for the ssh binary invocation. */
+export async function openRemoteTransport(
+  binding: RegistryBinding,
+  options: { sshCommand?: readonly string[] } = {},
+): Promise<RemoteTransportHandle> {
   if (binding.kind !== "remote" || binding.url === undefined) {
     throw new RemoteTransportError(`endpoint '${binding.name}' is not a remote binding`);
   }
   assertRemoteUrlAllowed(binding.url);
-  return binding.url.replace(/\/+$/, "");
+  const ssh = parseSshUrl(binding.url);
+  if (ssh === undefined) {
+    return { base: binding.url.replace(/\/+$/, ""), close: () => {} };
+  }
+  const localPort = await freePort();
+  const argv = [
+    ...(options.sshCommand ?? ["ssh"]),
+    "-N",
+    "-o", "ExitOnForwardFailure=yes",
+    "-o", "BatchMode=yes",
+    "-L", `127.0.0.1:${localPort}:127.0.0.1:${ssh.port}`,
+    ssh.host,
+  ];
+  const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+  const ready = await portAccepts("127.0.0.1", localPort, 15_000);
+  if (!ready) {
+    proc.kill();
+    throw new RemoteTransportError(
+      `ssh tunnel to '${ssh.host}:${ssh.port}' (endpoint '${binding.name}') did not become ready; check the host alias and key auth (BatchMode)`,
+    );
+  }
+  return {
+    base: `http://127.0.0.1:${localPort}`,
+    close: () => proc.kill(),
+  };
 }
 
 function authorizationHeaders(token: string | undefined): Record<string, string> {
@@ -81,9 +161,10 @@ export interface DiscoveryFetch {
 /** Fetch + validate the discovery document, run the TOFU pin comparison. */
 export async function fetchDiscoveryDocument(
   binding: RegistryBinding,
+  transport: RemoteTransportHandle,
   token?: string,
 ): Promise<DiscoveryFetch> {
-  return fetchDiscoveryDocumentAt(binding.url!, {
+  return fetchDiscoveryDocumentAt(transport.base, {
     name: binding.name,
     ...(binding.instance_uid !== undefined ? { pinnedUid: binding.instance_uid } : {}),
     ...(token !== undefined ? { token } : {}),
@@ -138,11 +219,12 @@ export interface RemoteSearchExecution {
  * vocabulary (status/message/envelope-compatible fields). */
 export async function remoteSearch(
   binding: RegistryBinding,
+  transport: RemoteTransportHandle,
   token: string | undefined,
   query: string,
   limit: number,
 ): Promise<RemoteSearchExecution> {
-  const base = remoteBaseOf(binding);
+  const base = transport.base;
   const { status, body } = await fetchJson(`${base}/v1/search`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authorizationHeaders(token) },
@@ -208,11 +290,11 @@ export interface RemoteReadResult {
 /** GET /v1/read — raw transport; classification into ReadOutcome happens in
  * the read adapter (commands/read.ts) where the local vocabulary lives. */
 export async function remoteRead(
-  binding: RegistryBinding,
+  transport: RemoteTransportHandle,
   token: string | undefined,
   params: { ref?: string; uri?: string; lines?: string; pin?: string },
 ): Promise<RemoteReadResult> {
-  const base = remoteBaseOf(binding);
+  const base = transport.base;
   const search = new URLSearchParams();
   if (params.ref !== undefined) search.set("ref", params.ref);
   if (params.uri !== undefined) search.set("uri", params.uri);

@@ -26,6 +26,9 @@ const bindingSchema = z.object({
   kind: z.literal("remote").optional(),
   url: z.string().min(1).optional(),
   instance_uid: z.string().min(1).optional(),
+  /** Client credential stored in the binding (D-078: plaintext, 0600 file —
+   * AWS credentials-file / netrc convention; env override wins at call time). */
+  token: z.string().min(1).optional(),
 }).strict();
 
 const registrySchema = z.object({
@@ -44,6 +47,8 @@ export interface RegistryBinding {
   kind?: "remote";
   url?: string;
   instance_uid?: string;
+  /** Remote-only stored credential (plaintext; env takes precedence). */
+  token?: string;
 }
 
 export function isRemoteBinding(binding: RegistryBinding): boolean {
@@ -73,9 +78,31 @@ export function isLoopbackHttpUrl(raw: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
 }
 
-/** Remote URL admission (ADR-REM-003 §7): https always; plain http only on
- * loopback (local dogfood). Enforced at registration AND at call time. */
+/** `ssh://host[:port]` transport scheme (D-078): the client tunnels to the
+ * remote host's loopback over SSH — encryption + host auth come from SSH,
+ * so the scheme is admissible wherever https is. */
+export function parseSshUrl(raw: string): { host: string; port: number } | undefined {
+  if (!/^ssh:\/\/[^\/]+/.test(raw)) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "ssh:" || parsed.pathname !== "/" && parsed.pathname !== "") return undefined;
+  const host = parsed.hostname;
+  if (host.length === 0) return undefined;
+  const port = parsed.port === "" ? 8570 : Number(parsed.port);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return undefined;
+  return { host, port };
+}
+
+/** Remote URL admission (ADR-REM-003 §7 + D-078): https always; plain http
+ * only on loopback (local dogfood); ssh://host[:port] tunnels via SSH.
+ * Enforced at registration AND at call time. */
 export function assertRemoteUrlAllowed(raw: string): void {
+  const ssh = parseSshUrl(raw);
+  if (ssh !== undefined) return;
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -85,7 +112,7 @@ export function assertRemoteUrlAllowed(raw: string): void {
   if (parsed.protocol === "https:") return;
   if (parsed.protocol === "http:" && isLoopbackHttpUrl(raw)) return;
   throw new RegistryError(
-    `remote endpoint url must be https (plain http is loopback-only): ${raw}`,
+    `remote endpoint url must be https, ssh://host[:port], or loopback http: ${raw}`,
   );
 }
 
@@ -124,8 +151,8 @@ function validateBindings(endpoints: readonly RegistryBinding[]): RegistryBindin
       if (urls.has(endpoint.url)) throw new RegistryError(`duplicate remote endpoint url '${endpoint.url}'`);
       urls.add(endpoint.url);
     } else {
-      if (endpoint.url !== undefined || endpoint.instance_uid !== undefined) {
-        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid)`);
+      if (endpoint.url !== undefined || endpoint.instance_uid !== undefined || endpoint.token !== undefined) {
+        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid/token)`);
       }
       if (endpoint.path === undefined || !isAbsolute(endpoint.path)) {
         throw new RegistryError(`registry path must be absolute: ${endpoint.path ?? "(missing)"}`);
@@ -175,6 +202,7 @@ function toSerializableBinding(binding: RegistryBinding): Record<string, string>
       kind: "remote",
       url: binding.url!,
       ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
+      ...(binding.token !== undefined ? { token: binding.token } : {}),
     };
   }
   return { name: binding.name, path: binding.path! };
@@ -217,6 +245,7 @@ export function registerRemoteBinding(
     kind: "remote",
     url: binding.url!,
     ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
+    ...(binding.token !== undefined ? { token: binding.token } : {}),
   };
   const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
   if (sameName) {
@@ -297,7 +326,7 @@ export function registerAt(registryPath: string, name: string, servicePath: stri
 
 export function registerRemoteAt(
   registryPath: string,
-  binding: { name: string; url: string; instance_uid?: string },
+  binding: { name: string; url: string; instance_uid?: string; token?: string },
 ): RegistryBinding[] {
   return mutateRegistry(registryPath, (current) => registerRemoteBinding(current, binding));
 }

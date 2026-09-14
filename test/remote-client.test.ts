@@ -137,7 +137,7 @@ describe("registry remote bindings (D-077)", () => {
       'kind = "remote"',
       'url = "http://lan-host:8570"',
       "",
-    ].join("\n"))).toThrow("https (plain http is loopback-only)");
+    ].join("\n"))).toThrow("must be https, ssh://host[:port], or loopback http");
     expect(() => parseRegistry([
       "[[endpoints]]",
       'name = "bad"',
@@ -155,6 +155,78 @@ describe("registry remote bindings (D-077)", () => {
     expect(() => registerRemoteAt(registryPath, { name: "rem", url: "http://127.0.0.1:9001" })).toThrow("already bound");
     registerLocal("keep-local", serviceFolder);
     expect(() => registerRemoteAt(registryPath, { name: "keep-local", url: "http://127.0.0.1:9002" })).toThrow("already bound");
+  });
+});
+
+describe("W4 transparent transport + stored token (D-078)", () => {
+  test("binding token round-trips; local bindings reject it", () => {
+    const bindings = parseRegistry([
+      "[[endpoints]]",
+      'name = "cad-remote"',
+      'kind = "remote"',
+      'url = "ssh://ali:8570"',
+      'instance_uid = "0b0c0d0e-1111-2222-3333-444455556666"',
+      'token = "s3cret"',
+      "",
+    ].join("\n"));
+    expect(bindings[0]?.token).toBe("s3cret");
+    expect(parseRegistry(serializeRegistry(bindings))).toEqual(bindings);
+    expect(() => parseRegistry([
+      "[[endpoints]]",
+      'name = "bad"',
+      'path = "C:/abs"',
+      'token = "s3cret"',
+      "",
+    ].join("\n"))).toThrow("must not carry remote fields");
+  });
+
+  test("resolveRemoteToken: env wins over the stored binding token", async () => {
+    const { resolveRemoteToken } = await import("../src/capabilities/remote-client.ts");
+    const binding = { name: "ali-test", kind: "remote" as const, url: "ssh://ali:8570", token: "stored" };
+    delete process.env.UKP_ENDPOINT_ALI_TEST_TOKEN;
+    expect(resolveRemoteToken(binding)).toBe("stored");
+    process.env.UKP_ENDPOINT_ALI_TEST_TOKEN = "from-env";
+    try {
+      expect(resolveRemoteToken(binding)).toBe("from-env");
+    } finally {
+      delete process.env.UKP_ENDPOINT_ALI_TEST_TOKEN;
+    }
+  });
+
+  test("parseSshUrl: host[:port] with default 8570; rejects junk", async () => {
+    const { parseSshUrl } = await import("../src/registry.ts");
+    expect(parseSshUrl("ssh://ali")).toEqual({ host: "ali", port: 8570 });
+    expect(parseSshUrl("ssh://ali:9443")).toEqual({ host: "ali", port: 9443 });
+    expect(parseSshUrl("http://ali")).toBeUndefined();
+    expect(parseSshUrl("ssh://ali:0")).toBeUndefined();
+  });
+
+  test("register --token stores the credential in the binding", async () => {
+    const { info } = startRemote({ tokens: ["stored-token"] });
+    const result = await asResult(executeRegisterCommand(["--url", info.url, "--token", "stored-token"], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("token stored in registry binding");
+    const binding = readRegistry(registryPath).find((b) => b.name === "serve-fixture");
+    expect(binding?.token).toBe("stored-token");
+    // Stored token authorizes without any env var.
+    delete process.env.UKP_ENDPOINT_SERVE_FIXTURE_TOKEN;
+    const search = await asResult(executeSearchCommand(["fixture-cad-search-token", "-c", "serve-fixture"], {
+      currentDirectory: root,
+      registryPath,
+      qmdCommand,
+    }));
+    expect(search.exitCode).toBe(0);
+    expect(search.stdout).toContain("read: ukp read ukp://serve-fixture/documents/cad-notes.md#L1");
+  });
+
+  test("openRemoteTransport returns the url base directly for http bindings", async () => {
+    const { openRemoteTransport } = await import("../src/capabilities/remote-client.ts");
+    const handle = await openRemoteTransport({ name: "x", kind: "remote", url: "http://127.0.0.1:18575/" });
+    expect(handle.base).toBe("http://127.0.0.1:18575");
+    expect(() => handle.close()).not.toThrow();
   });
 });
 
@@ -180,7 +252,7 @@ describe("ukp register --url", () => {
       registryPath,
     }));
     expect(refused.exitCode).toBe(1);
-    expect(refused.stderr).toContain("https (plain http is loopback-only)");
+    expect(refused.stderr).toContain("must be https, ssh://host[:port], or loopback http");
 
     const unreachable = await asResult(executeRegisterCommand(["--url", "http://127.0.0.1:9"], {
       currentDirectory: root,
