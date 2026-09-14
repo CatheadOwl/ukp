@@ -126,7 +126,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url> [--token <t>]` registers a remote `ukp serve` endpoint (`https://`, `ssh://host[:port]` with transparent tunneling, or loopback `http://`): the name and instance identity come from its discovery document and are pinned TOFU-style; `--token` stores the credential in the binding (env overrides at call time). |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url> [--token <t>]` registers a remote `ukp serve` endpoint (`https://`, `ssh://host[:port]` with transparent tunneling, or loopback `http://`): the name and instance identity come from its discovery document and are pinned TOFU-style; `--token` stores the credential in the binding (env overrides at call time). For self-signed HTTPS the certificate is TOFU-pinned automatically at registration (SPKI pin; certificate renewals keeping the key re-anchor transparently, a different key blocks until re-register). |
 | `ukp list` | Lists registered endpoint bindings (local paths and remote urls, with per-endpoint declared capabilities). |
 
 ### Operations commands
@@ -136,7 +136,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared. |
-| `ukp serve` | Exposes one registered endpoint over HTTP using the ukp-remote wire: a discovery document (`/.well-known/ukp.json`), `POST /v1/search`, and `GET /v1/read`. Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth, and a non-loopback `--host` without a token is refused. |
+| `ukp serve` | Exposes one registered endpoint over HTTP using the ukp-remote wire: a discovery document (`/.well-known/ukp.json`), `POST /v1/search`, and `GET /v1/read`. Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth, and a non-loopback `--host` without a token is refused. `--tls` serves HTTPS with an auto-generated self-signed identity; `--tls-cert/--tls-key` serve your own certificate (Let's Encrypt IP certs, mkcert, private CA). |
 
 ### Help commands
 
@@ -173,16 +173,37 @@ commands that support global scope.
 
 ## Remote Deployment
 
-`ukp serve` speaks plain HTTP; TLS and public exposure belong to a reverse
-proxy or an SSH tunnel in front of it (the data plane stays thin). The trust
-model is public PKI — a real domain, or an overlay tailnet that provisions
-real certificates. **Authentication is deny-by-default**: serving requires
+`ukp serve` speaks plain HTTP by default; TLS and public exposure are either
+**native** (`--tls` self-signs through the local openssl, `--tls-cert/--tls-key`
+serve your own certificate) or **delegated to a fronting component** (reverse
+proxy, SSH tunnel, overlay). The trust model is public PKI or TOFU pinning for
+bare IPs. **Authentication is deny-by-default**: serving requires
 `UKP_SERVE_TOKEN`; tokenless serving needs an explicit `--allow-anonymous`
 and is refused off loopback. A reverse proxy on the same host forwards from
 the public side to the loopback bind, so proxied deployments treat the token
 as mandatory (serve cannot see past its own bind address). The full
 real-machine walkthrough (worked example on the author's VPS) lives in the
 repository handbook: `handbooks/ukp-remote-deployment/`.
+
+### Native TLS (bare IP, no domain — zero extra components)
+
+`--tls` self-signs on first start (identity = keypair, persisted under the
+Service folder's `.ukp/tls/`; SAN covers the host's addresses). Clients pin
+the certificate automatically at registration — same command as any other
+remote, no flags added:
+
+```bash
+UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 --tls
+# consumer machine (self-signed is TOFU-pinned at registration):
+ukp register --url https://<ip>:8570 --token <token>
+ukp read --endpoint <name> notes/x.md                # just works, like local
+```
+
+A certificate renewal that keeps the key re-anchors transparently; a new key
+(reinstall) blocks with both fingerprints until you re-register. Prefer real
+certificates? Let's Encrypt issues IP-address certificates (GA 2026-01) —
+run certbot with a renewal timer and point `--tls-cert/--tls-key` at the
+files; clients then need no pinning at all (recipe in the handbook).
 
 ### Via SSH (two personal machines — zero extra components, zero ceremony)
 
