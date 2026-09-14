@@ -165,25 +165,32 @@ export function executeSearchCommand(
     if (remotes.length === 0) {
       return executeHumanSearch(parsed, context);
     }
-    return executeMixedSearch(parsed, context, scope, remotes);
+    // The mixed driver starts with a SYNC local runSearch whose typed errors
+    // would otherwise escape the try/catch as a promise rejection (W2 seam
+    // flaw, caught by the W6 review) — the same catch renders both paths.
+    return executeMixedSearch(parsed, context, scope, remotes).catch(renderSearchCommandError);
   } catch (error) {
-    if (error instanceof HelpRequestError) {
-      return { exitCode: 0, stdout: renderSearchHelp(), stderr: "" };
-    }
-    if (error instanceof KitUsageError) {
-      return { exitCode: 2, stdout: "", stderr: renderSearchUsageError(error.message) };
-    }
-    if (error instanceof ScopeError) {
-      return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
-    }
-    if (error instanceof SearchPlanningError) {
-      return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
-    }
-    if (error instanceof ManifestError) {
-      return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
-    }
-    throw error;
+    return renderSearchCommandError(error);
   }
+}
+
+function renderSearchCommandError(error: unknown): SearchCommandResult {
+  if (error instanceof HelpRequestError) {
+    return { exitCode: 0, stdout: renderSearchHelp(), stderr: "" };
+  }
+  if (error instanceof KitUsageError) {
+    return { exitCode: 2, stdout: "", stderr: renderSearchUsageError(error.message) };
+  }
+  if (error instanceof ScopeError) {
+    return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
+  }
+  if (error instanceof SearchPlanningError) {
+    return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
+  }
+  if (error instanceof ManifestError) {
+    return { exitCode: 1, stdout: "", stderr: `ukp search: ${error.message}\n` };
+  }
+  throw error;
 }
 
 /** Mixed local+remote execution: locals via the unchanged sync runSearch,

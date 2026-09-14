@@ -199,6 +199,94 @@ describe("serve /v1/read", () => {
   });
 });
 
+const rgAvailable = Bun.spawnSync(["rg", "--version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+describe("serve /v1/nav (W6)", () => {
+  test("returns the ukp.nav.v1 envelope; a missing route root is a 404", async () => {
+    const { info } = start();
+    const response = await fetch(`${info.url}/v1/nav`);
+    expect(response.status).toBe(200);
+    const envelope = await response.json() as {
+      schema: string;
+      endpoint: string;
+      root: string;
+      entries: Array<{ path: string; kind: string; description: string | null; truncated?: boolean; omittedMarkdownCount?: number }>;
+    };
+    expect(envelope.schema).toBe("ukp.nav.v1");
+    expect(envelope.endpoint).toBe("serve-fixture");
+    expect(envelope.root).toBe(".");
+    expect(envelope.entries).toEqual([
+      { path: "documents", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 1 },
+    ]);
+
+    const deep = await fetch(`${info.url}/v1/nav?depth=1`);
+    expect(deep.status).toBe(200);
+    const deepBody = await deep.json() as { entries: Array<{ path: string; kind: string; description: string | null }> };
+    expect(deepBody.entries).toEqual([{ path: "documents/cad-notes.md", kind: "file", description: null }]);
+
+    const miss = await fetch(`${info.url}/v1/nav?path=missing`);
+    expect(miss.status).toBe(404);
+    expect(((await miss.json()) as { error: { class: string; message: string } }).error.class).toBe("route-root-not-found");
+
+    const notDirectory = await fetch(`${info.url}/v1/nav?path=documents/cad-notes.md`);
+    expect(notDirectory.status).toBe(400);
+    expect(((await notDirectory.json()) as { error: { class: string } }).error.class).toBe("route-root-not-directory");
+
+    const badDepth = await fetch(`${info.url}/v1/nav?depth=eleven`);
+    expect(badDepth.status).toBe(400);
+    expect(((await badDepth.json()) as { error: { class: string } }).error.class).toBe("usage-error");
+  });
+});
+
+describe("serve /v1/rg (W6)", () => {
+  test.skipIf(!rgAvailable)(
+    "returns the single-endpoint ukp.rg.v1 envelope with ukp_uri handoff keys",
+    async () => {
+      const { info } = start();
+      const response = await fetch(`${info.url}/v1/rg?query=CAD`);
+      expect(response.status).toBe(200);
+      const envelope = await response.json() as {
+        schema: string;
+        endpoints: Array<{
+          name: string;
+          status: string;
+          matches: Array<{ path: string; ukp_uri?: string }>;
+        }>;
+      };
+      expect(envelope.schema).toBe("ukp.rg.v1");
+      expect(envelope.endpoints[0]?.name).toBe("serve-fixture");
+      expect(envelope.endpoints[0]?.status).toBe("succeeded");
+      expect(envelope.endpoints[0]?.matches[0]?.path).toBe("documents/cad-notes.md");
+      expect(envelope.endpoints[0]?.matches[0]?.ukp_uri).toBe("ukp://serve-fixture/documents/cad-notes.md");
+
+      const noMatch = await fetch(`${info.url}/v1/rg?query=zzz-no-such-token`);
+      expect(noMatch.status).toBe(200);
+      const noMatchBody = await noMatch.json() as { endpoints: Array<{ status: string }> };
+      expect(noMatchBody.endpoints[0]?.status).toBe("no_matches");
+    },
+    // The server-side run spawns rg via node spawnSync — measured ~9s per
+    // spawn on this machine (Windows Defender); bun's 5s default is not enough.
+    30000,
+  );
+
+  test("validates the query form and rejects non-GET methods", async () => {
+    const { info } = start();
+    const missing = await fetch(`${info.url}/v1/rg`);
+    expect(missing.status).toBe(400);
+    expect(((await missing.json()) as { error: { class: string } }).error.class).toBe("usage-error");
+
+    const badPassthrough = await fetch(`${info.url}/v1/rg?query=x&passthrough=--json`);
+    expect(badPassthrough.status).toBe(400);
+
+    const badBoolean = await fetch(`${info.url}/v1/rg?query=x&i=true`);
+    expect(badBoolean.status).toBe(400);
+    expect(((await badBoolean.json()) as { error: { class: string } }).error.class).toBe("usage-error");
+
+    const post = await fetch(`${info.url}/v1/rg?query=x`, { method: "POST" });
+    expect(post.status).toBe(405);
+  });
+});
+
 describe("serve auth", () => {
   test("token-protected /v1 routes reject missing/wrong bearer; discovery stays public", async () => {
     const { info } = start({ tokens: ["s3cret-token"] });
@@ -278,7 +366,7 @@ describe("serve multi-token (RQ-16)", () => {
 describe("serve routing and setup failures", () => {
   test("unknown routes 404 with the route hint; wrong methods 405", async () => {
     const { info } = start();
-    const missing = await fetch(`${info.url}/v1/nav?path=`);
+    const missing = await fetch(`${info.url}/v1/nope`);
     expect(missing.status).toBe(404);
     expect(((await missing.json()) as { error: { class: string } }).error.class).toBe("not-found");
 

@@ -11,6 +11,14 @@ import {
   type NavErrorClass,
   type NavRequest,
 } from "../capabilities/nav.ts";
+import {
+  fetchDiscoveryDocument,
+  openRemoteTransport,
+  remoteNav,
+  resolveRemoteToken,
+  type RemoteTransportHandle,
+} from "../capabilities/remote-client.ts";
+import { isRemoteBinding, readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
 import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
@@ -102,7 +110,10 @@ export function parseNavArgs(args: readonly string[]): NavRequest {
   };
 }
 
-export function executeNavCommand(args: readonly string[], context: NavContext): NavCommandResult {
+export function executeNavCommand(
+  args: readonly string[],
+  context: NavContext,
+): NavCommandResult | Promise<NavCommandResult> {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderNavHelp(), stderr: "" };
   }
@@ -118,6 +129,14 @@ export function executeNavCommand(args: readonly string[], context: NavContext):
       return { exitCode: 2, stdout: "", stderr: renderNavUsageError(error.message) };
     }
     throw error;
+  }
+
+  // Remote branch (ukp_remote W6): a remote binding routes through the
+  // remote transport; the sync local contract is unchanged
+  // (conditional-async seam, same as search/read).
+  const binding = readRegistry(context.registryPath).find((entry) => entry.name === request.endpoint);
+  if (binding !== undefined && isRemoteBinding(binding)) {
+    return executeRemoteNav(request, binding, context);
   }
 
   try {
@@ -178,4 +197,84 @@ export function renderNavHelp(): string {
 
 export function renderNavUsageError(message: string): string {
   return renderKitUsageError(NAV_SPEC, message);
+}
+
+function remoteTokenHint(endpointName: string): string {
+  return `endpoint '${endpointName}' requires a bearer token; set UKP_ENDPOINT_${endpointName.toUpperCase().replace(/-/g, "_")}_TOKEN`;
+}
+
+/** Wire error class → NavErrorClass. Nav's word-level route classes pass
+ * through; everything transport-shaped (auth, identity, route miss on an
+ * older serve, unreachable) folds into provider-unsupported with the
+ * specifics preserved in the message (W6 mapping, mirroring read's). */
+function mapRemoteNavErrorClass(errorClass: string | undefined): NavErrorClass {
+  if (errorClass === "route-root-not-found") return "route-root-not-found";
+  if (errorClass === "route-root-not-directory") return "route-root-not-directory";
+  return "provider-unsupported";
+}
+
+/** Failure rendering identical to the sync path's outcome branch, with the
+ * remote-phase warnings appended to stderr. */
+function remoteNavFailure(errorClass: NavErrorClass, message: string, warnings: string[]): NavCommandResult {
+  const stderr = [`ukp nav: ${message}`, ...warnings];
+  return { exitCode: NAV_EXIT_BY_ERROR_CLASS[errorClass], stdout: "", stderr: `${stderr.join("\n")}\n` };
+}
+
+/** GET /v1/nav over the wire; the wire envelope IS the local envelope, so
+ * the shared renderers finish the job with zero output divergence. */
+async function executeRemoteNav(
+  request: NavRequest,
+  binding: RegistryBinding,
+  context: NavContext,
+): Promise<NavCommandResult> {
+  const token = resolveRemoteToken(binding);
+  const warnings: string[] = [];
+  let transport: RemoteTransportHandle | undefined;
+  try {
+    transport = await openRemoteTransport(binding, { registryPath: context.registryPath });
+    const discovery = await fetchDiscoveryDocument(binding, transport, token);
+    warnings.push(...discovery.warnings);
+    if (discovery.bearerRequired && token === undefined) warnings.push(remoteTokenHint(binding.name));
+  } catch (error) {
+    transport?.close();
+    return remoteNavFailure(
+      "provider-unsupported",
+      error instanceof Error ? error.message : String(error),
+      warnings,
+    );
+  }
+
+  let result;
+  try {
+    result = await remoteNav(transport, token, {
+      ...(request.path !== undefined ? { path: request.path } : {}),
+      ...(request.depth !== undefined ? { depth: request.depth } : {}),
+    });
+  } catch (error) {
+    return remoteNavFailure(
+      "provider-unsupported",
+      error instanceof Error ? error.message : String(error),
+      warnings,
+    );
+  } finally {
+    transport.close();
+  }
+  if (result.ok && result.envelope !== undefined) {
+    // Diagnostics channel discipline matches the sync path (stdout is the
+    // payload, stderr is operational — in BOTH render modes).
+    const diagnosticLines = result.envelope.diagnostics
+      .map((diagnostic) => `ukp nav: ${diagnostic.code}: ${diagnostic.message}`)
+      .join("\n");
+    const operational = [...warnings, ...(diagnosticLines.length > 0 ? [diagnosticLines] : [])];
+    return {
+      exitCode: 0,
+      stdout: request.json ? renderNavJson(result.envelope) : renderNavHuman(result.envelope),
+      stderr: operational.length > 0 ? `${operational.join("\n")}\n` : "",
+    };
+  }
+  return remoteNavFailure(
+    mapRemoteNavErrorClass(result.errorClass),
+    result.errorMessage ?? `remote nav failed (status ${result.status})`,
+    warnings,
+  );
 }

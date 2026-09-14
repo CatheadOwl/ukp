@@ -117,8 +117,8 @@ display concern only: every command stays a flat `ukp <verb>`.
 |---|---|
 | `ukp search` | Runs indexed search through the endpoint's search provider (currently QMD; a semantic tier is a future provider tier); `--recursive` expands direct authority/context dependencies. Works on remote endpoints too: results hand off via `ukp://` references. |
 | `ukp read` | Reads an endpoint-scoped resource reference from one registered Service — local or remote. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
-| `ukp nav` | Navigates the Markdown structure of one endpoint (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
-| `ukp rg` | Runs base lexical search (ripgrep) across endpoints — available on every registered endpoint by default (a missing rg binary degrades to a skip, never a fault); results are shaped into `read`-ready `ukp://` references; `--count` lists per-file counts; `--` passes rg flags through on an allowlist. |
+| `ukp nav` | Navigates the Markdown structure of one endpoint — local or remote (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
+| `ukp rg` | Runs base lexical search (ripgrep) across endpoints — local or remote, available on every registered endpoint by default (a missing rg binary degrades to a skip, never a fault); results are shaped into `read`-ready `ukp://` references; `--count` lists per-file counts; `--` passes rg flags through on an allowlist. |
 | `ukp propose` | Creates a proposal file in a target endpoint's proposal folder, dispatching via the file provider; resubmitting the same id updates the same proposal (created/unchanged/updated, revision bump). |
 
 ### Registry commands
@@ -136,7 +136,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared. |
-| `ukp serve` | Exposes one registered endpoint over HTTP using the ukp-remote wire: a discovery document (`/.well-known/ukp.json`), `POST /v1/search`, and `GET /v1/read`. Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth, and a non-loopback `--host` without a token is refused. `--tls` serves HTTPS with an auto-generated self-signed identity; `--tls-cert/--tls-key` serve your own certificate (Let's Encrypt IP certs, mkcert, private CA). |
+| `ukp serve` | Exposes one registered endpoint over HTTP using the ukp-remote wire: a discovery document (`/.well-known/ukp.json`), `POST /v1/search`, `GET /v1/read`, `GET /v1/nav`, and `GET /v1/rg`. Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth, and a non-loopback `--host` without a token is refused. `--tls` serves HTTPS with an auto-generated self-signed identity; `--tls-cert/--tls-key` serve your own certificate (Let's Encrypt IP certs, mkcert, private CA). |
 
 ### Help commands
 
@@ -160,16 +160,16 @@ commands that support global scope.
   HTTP serving (`ukp serve`) command surface;
 - remote endpoint consumption (ukp-remote wire v1): serve one endpoint over
   HTTP, register it from another machine with `ukp register --url`, then
-  `search`/`read`/`list` against it (`ukp://` handoffs, TOFU identity pin,
-  bearer tokens via `UKP_ENDPOINT_<NAME>_TOKEN`);
+  `search`/`read`/`nav`/`rg`/`list` against it (`ukp://` handoffs, TOFU
+  identity pin, bearer tokens via `UKP_ENDPOINT_<NAME>_TOKEN`);
 - QMD-backed `search`, `read`, and `update`;
 - agent-oriented JSON output and artifacts;
 - explicit recursive search over direct authority/context dependencies.
 
 ## Not Yet
 
-- remote operation of `nav` / `rg` / `update` / `propose` (explicit
-  not-yet-remote-enabled errors today) and a formal network protocol;
+- remote operation of `update` / `propose` (explicit not-yet-remote-enabled
+  errors today) and a formal network protocol;
 
 ## Remote Deployment
 

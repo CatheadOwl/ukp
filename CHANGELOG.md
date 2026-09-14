@@ -31,7 +31,9 @@ The first public release; the date is set when the package is published.
 
 - This is an MVP/demo-but-usable release, not a stable 1.0 protocol.
 - QMD collection, index, ranking, and maintenance stay provider-owned.
-- Not included: Remote endpoints or a formal network protocol; the semantic
+- Remote endpoints work over the ukp-remote wire v1 (read-side: `serve`,
+  `register --url`, `search`/`read`/`nav`/`rg`/`list`); not included: remote
+  `update`/`propose` and a formal network protocol; the semantic
   search tier, API Search, query rewrite, reranking, or deduplication; full
   Client Scope with aliases, visibility, inheritance, or profiles; automatic
   artifact browsing, cleanup, or result-selection references; standalone binary

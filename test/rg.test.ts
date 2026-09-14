@@ -4,13 +4,23 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   parseRgArgs,
-  executeRgCommand,
+  executeRgCommand as executeRgCommandMaybeAsync,
   splitRgPassthrough,
+  type RgCommandResult,
 } from "../src/commands/rg.ts";
 import { RgUsageError, validateRgPassthrough } from "../src/capabilities/rg.ts";
 import { KitUsageError } from "../src/commands/kit.ts";
 import type { RgContext } from "../src/capabilities/rg.ts";
 import { registerAt } from "../src/registry.ts";
+
+// ukp_remote W6 conditional-async seam (read.test.ts precedent): every test
+// here is a local rg run, which stays fully synchronous. This wrapper keeps
+// the call sites untouched and fails loudly if a local case ever goes async.
+function executeRgCommand(args: readonly string[], context: Parameters<typeof executeRgCommandMaybeAsync>[1]): RgCommandResult {
+  const result = executeRgCommandMaybeAsync(args, context);
+  if (result instanceof Promise) throw new Error("local rg unexpectedly took the async path");
+  return result;
+}
 
 const fixtureExecutable = join(import.meta.dir, "fixtures", "rg-provider", "rg-fixture.mjs");
 const nodeExecutable = Bun.which("node") ?? process.execPath;
