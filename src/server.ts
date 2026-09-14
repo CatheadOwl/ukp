@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { loadManifest, type LoadedManifest } from "./config/manifest.ts";
 import { localPathOf, readRegistry } from "./registry.ts";
 import { FILE_NATIVE_CAPABILITIES } from "./config/file-native.ts";
+import { certSanOf, ensureSelfSignedTlsFiles, spkiPinOf } from "./capabilities/tls-identity.ts";
 import {
   buildInlineReferences,
   projectSearchEnvelope,
@@ -39,6 +40,13 @@ export interface ServeConfig {
    * document stays public (ADR-REM-003: security is declared, the card is
    * readable without it). */
   tokens?: readonly string[];
+  /** TLS transport (W5' / D-079): `self-signed` generates and persists an
+   * identity under the Service folder (`.ukp/tls/`); `certificates` serves
+   * operator-provided PEM files (Let's Encrypt IP certs, mkcert, private
+   * CA). `opensslCommand` is a test injection point for the self-signing. */
+  tls?:
+    | { mode: "self-signed"; opensslCommand?: readonly string[] }
+    | { mode: "certificates"; certPath: string; keyPath: string };
 }
 
 export interface DiscoveryDocument {
@@ -59,6 +67,13 @@ export interface ServeInfo {
   host: string;
   port: number;
   authRequired: boolean;
+  /** TLS identity summary (W5' / D-079) when serving over HTTPS; the pin is
+   * what remote clients TOFU-pin at registration. */
+  tls?: {
+    pin: string;
+    san: string;
+    source: "generated" | "persisted" | "operator";
+  };
 }
 
 export class ServeSetupError extends Error {
@@ -219,6 +234,41 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     );
   }
 
+  // TLS material (W5' / D-079) is resolved before the listener starts: a
+  // self-signed identity is generated/persisted beside the manifest, explicit
+  // certificates are read from the operator's paths. Bun.serve takes PEM
+  // contents (path-string handling is platform-dependent).
+  let tlsMaterial: { cert: string; key: string; pin: string; san: string; source: "generated" | "persisted" | "operator" } | undefined;
+  if (config.tls !== undefined) {
+    const tls = config.tls;
+    const paths = tls.mode === "self-signed"
+      ? (() => {
+          const identity = ensureSelfSignedTlsFiles(
+            join(serviceFolder, ".ukp", "tls"),
+            tls.mode === "self-signed" && tls.opensslCommand !== undefined ? { opensslCommand: tls.opensslCommand } : {},
+          );
+          return {
+            certPath: identity.certPath,
+            keyPath: identity.keyPath,
+            source: identity.created ? ("generated" as const) : ("persisted" as const),
+          };
+        })()
+      : { certPath: tls.certPath, keyPath: tls.keyPath, source: "operator" as const };
+    try {
+      const cert = readFileSync(paths.certPath, "utf8");
+      tlsMaterial = {
+        cert,
+        key: readFileSync(paths.keyPath, "utf8"),
+        pin: spkiPinOf(cert),
+        san: certSanOf(cert),
+        source: paths.source,
+      };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new ServeSetupError(`TLS material for '${binding.name}' is unusable (${paths.certPath}): ${reason}`);
+    }
+  }
+
   const handler = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
 
@@ -277,6 +327,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
   const server = Bun.serve({
     hostname: host,
     port: config.port ?? 8570,
+    ...(tlsMaterial !== undefined ? { tls: { cert: tlsMaterial.cert, key: tlsMaterial.key } } : {}),
     fetch: handler,
   });
 
@@ -284,10 +335,13 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     endpoint: binding.name,
     folder: serviceFolder,
     instanceUid: readInstanceUid(serviceFolder),
-    url: `http://${host}:${server.port ?? (config.port ?? 8570)}`,
+    url: `${tlsMaterial !== undefined ? "https" : "http"}://${host}:${server.port ?? (config.port ?? 8570)}`,
     host,
     port: server.port ?? (config.port ?? 8570),
     authRequired: (config.tokens?.length ?? 0) > 0,
+    ...(tlsMaterial !== undefined
+      ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
+      : {}),
   };
   return { server, info };
 }

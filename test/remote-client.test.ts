@@ -1,5 +1,5 @@
 import { describe, expect, test, afterAll, beforeEach } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -478,4 +478,168 @@ describe("ukp list with remote rows", () => {
     expect(result.stdout).toContain("dead-remote\thttp://127.0.0.1:9\t(unavailable)");
     expect(result.stderr).toContain("dead-remote");
   });
+});
+
+// ---------------------------------------------------------------------------
+// W5' / D-079: self-signed TLS pinning lifecycle. Real openssl-signed certs
+// (Bun.spawn bypasses shell path mangling), the real startUkpServer with TLS,
+// and the real register/search adapters — the full bare-IP rehearsal path.
+
+const opensslAvailable =
+  Bun.spawnSync(["openssl", "version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+function selfSignPair(name: string, renewFromKey?: string): { certPath: string; keyPath: string } {
+  const certPath = join(root, "tls", `${name}.cert.pem`);
+  const keyPath = join(root, "tls", `${name}.key.pem`);
+  mkdirSync(join(root, "tls"), { recursive: true });
+  const argv = [
+    "openssl", "req", "-x509", "-days", "3650", "-nodes",
+    "-subj", "/CN=ukp-remote-tls-test",
+    "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost",
+  ];
+  if (renewFromKey === undefined) argv.push("-newkey", "rsa:2048", "-keyout", keyPath);
+  else argv.push("-key", renewFromKey);
+  argv.push("-out", certPath);
+  const proc = Bun.spawnSync(argv, { stdout: "ignore", stderr: "pipe" });
+  if (proc.exitCode !== 0) {
+    throw new Error(`openssl self-sign failed for ${name} (exit ${proc.exitCode}): ${new TextDecoder().decode(proc.stderr).trim()}`);
+  }
+  return { certPath, keyPath };
+}
+
+describe("remote TLS identity (W5' / D-079)", () => {
+  test("registry schema: tls fields pair, pin format is checked, PEM round-trips, locals reject them", async () => {
+    expect(() => parseRegistry([
+      "[[endpoints]]", 'name = "bad"', 'kind = "remote"', 'url = "https://x.example:8570"',
+      'tls_cert = "pem"', "",
+    ].join("\n"))).toThrow("must carry tls_cert and tls_pin together");
+    expect(() => parseRegistry([
+      "[[endpoints]]", 'name = "bad"', 'kind = "remote"', 'url = "https://x.example:8570"',
+      'tls_cert = "pem"', 'tls_pin = "md5/abc"', "",
+    ].join("\n"))).toThrow("Registry schema is invalid");
+    expect(() => parseRegistry([
+      "[[endpoints]]", 'name = "bad"', 'path = "C:/abs"', 'tls_pin = "sha256/abc="', "",
+    ].join("\n"))).toThrow("must not carry remote fields");
+
+    const { spkiPinOf } = await import("../src/capabilities/tls-identity.ts");
+    const pem = [
+      "-----BEGIN CERTIFICATE-----",
+      "MIIBfakeCertificateBodyForRoundTrip==",
+      "-----END CERTIFICATE-----",
+      "",
+    ].join("\n");
+    const pinned = {
+      name: "pinned",
+      kind: "remote" as const,
+      url: "https://x.example:8570",
+      instance_uid: "0b0c0d0e-1111-2222-3333-444455556666",
+      tls_cert: pem,
+      tls_pin: "sha256/QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=",
+    };
+    const encoded = serializeRegistry([pinned]);
+    expect(encoded).toContain("BEGIN CERTIFICATE");
+    expect(parseRegistry(encoded)).toEqual([pinned]);
+    expect(spkiPinOf).toBeDefined();
+  });
+
+  test.skipIf(!opensslAvailable)(
+    "register pins a self-signed identity; renewal keeps going; identity change blocks until re-register",
+    async () => {
+      const { spkiPinOf } = await import("../src/capabilities/tls-identity.ts");
+      const identityA = selfSignPair("a");
+      const renewedA = selfSignPair("a-renewed", identityA.keyPath); // same key, new certificate
+      const identityB = selfSignPair("b"); // different key = different identity
+      const token = "tls-e2e-token";
+      const clientContext = { currentDirectory: root, registryPath, qmdCommand };
+
+      // Phase 1: self-signed serve + registration pins anchor + SPKI.
+      const first = startRemote({
+        tokens: [token],
+        tls: { mode: "certificates", certPath: identityA.certPath, keyPath: identityA.keyPath },
+      });
+      expect(first.info.url.startsWith("https://")).toBe(true);
+      const registered = await asResult(executeRegisterCommand(
+        ["--url", first.info.url, "--token", token],
+        { currentDirectory: root, registryPath },
+      ));
+      expect(registered.exitCode).toBe(0);
+      expect(registered.stdout).toContain("tls: pinned sha256/");
+      const pinA = spkiPinOf(readFileSync(identityA.certPath, "utf8"));
+      // The stored anchor is the DER-re-encoded PEM (probe capture), so
+      // compare certificates by fingerprint, not by bytes.
+      const { X509Certificate } = await import("node:crypto");
+      const fingerprintOf = (pem: string): string => new X509Certificate(pem).fingerprint256;
+      const binding = readRegistry(registryPath).find((b) => b.name === "serve-fixture");
+      expect(binding?.tls_pin).toBe(pinA);
+      expect(binding?.tls_cert !== undefined && fingerprintOf(binding.tls_cert))
+        .toBe(fingerprintOf(readFileSync(identityA.certPath, "utf8")));
+
+      // Day-2: zero ceremony — verification runs inside the transport.
+      const search = await asResult(executeSearchCommand(
+        ["fixture-cad-search-token", "-c", "serve-fixture"],
+        clientContext,
+      ));
+      expect(search.exitCode).toBe(0);
+      expect(search.stdout).toContain("read: ukp read ukp://serve-fixture/documents/cad-notes.md#L1");
+      expect(search.stderr).not.toContain("TLS identity");
+
+      // Phase 2: certificate renewed, key kept — transparent re-anchor,
+      // persisted into the registry binding.
+      first.server.stop(true);
+      await new Promise((resolve) => setTimeout(resolve, 150)); // let the OS release the port
+      const second = startUkpServer({
+        endpointName: "serve-fixture",
+        currentDirectory: root,
+        registryPath: serverRegistryPath,
+        qmdCommand,
+        host: "127.0.0.1",
+        port: first.info.port,
+        tokens: [token],
+        tls: { mode: "certificates", certPath: renewedA.certPath, keyPath: identityA.keyPath },
+      });
+      started.push(second);
+      const afterRenew = await asResult(executeSearchCommand(
+        ["fixture-cad-search-token", "-c", "serve-fixture"],
+        clientContext,
+      ));
+      expect(afterRenew.exitCode).toBe(0);
+      const reanchoredCert = readRegistry(registryPath).find((b) => b.name === "serve-fixture")?.tls_cert;
+      expect(reanchoredCert !== undefined && fingerprintOf(reanchoredCert))
+        .toBe(fingerprintOf(readFileSync(renewedA.certPath, "utf8")));
+
+      // Phase 3: different key — hard block with the pinned/got fingerprints;
+      // an explicit re-register (owner-confirmed) refreshes the trust.
+      second.server.stop(true);
+      await new Promise((resolve) => setTimeout(resolve, 150)); // let the OS release the port
+      const third = startUkpServer({
+        endpointName: "serve-fixture",
+        currentDirectory: root,
+        registryPath: serverRegistryPath,
+        qmdCommand,
+        host: "127.0.0.1",
+        port: first.info.port,
+        tokens: [token],
+        tls: { mode: "certificates", certPath: identityB.certPath, keyPath: identityB.keyPath },
+      });
+      started.push(third);
+      const blocked = await asResult(executeSearchCommand(
+        ["fixture-cad-search-token", "-c", "serve-fixture"],
+        clientContext,
+      ));
+      expect(blocked.exitCode).toBe(1);
+      expect(blocked.stderr).toContain("TLS identity changed");
+      expect(blocked.stderr).toContain(pinA);
+
+      const refreshed = await asResult(executeRegisterCommand(
+        ["--url", first.info.url, "--token", token],
+        { currentDirectory: root, registryPath },
+      ));
+      expect(refreshed.exitCode).toBe(0);
+      const searchAfter = await asResult(executeSearchCommand(
+        ["fixture-cad-search-token", "-c", "serve-fixture"],
+        clientContext,
+      ));
+      expect(searchAfter.exitCode).toBe(0);
+    },
+  );
 });

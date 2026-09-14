@@ -378,7 +378,7 @@ export function executeReadCommand(
     if (request.endpoint !== undefined) {
       const binding = readRegistry(context.registryPath).find((entry) => entry.name === request.endpoint);
       if (binding !== undefined && isRemoteBinding(binding)) {
-        return executeRemoteRead(request, format, binding);
+        return executeRemoteRead(request, format, binding, context.registryPath);
       }
     }
     const outcome = runRead(request, context);
@@ -448,12 +448,13 @@ async function executeRemoteRead(
   request: ReadRequest,
   format: "json" | undefined,
   binding: RegistryBinding,
+  registryPath?: string,
 ): Promise<ReadCommandResult> {
   const token = resolveRemoteToken(binding);
   const warnings: string[] = [];
   let transport: RemoteTransportHandle | undefined;
   try {
-    transport = await openRemoteTransport(binding);
+    transport = await openRemoteTransport(binding, registryPath === undefined ? {} : { registryPath });
     const discovery = await fetchDiscoveryDocument(binding, transport, token);
     warnings.push(...discovery.warnings);
     if (discovery.bearerRequired && token === undefined) warnings.push(remoteTokenHint(binding.name));

@@ -29,6 +29,12 @@ const bindingSchema = z.object({
   /** Client credential stored in the binding (D-078: plaintext, 0600 file —
    * AWS credentials-file / netrc convention; env override wins at call time). */
   token: z.string().min(1).optional(),
+  /** TLS trust anchor pinned at registration (W5' / D-079, self-signed
+   * servers only — public-CA chains are not pinned): `tls_cert` is the PEM
+   * used as the fetch trust anchor, `tls_pin` is the RFC 7469 SPKI pin that
+   * survives certificate renewals which keep the key. Both or neither. */
+  tls_cert: z.string().min(1).optional(),
+  tls_pin: z.string().regex(/^sha256\/[A-Za-z0-9+/]+={0,2}$/).optional(),
 }).strict();
 
 const registrySchema = z.object({
@@ -49,6 +55,9 @@ export interface RegistryBinding {
   instance_uid?: string;
   /** Remote-only stored credential (plaintext; env takes precedence). */
   token?: string;
+  /** Remote-only TLS anchor (W5' / D-079); see bindingSchema. */
+  tls_cert?: string;
+  tls_pin?: string;
 }
 
 export function isRemoteBinding(binding: RegistryBinding): boolean {
@@ -112,7 +121,7 @@ export function assertRemoteUrlAllowed(raw: string): void {
   if (parsed.protocol === "https:") return;
   if (parsed.protocol === "http:" && isLoopbackHttpUrl(raw)) return;
   throw new RegistryError(
-    `remote endpoint url must be https, ssh://host[:port], or loopback http: ${raw}`,
+    `remote endpoint url must be https, ssh://host[:port], or loopback http: ${raw} (bare-IP https: 'ukp serve --tls')`,
   );
 }
 
@@ -147,12 +156,18 @@ function validateBindings(endpoints: readonly RegistryBinding[]): RegistryBindin
       if (endpoint.url === undefined) {
         throw new RegistryError(`remote binding '${endpoint.name}' requires a url`);
       }
+      if ((endpoint.tls_cert !== undefined) !== (endpoint.tls_pin !== undefined)) {
+        throw new RegistryError(`remote binding '${endpoint.name}' must carry tls_cert and tls_pin together`);
+      }
       assertRemoteUrlAllowed(endpoint.url);
       if (urls.has(endpoint.url)) throw new RegistryError(`duplicate remote endpoint url '${endpoint.url}'`);
       urls.add(endpoint.url);
     } else {
-      if (endpoint.url !== undefined || endpoint.instance_uid !== undefined || endpoint.token !== undefined) {
-        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid/token)`);
+      if (
+        endpoint.url !== undefined || endpoint.instance_uid !== undefined || endpoint.token !== undefined
+        || endpoint.tls_cert !== undefined || endpoint.tls_pin !== undefined
+      ) {
+        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid/token/tls)`);
       }
       if (endpoint.path === undefined || !isAbsolute(endpoint.path)) {
         throw new RegistryError(`registry path must be absolute: ${endpoint.path ?? "(missing)"}`);
@@ -203,6 +218,8 @@ function toSerializableBinding(binding: RegistryBinding): Record<string, string>
       url: binding.url!,
       ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
       ...(binding.token !== undefined ? { token: binding.token } : {}),
+      ...(binding.tls_cert !== undefined ? { tls_cert: binding.tls_cert } : {}),
+      ...(binding.tls_pin !== undefined ? { tls_pin: binding.tls_pin } : {}),
     };
   }
   return { name: binding.name, path: binding.path! };
@@ -246,6 +263,8 @@ export function registerRemoteBinding(
     url: binding.url!,
     ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
     ...(binding.token !== undefined ? { token: binding.token } : {}),
+    ...(binding.tls_cert !== undefined ? { tls_cert: binding.tls_cert } : {}),
+    ...(binding.tls_pin !== undefined ? { tls_pin: binding.tls_pin } : {}),
   };
   const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
   if (sameName) {
@@ -326,9 +345,25 @@ export function registerAt(registryPath: string, name: string, servicePath: stri
 
 export function registerRemoteAt(
   registryPath: string,
-  binding: { name: string; url: string; instance_uid?: string; token?: string },
+  binding: { name: string; url: string; instance_uid?: string; token?: string; tls_cert?: string; tls_pin?: string },
 ): RegistryBinding[] {
   return mutateRegistry(registryPath, (current) => registerRemoteBinding(current, binding));
+}
+
+/** Renewal re-anchor (W5' / D-079): swap a pinned binding's stored trust
+ * anchor PEM after the server renewed its certificate with the same key
+ * (SPKI pin unchanged — that is the identity). Called from the read path,
+ * where persistence is best-effort: the in-memory anchor already unblocks
+ * the invocation, so lock contention must not fail the user-facing call. */
+export function refreshRemoteTlsCert(registryPath: string, name: string, tls_cert: string): RegistryBinding[] {
+  return mutateRegistry(registryPath, (current) => {
+    const binding = current.find((endpoint) => endpoint.name === name && endpoint.kind === "remote");
+    if (binding === undefined) throw new RegistryError(`endpoint not found: ${name}`);
+    if (binding.tls_pin === undefined) {
+      throw new RegistryError(`remote binding '${name}' carries no TLS pin; re-register instead of re-anchoring`);
+    }
+    return current.map((endpoint) => endpoint.name === name && endpoint.kind === "remote" ? { ...endpoint, tls_cert } : endpoint);
+  });
 }
 
 export function unregisterAt(registryPath: string, name: string): RegistryBinding[] {

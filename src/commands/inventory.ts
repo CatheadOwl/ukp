@@ -14,6 +14,7 @@ import {
   fetchDiscoveryDocument,
   fetchDiscoveryDocumentAt,
   openRemoteTransport,
+  probeRemoteTls,
   remoteTokenFor,
   resolveRemoteToken,
   type RemoteTransportHandle,
@@ -161,7 +162,10 @@ export function executeRegisterCommand(
 /** Remote registration (D-077/D-078 / spec endpoint-registration): name comes
  * from the discovery document (RQ-14 strict equality holds from day one), the
  * instance uid is the TOFU pin; ssh:// urls register through a transparent
- * ephemeral tunnel, and --token stores the credential in the binding. */
+ * ephemeral tunnel, and --token stores the credential in the binding. For
+ * https urls a TLS probe runs first (W5' / D-079): a public-CA chain
+ * validates normally, a self-signed certificate is TOFU-pinned into the
+ * binding (anchor PEM + SPKI pin) and verified on every later call. */
 async function executeRegisterRemote(
   url: string,
   token: string | undefined,
@@ -170,9 +174,12 @@ async function executeRegisterRemote(
   let transport: RemoteTransportHandle | undefined;
   try {
     assertRemoteUrlAllowed(url);
+    const tlsProbe = await probeRemoteTls(url);
+    const pinSelfSigned = tlsProbe !== undefined && !tlsProbe.authorized;
     transport = await openRemoteTransport({ name: "(registering)", kind: "remote", url });
     const discovery = await fetchDiscoveryDocumentAt(transport.base, {
       ...(token !== undefined ? { token } : {}),
+      ...(pinSelfSigned && tlsProbe !== undefined ? { tlsAnchor: { ca: tlsProbe.certPem } } : {}),
     });
     const name = discovery.doc.name;
     if (!ENDPOINT_NAME.test(name)) {
@@ -186,12 +193,18 @@ async function executeRegisterRemote(
       url,
       instance_uid: discovery.doc.instance_uid,
       ...(token !== undefined ? { token } : {}),
+      ...(pinSelfSigned && tlsProbe !== undefined
+        ? { tls_cert: tlsProbe.certPem, tls_pin: tlsProbe.spkiPin }
+        : {}),
     });
     const envToken = remoteTokenFor(name);
     const lines = [
       `registered (remote): ${name}`,
       `url: ${url}`,
       `instance_uid: ${discovery.doc.instance_uid}`,
+      ...(pinSelfSigned && tlsProbe !== undefined
+        ? [`tls: pinned ${tlsProbe.spkiPin} (self-signed; compare with the serve banner out-of-band on untrusted networks)`]
+        : []),
       ...(discovery.doc.description !== undefined ? [`description: ${discovery.doc.description}`] : []),
       ...(token !== undefined
         ? [`auth: token stored in registry binding (plaintext; env UKP_ENDPOINT_${name.toUpperCase().replace(/-/g, "_")}_TOKEN overrides)`]
@@ -235,7 +248,7 @@ export function executeListCommand(
           rendered.push(renderLocalListRow({ name: endpoint.name, path: endpoint.path! }));
           continue;
         }
-        rendered.push(await renderRemoteListRow(endpoint));
+        rendered.push(await renderRemoteListRow(endpoint, context.registryPath));
       }
       return renderListOutput(rendered);
     })();
@@ -266,11 +279,14 @@ function renderListOutput(rows: ReadonlyArray<{ line: string; warning?: string }
 /** Remote row: capabilities from the discovery document; unreachable
  * endpoints degrade to `(unavailable)` + one stderr warning — the same
  * inventory semantics as an unreadable local manifest. */
-async function renderRemoteListRow(endpoint: RegistryBinding): Promise<{ line: string; warning?: string }> {
+async function renderRemoteListRow(
+  endpoint: RegistryBinding,
+  registryPath?: string,
+): Promise<{ line: string; warning?: string }> {
   const url = endpoint.url!;
   let transport: RemoteTransportHandle | undefined;
   try {
-    transport = await openRemoteTransport(endpoint);
+    transport = await openRemoteTransport(endpoint, registryPath === undefined ? {} : { registryPath });
     const discovery = await fetchDiscoveryDocument(endpoint, transport, resolveRemoteToken(endpoint));
     const extras = Object.entries(discovery.doc.capabilities)
       .filter(([, capability]) => capability.derived !== true)
