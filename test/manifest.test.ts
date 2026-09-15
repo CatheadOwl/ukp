@@ -176,6 +176,54 @@ describe("Service Manifest and diagnose", () => {
     }
   });
 
+  test("loads a zero-declaration Manifest (empty capabilities table)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "zero-declaration");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), 'name = "zero-declaration"\n\n[capabilities]\n');
+    try {
+      const loaded = loadManifest(folder);
+      expect(loaded.effectiveName).toBe("zero-declaration");
+      expect(loaded.manifest.capabilities).toEqual({});
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("zero-declaration service stays diagnosable through derived read/nav", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "zero-declaration");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), 'name = "zero-declaration"\n\n[capabilities]\n');
+    try {
+      const report = diagnoseService(folder);
+      expect(report.capabilities.filter((capability) => capability.source === "manifest")).toHaveLength(0);
+      expect(report.capabilities.some((capability) =>
+        capability.name === "read" && capability.source === "derived-local" && capability.status === "ok"
+      )).toBe(true);
+      expect(report.capabilities.some((capability) =>
+        capability.name === "nav" && capability.source === "derived-local" && capability.status === "ok"
+      )).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("still rejects a Manifest missing the capabilities table", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
+    const folder = join(root, "no-capabilities");
+    mkdirSync(folder);
+    mkdirSync(join(folder, ".ukp"));
+    writeFileSync(join(folder, ".ukp", "service.toml"), 'name = "no-capabilities"\n');
+    try {
+      expect(() => loadManifest(folder)).toThrow("Service Manifest schema is invalid");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("keeps unrelated Manifest capability fields strict", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-test-"));
     const folder = join(root, "invalid-capability-field");

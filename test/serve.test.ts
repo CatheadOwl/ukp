@@ -51,6 +51,16 @@ registerAt(registryPath, "serve-fixture", serviceFolder);
 // A second servable endpoint for door-mode rosters (W7).
 const doorSecondFolder = createService("door-second-svc", "door-second");
 registerAt(registryPath, "door-second", doorSecondFolder);
+// W8 write-face fixtures: a propose-declaring Service and a zero-declaration
+// readonly Service (D-081) — the write face is the manifest declaration.
+const writeFolder = join(root, "write-svc");
+mkdirSync(join(writeFolder, ".ukp"), { recursive: true });
+writeFileSync(join(writeFolder, ".ukp", "service.toml"), 'name = "write-notes"\n\n[capabilities.propose]\n', "utf8");
+registerAt(registryPath, "write-notes", writeFolder);
+const zeroFolder = join(root, "zero-svc");
+mkdirSync(join(zeroFolder, ".ukp"), { recursive: true });
+writeFileSync(join(zeroFolder, ".ukp", "service.toml"), 'name = "zero-archive"\n\n[capabilities]\n', "utf8");
+registerAt(registryPath, "zero-archive", zeroFolder);
 
 const started: StartedServe[] = [];
 function start(overrides: Partial<Parameters<typeof startUkpServer>[0]> = {}): StartedServe {
@@ -478,12 +488,25 @@ describe("serve host door mode (W7 / ADR-REM-004)", () => {
     expect(doc.protocol_version).toBe("1");
     expect(doc.scope).toBe("host");
     expect(doc.security.schemes).toEqual([]);
-    expect(doc.endpoints.map((endpoint) => endpoint.name)).toEqual(["door-second", "serve-fixture"]);
+    // Alphabetical by name; write-notes (propose) and zero-archive (D-081
+    // zero-declaration) joined the registry with the W8 write-face suite.
+    expect(doc.endpoints.map((endpoint) => endpoint.name)).toEqual(
+      ["door-second", "serve-fixture", "write-notes", "zero-archive"],
+    );
     for (const endpoint of doc.endpoints) {
       expect(endpoint.instance_uid).toMatch(/^[0-9a-f-]{36}$/);
       expect(endpoint.capabilities.read).toEqual({ provider: "file", derived: true });
-      expect(endpoint.capabilities.search).toEqual({ provider: "qmd" });
+      if (endpoint.name === "door-second" || endpoint.name === "serve-fixture") {
+        expect(endpoint.capabilities.search).toEqual({ provider: "qmd" });
+      }
     }
+    // Write-face projection: the propose declaration is visible wire-side;
+    // the zero-declaration endpoint projects derived capabilities only.
+    const writeNotes = doc.endpoints.find((endpoint) => endpoint.name === "write-notes");
+    expect(writeNotes?.capabilities.propose).toEqual({ provider: "file" });
+    const zeroArchive = doc.endpoints.find((endpoint) => endpoint.name === "zero-archive");
+    expect(zeroArchive?.capabilities.propose).toBeUndefined();
+    expect(zeroArchive?.capabilities.nav).toEqual({ provider: "file", derived: true });
     // No door-level identity: trust anchors are the per-endpoint pins.
     expect("instance_uid" in doc).toBe(false);
   });
@@ -569,5 +592,126 @@ describe("serve host door mode (W7 / ADR-REM-004)", () => {
     expect(renderServeBanner(tokenDoor.info)).toContain("auth: bearer token required");
     const single = start();
     expect(renderServeBanner(single.info)).toContain("serving endpoint 'serve-fixture' (ukp-remote v1)");
+  });
+});
+
+describe("serve /v1/propose (W8 / ADR-REM-005)", () => {
+  async function put(infoUrl: string, path: string, body: string, headers: Record<string, string> = {}) {
+    return fetch(`${infoUrl}${path}`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain; charset=utf-8", ...headers },
+      body,
+    });
+  }
+
+  test("PUT /v1/propose/<id> runs the idempotent upsert: created → unchanged → updated", async () => {
+    const { info } = start({ endpointName: "write-notes" });
+    const first = await put(info.url, "/v1/propose/w8-alpha", "# Proposal\n\nFirst submission.\n");
+    expect(first.status).toBe(200);
+    const created = await first.json() as { schema: string; status: string; revision: number; id: string; endpoint: string };
+    expect(created.schema).toBe("ukp.propose.v1");
+    expect(created.id).toBe("w8-alpha");
+    expect(created.status).toBe("created");
+    expect(created.revision).toBe(1);
+    expect(created.endpoint).toBe("write-notes");
+    // The file provider stored the proposal with service-maintained frontmatter.
+    const stored = readFileSync(join(writeFolder, "inbox", "w8-alpha.md"), "utf8");
+    expect(stored).toContain("id: w8-alpha");
+    expect(stored).toContain("status: proposed");
+    expect(stored).toContain("revision: 1");
+    expect(stored).toContain("First submission.");
+
+    const second = await (await put(info.url, "/v1/propose/w8-alpha", "# Proposal\n\nFirst submission.\n")).json();
+    expect(second.status).toBe("unchanged");
+    expect(second.revision).toBe(1);
+
+    const third = await (await put(info.url, "/v1/propose/w8-alpha", "# Proposal\n\nRevised submission.\n")).json();
+    expect(third.status).toBe("updated");
+    expect(third.revision).toBe(2);
+  });
+
+  test("door face routes PUT /e/<name>/v1/propose/<id>; undeclared endpoints have no write route", async () => {
+    const { info } = startDoor();
+    const write = await put(info.url, "/e/write-notes/v1/propose/w8-door", "door proposal\n");
+    expect(write.status).toBe(200);
+    const body = await write.json() as { schema: string; status: string; endpoint: string };
+    expect(body.schema).toBe("ukp.propose.v1");
+    expect(body.status).toBe("created");
+    expect(body.endpoint).toBe("write-notes");
+    // Zero-declaration readonly Service (D-081): the write face is the
+    // manifest declaration — an undeclared endpoint answers 503 with the
+    // capability class, not a silent 404.
+    const denied = await put(info.url, "/e/zero-archive/v1/propose/ghost", "should not land\n");
+    expect(denied.status).toBe(503);
+    const deniedBody = await denied.json() as { error: { class: string; message: string } };
+    expect(deniedBody.error.class).toBe("capability-undeclared");
+    expect(deniedBody.error.message).toContain("does not declare the propose capability");
+    expect(existsSync(join(zeroFolder, "inbox", "ghost.md"))).toBe(false);
+  });
+
+  test("wire guards: method 405, bad slug 422, body cap 413, non-UTF-8 415", async () => {
+    const { info } = start({ endpointName: "write-notes" });
+    const wrongMethod = await fetch(`${info.url}/v1/propose/w8-alpha`, { method: "POST", body: "x" });
+    expect(wrongMethod.status).toBe(405);
+    expect(((await wrongMethod.json()) as { error: { class: string } }).error.class).toBe("method-not-allowed");
+
+    const badSlug = await put(info.url, "/v1/propose/Bad_ID", "x");
+    expect(badSlug.status).toBe(422);
+    expect(((await badSlug.json()) as { error: { class: string } }).error.class).toBe("usage-error");
+
+    const oversized = await put(info.url, "/v1/propose/w8-big", "x".repeat(1024 * 1024 + 1));
+    expect(oversized.status).toBe(413);
+    expect(((await oversized.json()) as { error: { class: string } }).error.class).toBe("payload-too-large");
+
+    // 0xC0 0x00 is never valid UTF-8 — the fatal decoder must reject it.
+    const binary = await fetch(`${info.url}/v1/propose/w8-bin`, {
+      method: "PUT",
+      headers: { "content-type": "application/octet-stream" },
+      body: new Uint8Array([0xc0, 0x00, 0x41]),
+    });
+    expect(binary.status).toBe(415);
+    expect(((await binary.json()) as { error: { class: string } }).error.class).toBe("unsupported-content-type");
+  });
+
+  test("streamed body without content-length: the post-read byte check is the authority", async () => {
+    const { info } = start({ endpointName: "write-notes" });
+    // No content-length header travels with a stream body, so the
+    // declared-length gate sees nothing — only the post-read check bounds.
+    const streamed = await fetch(`${info.url}/v1/propose/w8-big`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain; charset=utf-8" },
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("x".repeat(1024 * 1024 + 1)));
+          controller.close();
+        },
+      }),
+    });
+    expect(streamed.status).toBe(413);
+  });
+
+  test("write face sits behind the bearer gate like every /v1 route", async () => {
+    const { info } = start({ endpointName: "write-notes", tokens: ["w8-token"] });
+    const denied = await put(info.url, "/v1/propose/w8-auth", "content\n");
+    expect(denied.status).toBe(401);
+    const allowed = await put(info.url, "/v1/propose/w8-auth", "content\n", { authorization: "Bearer w8-token" });
+    expect(allowed.status).toBe(200);
+  });
+
+  test("banner write line: the opened write face is visible (verdict C)", () => {
+    const door = startDoor();
+    expect(door.info.door?.write).toEqual(["write-notes"]);
+    expect(renderServeBanner(door.info)).toContain("write: write-notes (propose via PUT /e/<name>/v1/propose/<id>)");
+    // A registry with no propose-declaring endpoint announces the absence.
+    const bareRoot = mkdtempSync(join(tmpdir(), "ukp-serve-bare-"));
+    const bareRegistry = join(bareRoot, "registry.toml");
+    const bareFolder = join(bareRoot, "bare-svc");
+    mkdirSync(join(bareFolder, ".ukp"), { recursive: true });
+    writeFileSync(join(bareFolder, ".ukp", "service.toml"), 'name = "bare-notes"\n\n[capabilities]\n', "utf8");
+    registerAt(bareRegistry, "bare-notes", bareFolder);
+    const bare = startUkpServer({ currentDirectory: bareRoot, registryPath: bareRegistry, port: 0 });
+    started.push(bare);
+    expect(renderServeBanner(bare.info)).toContain("write: (no endpoint declares propose)");
+    rmSync(bareRoot, { recursive: true, force: true });
   });
 });

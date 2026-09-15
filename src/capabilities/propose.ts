@@ -13,7 +13,7 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ENDPOINT_NAME, loadManifest, type ManifestCapability } from "../config/manifest.ts";
 import { resolveFileNativeCapability, unsupportedFileNativeProviderMessage } from "../config/file-native.ts";
-import { isRemoteBinding, localPathOf, readRegistry } from "../registry.ts";
+import { localPathOf, readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { acquireLock, LockBusyError, releaseLock } from "../fslock.ts";
 
@@ -328,8 +328,19 @@ export function renderProposeHuman(result: ProposeResult): string {
   return `proposal ${result.id} ${result.status} (revision ${result.revision})\n`;
 }
 
-export function renderProposeJson(endpoint: string, result: ProposeResult): string {
-  const envelope = {
+/** The `ukp.propose.v1` envelope object — single source for the CLI
+ * `--json` rendering and the serve `PUT /v1/propose/{id}` response (W8):
+ * the wire response IS the local envelope. */
+export function proposeEnvelope(endpoint: string, result: ProposeResult): {
+  schema: string;
+  command: string;
+  capability: string;
+  endpoint: string;
+  id: string;
+  status: ProposeStatus;
+  revision: number;
+} {
+  return {
     schema: "ukp.propose.v1",
     command: "propose",
     capability: "propose",
@@ -338,16 +349,16 @@ export function renderProposeJson(endpoint: string, result: ProposeResult): stri
     status: result.status,
     revision: result.revision,
   };
-  return `${JSON.stringify(envelope, null, 2)}\n`;
 }
 
-/** ADR 0021 core entry: validates the prelude (id slug, scope, capability
- * declaration, submission file) and runs the idempotent upsert. Usage
- * violations throw `ProposeUsageError`; provider/config violations throw
- * `ProposeProviderError`; scope/manifest failures throw their typed errors —
- * all mapped by the surface adapter. The `json` request flag is a surface
- * concern: the outcome is always structured. */
-export function runPropose(request: ProposeRequest, context: ProposeContext): ProposeOutcome {
+export function renderProposeJson(endpoint: string, result: ProposeResult): string {
+  return `${JSON.stringify(proposeEnvelope(endpoint, result), null, 2)}\n`;
+}
+
+/** Resolves the proposal id for a request (explicit `--id` or derived from
+ * the --file basename) — shared by the local run and the remote branch
+ * (W8). Usage violations throw `ProposeUsageError`. */
+export function proposalIdOf(request: Pick<ProposeRequest, "id" | "file">): string {
   // Single stable channel (decision 2026-09-06): --file is the only content
   // source. A stdin channel would need unreliable isTTY-based selection
   // (agent harnesses spawn with piped stdin), and the canonical propose
@@ -361,6 +372,40 @@ export function runPropose(request: ProposeRequest, context: ProposeContext): Pr
       `invalid proposal id '${id}': expected 1-63 lowercase ASCII slug characters ([a-z0-9-])`,
     );
   }
+  return id;
+}
+
+/** Reads the --file submission content relative to the caller's working
+ * directory — shared by the local run and the remote branch (W8); an
+ * unreadable file classifies as submission-file-unreadable. */
+export function readSubmissionFile(
+  file: string,
+  currentDirectory: string,
+): { content: string } | { failure: ProposeFailure } {
+  const filePath = resolve(currentDirectory, file);
+  try {
+    return { content: readFileSync(filePath, "utf8") };
+  } catch (error) {
+    const detail = error instanceof Error && "code" in error && error.code === "ENOENT"
+      ? "file not found"
+      : error instanceof Error ? error.message : String(error);
+    return {
+      failure: {
+        errorClass: "submission-file-unreadable",
+        message: `cannot read --file '${file}': ${detail}`,
+      },
+    };
+  }
+}
+
+/** ADR 0021 core entry: validates the prelude (id slug, scope, capability
+ * declaration, submission file) and runs the idempotent upsert. Usage
+ * violations throw `ProposeUsageError`; provider/config violations throw
+ * `ProposeProviderError`; scope/manifest failures throw their typed errors —
+ * all mapped by the surface adapter. The `json` request flag is a surface
+ * concern: the outcome is always structured. */
+export function runPropose(request: ProposeRequest, context: ProposeContext): ProposeOutcome {
+  const id = proposalIdOf(request);
 
   const registry = readRegistry(context.registryPath);
   const scope = resolveScope({
@@ -373,15 +418,9 @@ export function runPropose(request: ProposeRequest, context: ProposeContext): Pr
   if (!binding) {
     return { ok: false, failure: { errorClass: "no-endpoint", message: "no endpoint selected" } };
   }
-  if (isRemoteBinding(binding)) {
-    return {
-      ok: false,
-      failure: {
-        errorClass: "provider-unsupported",
-        message: `endpoint '${binding.name}' is remote (${binding.url}); propose is not yet remote-enabled (ukp_remote W3)`,
-      },
-    };
-  }
+  // Remote bindings never reach this local path in the CLI composition (the
+  // command adapter routes them to the remote branch, W8); localPathOf
+  // throwing for a remote binding is the backstop (W6 nav/rg precedent).
 
   const service = loadManifest(localPathOf(binding));
   if (service.effectiveName !== binding.name) {
@@ -407,23 +446,11 @@ export function runPropose(request: ProposeRequest, context: ProposeContext): Pr
     };
   }
 
-  const filePath = resolve(context.currentDirectory, request.file);
-  let content: string;
-  try {
-    content = readFileSync(filePath, "utf8");
-  } catch (error) {
-    const detail = error instanceof Error && "code" in error && error.code === "ENOENT"
-      ? "file not found"
-      : error instanceof Error ? error.message : String(error);
-    return {
-      ok: false,
-      failure: {
-        errorClass: "submission-file-unreadable",
-        message: `cannot read --file '${request.file}': ${detail}`,
-      },
-    };
+  const submission = readSubmissionFile(request.file!, context.currentDirectory);
+  if ("failure" in submission) {
+    return { ok: false, failure: submission.failure };
   }
 
-  const result = proposeUpsert(service.folder, resolved.capability, id, content, { now: context.now });
+  const result = proposeUpsert(service.folder, resolved.capability, id, submission.content, { now: context.now });
   return { ok: true, result };
 }

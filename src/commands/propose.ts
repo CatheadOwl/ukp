@@ -2,12 +2,23 @@ import {
   runPropose,
   renderProposeHuman,
   renderProposeJson,
+  proposalIdOf,
+  readSubmissionFile,
   ProposeProviderError,
   ProposeUsageError,
   type ProposeContext,
   type ProposeErrorClass,
+  type ProposeFailure,
   type ProposeRequest,
 } from "../capabilities/propose.ts";
+import {
+  fetchDiscoveryDocument,
+  openRemoteTransport,
+  remotePropose,
+  resolveRemoteToken,
+  type RemoteTransportHandle,
+} from "../capabilities/remote-client.ts";
+import { isRemoteBinding, readRegistry, type RegistryBinding } from "../registry.ts";
 import { ScopeError } from "../scope.ts";
 import { ManifestError } from "../config/manifest.ts";
 import { KitUsageError, parseKitArgs, renderKitHelp, renderKitUsageError, type UkpCommandSpec } from "./kit.ts";
@@ -107,13 +118,26 @@ export function parseProposeArgs(args: readonly string[]): ProposeRequest {
   };
 }
 
-export function executeProposeCommand(args: readonly string[], context: ProposeContext): ProposeCommandResult {
+export function executeProposeCommand(
+  args: readonly string[],
+  context: ProposeContext,
+): ProposeCommandResult | Promise<ProposeCommandResult> {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderProposeHelp(), stderr: "" };
   }
 
   try {
-    return executePropose(parseProposeArgs(args), context);
+    const request = parseProposeArgs(args);
+    // Remote branch (ukp_remote W8): a remote binding routes through the
+    // remote transport; the sync local contract is unchanged
+    // (conditional-async seam, same as nav). The id resolves here so usage
+    // violations classify identically to the local path.
+    const id = proposalIdOf(request);
+    const binding = readRegistry(context.registryPath).find((entry) => entry.name === request.endpoint);
+    if (binding !== undefined && isRemoteBinding(binding)) {
+      return executeRemotePropose(request, id, binding, context);
+    }
+    return executePropose(request, context);
   } catch (error) {
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderProposeHelp(), stderr: "" };
@@ -142,6 +166,86 @@ export function executeProposeCommand(args: readonly string[], context: ProposeC
       stderr: `ukp propose: ${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
+}
+
+function remoteTokenHint(endpointName: string): string {
+  return `endpoint '${endpointName}' requires a bearer token; set UKP_ENDPOINT_${endpointName.toUpperCase().replace(/-/g, "_")}_TOKEN`;
+}
+
+/** Failure rendering identical to the sync path's outcome branch, with the
+ * remote-phase warnings appended to stderr. */
+function proposeFailureResult(failure: ProposeFailure, warnings: readonly string[]): ProposeCommandResult {
+  const stderr = [`ukp propose: ${failure.message}`, ...warnings];
+  return { exitCode: PROPOSE_EXIT_BY_ERROR_CLASS[failure.errorClass], stdout: "", stderr: `${stderr.join("\n")}\n` };
+}
+
+/** Wire error class → ProposeErrorClass. capability-undeclared is the same
+ * vocabulary on both sides and passes through; everything transport-shaped
+ * (auth 401, identity, route miss on an older serve, unreachable, wire
+ * guards) folds into provider-unsupported with the specifics preserved in
+ * the message (W8 mapping, mirroring nav's W6). */
+function mapRemoteProposeErrorClass(errorClass: string | undefined): ProposeErrorClass {
+  if (errorClass === "capability-undeclared") return "capability-undeclared";
+  return "provider-unsupported";
+}
+
+/** PUT /v1/propose/{id} over the wire (ADR-REM-005); the wire envelope IS
+ * the local envelope, so the shared renderers finish the job with zero
+ * output divergence. */
+async function executeRemotePropose(
+  request: ProposeRequest,
+  id: string,
+  binding: RegistryBinding,
+  context: ProposeContext,
+): Promise<ProposeCommandResult> {
+  const submission = readSubmissionFile(request.file!, context.currentDirectory);
+  if ("failure" in submission) {
+    return proposeFailureResult(submission.failure, []);
+  }
+
+  const token = resolveRemoteToken(binding);
+  const warnings: string[] = [];
+  let transport: RemoteTransportHandle | undefined;
+  try {
+    transport = await openRemoteTransport(binding, { registryPath: context.registryPath });
+    const discovery = await fetchDiscoveryDocument(binding, transport, token);
+    warnings.push(...discovery.warnings);
+    if (discovery.bearerRequired && token === undefined) warnings.push(remoteTokenHint(binding.name));
+  } catch (error) {
+    transport?.close();
+    return proposeFailureResult(
+      { errorClass: "provider-unsupported", message: error instanceof Error ? error.message : String(error) },
+      warnings,
+    );
+  }
+
+  let result;
+  try {
+    result = await remotePropose(transport, token, id, submission.content);
+  } catch (error) {
+    return proposeFailureResult(
+      { errorClass: "provider-unsupported", message: error instanceof Error ? error.message : String(error) },
+      warnings,
+    );
+  } finally {
+    transport.close();
+  }
+  if (result.ok && result.result !== undefined) {
+    return {
+      exitCode: 0,
+      stdout: request.json
+        ? renderProposeJson(request.endpoint, result.result)
+        : renderProposeHuman(result.result),
+      stderr: warnings.length > 0 ? `${warnings.join("\n")}\n` : "",
+    };
+  }
+  return proposeFailureResult(
+    {
+      errorClass: mapRemoteProposeErrorClass(result.errorClass),
+      message: result.errorMessage ?? `remote propose failed (status ${result.status})`,
+    },
+    warnings,
+  );
 }
 
 export function renderProposeHelp(): string {

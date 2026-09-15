@@ -15,8 +15,22 @@ import {
   resolveProposeFolder,
   type ProposeContext,
 } from "../src/capabilities/propose.ts";
-import { executePropose, executeProposeCommand, renderProposeHelp } from "../src/commands/propose.ts";
+import { executePropose, renderProposeHelp } from "../src/commands/propose.ts";
+import {
+  executeProposeCommand as executeProposeCommandMaybeAsync,
+  type ProposeCommandResult,
+} from "../src/commands/propose.ts";
 import { registerAt } from "../src/registry.ts";
+
+// Every executeProposeCommand call in this suite is a local propose, which
+// stays fully synchronous (the remote branch is W8's conditional-async
+// seam). This wrapper keeps the call sites untouched and fails loudly if a
+// local case ever goes async (nav.test.ts precedent).
+function executeProposeCommand(args: readonly string[], context: Parameters<typeof executeProposeCommandMaybeAsync>[1]): ProposeCommandResult {
+  const result = executeProposeCommandMaybeAsync(args, context);
+  if (result instanceof Promise) throw new Error("local propose unexpectedly took the async path");
+  return result;
+}
 
 function createService(root: string, name: string, provider = "file", folder?: string): string {
   const folder_ = join(root, `${name}-service`);

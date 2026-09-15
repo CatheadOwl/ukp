@@ -130,7 +130,7 @@ describe("CLI bootstrap", () => {
   // (registered round-3 candidate: "scope how to set, not just what").
   test("root help defines Service, endpoint, and scope (with the change pointer)", () => {
     const help = renderHelp();
-    expect(help).toContain("A Service is a folder with a manifest (a name plus declared capabilities); registering it binds that name as an endpoint you address with --endpoint.");
+    expect(help).toContain("A Service is a folder with a manifest (a name plus optional declared capabilities); registering it binds that name as an endpoint you address with --endpoint.");
     expect(help).toContain("The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given; 'ukp guide client' shows how to set the workspace default.");
     expect(help).toContain("set your default scope here");
   });
