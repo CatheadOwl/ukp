@@ -26,34 +26,42 @@ function parseServeTokens(raw: string | undefined): string[] {
 
 /** Single-source command spec (ADR 0024): long-running host command — the
  * Bun.serve listener keeps the process alive after runCli returns its exit
- * code; SIGINT/SIGTERM stop the listener so the process exits with it. */
+ * code; SIGINT/SIGTERM stop the listener so the process exits with it.
+ * `--endpoint` is optional (W7 / ADR-REM-004): present = the original
+ * single-endpoint mode; absent = host door mode serving the whole registry
+ * over `/e/<name>/` routing. */
 export const SERVE_SPEC: UkpCommandSpec = {
   name: "serve",
-  summary: "serve one endpoint over HTTP for remote UKP clients",
+  summary: "serve one endpoint — or the whole registry as a host door — over HTTP for remote UKP clients",
   group: "operations",
-  description: "Expose one registered endpoint over HTTP using the ukp-remote wire: a discovery document, search, read, nav, and rg.",
-  usage: "--endpoint <name> [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>]",
-  singleEndpoint: {
-    endpointHelp: "the registered endpoint to expose",
-    unsupportedHelp: "serve exposes exactly one endpoint; -g is not supported",
-  },
+  description:
+    "Expose a registered endpoint over HTTP using the ukp-remote wire, or — without --endpoint — serve every local endpoint as one host door routed by name.",
+  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>]",
   options: [
+    { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve the whole registry as a host door (/e/<name>/ routing, all endpoints, one port)" },
     { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
     { flags: "--port <n>", help: "listen port (default 8570)" },
     { flags: "--tls", help: "serve HTTPS with a self-signed identity (auto-generated under .ukp/tls/, SAN covers this host's addresses; clients pin it at registration)" },
     { flags: "--tls-cert <pem>", help: "TLS certificate (chain) PEM path — Let's Encrypt, mkcert, or a private CA; pair with --tls-key" },
     { flags: "--tls-key <pem>", help: "TLS private key PEM path; pair with --tls-cert" },
-    { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing only; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
+    { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
   ],
   helpSuffix: [
     "",
-    "Wire (ukp-remote v1):",
+    "Wire (ukp-remote v1), single endpoint (--endpoint <name>):",
     `  GET  ${DISCOVERY_PATH}        discovery document (manifest projection,`,
     "                                protocol version, instance identity)",
     "  POST /v1/search              {query, limit} -> ukp.search.v1 envelope",
     "  GET  /v1/read?ref=…|uri=…    endpoint-relative ref or ukp:// URI",
     "  GET  /v1/nav?path=&depth=    markdown route view (ukp.nav.v1)",
     "  GET  /v1/rg?query=…          lexical search (ukp.rg.v1, ukp_uri handoff)",
+    "",
+    "Wire (ukp-remote v1), host door (no --endpoint; ADR-REM-004):",
+    `  GET  ${DISCOVERY_PATH}        door document (scope:"host", endpoint roster)`,
+    "  GET  /e/<name>/.well-known/ukp.json   per-endpoint document (same shape",
+    "                                as single-endpoint mode; TOFU pins anchor here)",
+    "  POST /e/<name>/v1/search     capabilities routed by endpoint name",
+    "  GET  /e/<name>/v1/read|nav|rg",
     "",
     "Auth (deny by default, RQ-18):",
     "  Serving requires UKP_SERVE_TOKEN (comma-separate several: alice,bob;",
@@ -63,37 +71,42 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "  to the loopback bind, so proxy deployments treat the token as",
     "  mandatory — serve cannot see past its own bind address.",
     "",
-    "  Loopback-without-token is the testing/dogfood posture, not the way to",
-    "  consume a same-machine endpoint — register its local path instead.",
+    "  Loopback-without-token covers testing/dogfood AND the ssh door",
+    "  deployment: bind the door on the remote host's loopback and let ssh",
+    "  forwarding carry encryption and authentication (clients register",
+    "  'ukp register --url ssh://<host>' — zero tokens, docker",
+    "  DOCKER_HOST=ssh:// posture). It is not the way to consume a",
+    "  same-machine endpoint — register its local path instead.",
     "  TLS (W5'): pass --tls to serve HTTPS with a self-signed identity",
-    "  (generated under .ukp/tls/, SAN covers this host's addresses; remote",
-    "  clients TOFU-pin it at registration and refresh by re-registering), or",
-    "  --tls-cert/--tls-key for your own certificate (Let's Encrypt — IP",
-    "  certs available since 2026-01 —, mkcert, a private CA). Plain HTTP",
-    "  remains loopback-only by admission; public exposure needs TLS or the",
-    "  ssh:// transport.",
+    "  (generated under .ukp/tls/ — under the registry directory in door",
+    "  mode —, SAN covers this host's addresses; remote clients TOFU-pin it",
+    "  at registration and refresh by re-registering), or --tls-cert/--tls-key",
+    "  for your own certificate (Let's Encrypt — IP certs available since",
+    "  2026-01 —, mkcert, a private CA). Plain HTTP remains loopback-only by",
+    "  admission; public exposure needs TLS or the ssh:// transport.",
     "",
   ].join("\n"),
 };
 
 export interface ParsedServe {
-  endpoint: string;
+  /** Present = single-endpoint mode; absent = host door mode (W7). */
+  endpoint?: string;
   host: string;
   port: number;
 }
 
 function toParsedServe(parsed: KitParsed): ParsedServe {
-  const options = parsed.options as { host?: string; port?: string };
-  const endpoint = parsed.scope.explicitEndpoints?.[0];
-  // The singleEndpoint family already rejects a missing --endpoint; this is
-  // a defensive narrowing for the type system.
-  if (endpoint === undefined) throw new KitUsageError("serve requires --endpoint <name>");
+  const options = parsed.options as { host?: string; port?: string; endpoint?: string };
+  const endpoint = options.endpoint;
+  if (endpoint !== undefined && endpoint.length === 0) {
+    throw new KitUsageError("--endpoint <name> must not be empty (omit it to serve a host door)");
+  }
   const host = options.host ?? "127.0.0.1";
   const port = Number(options.port ?? "8570");
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new KitUsageError("--port must be an integer between 1 and 65535");
   }
-  return { endpoint, host, port };
+  return { ...(endpoint !== undefined ? { endpoint } : {}), host, port };
 }
 
 export function parseServeArgs(args: readonly string[]): ParsedServe {
@@ -104,7 +117,20 @@ function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
 }
 
-function renderServeBanner(info: ServeInfo): string {
+export function renderServeBanner(info: ServeInfo): string {
+  if (info.mode === "door") {
+    return [
+      `serving host door (ukp-remote v1)`,
+      `  listening: ${info.url}`,
+      `  discovery: ${info.url}${DISCOVERY_PATH} (host door)`,
+      `  endpoints: ${info.door!.endpoints.length > 0 ? info.door!.endpoints.join(", ") : "(none — register endpoints on this host)"}`,
+      `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback bind; ssh-forwarded clients authenticate by SSH key)"}`,
+      ...(info.tls !== undefined
+        ? [`  tls: ${info.tls.source === "operator" ? "operator certificate" : `self-signed identity (${info.tls.source})`} ${info.tls.pin} (SAN: ${info.tls.san})`]
+        : []),
+      "",
+    ].join("\n");
+  }
   return [
     `serving endpoint '${info.endpoint}' (ukp-remote v1)`,
     `  listening: ${info.url}`,
@@ -160,15 +186,16 @@ export function executeServeCommand(
     const tokens = context.tokens ?? parseServeTokens(process.env.UKP_SERVE_TOKEN);
     const decision = serveAuthDecision(host, tokens, allowAnonymous);
     if (!decision.ok) {
-      throw new Error(`refusing to serve '${endpoint}': ${decision.reason}`);
+      const target = endpoint === undefined ? "host door" : `'${endpoint}'`;
+      throw new Error(`refusing to serve ${target}: ${decision.reason}`);
     }
     const { server, info } = startUkpServer({
-      endpointName: endpoint,
       currentDirectory: context.currentDirectory,
       registryPath: context.registryPath,
       qmdCommand: context.qmdCommand,
       host,
       port,
+      ...(endpoint !== undefined ? { endpointName: endpoint } : {}),
       ...(tokens.length > 0 ? { tokens } : {}),
       ...(options.tls === true
         ? { tls: { mode: "self-signed" as const } }

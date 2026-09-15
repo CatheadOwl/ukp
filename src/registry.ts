@@ -87,39 +87,104 @@ export function isLoopbackHttpUrl(raw: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
 }
 
-/** `ssh://host[:port]` transport scheme (D-078): the client tunnels to the
- * remote host's loopback over SSH — encryption + host auth come from SSH,
- * so the scheme is admissible wherever https is. */
-export function parseSshUrl(raw: string): { host: string; port: number } | undefined {
-  if (!/^ssh:\/\/[^\/]+/.test(raw)) return undefined;
+/** Remote url decomposition (D-078 + W7 / ADR-REM-004 O-3): every admissible
+ * remote url is `scheme://[user@]host[:port][/endpoint]` — the optional
+ * single path segment is the door-endpoint selector (`ssh://ali/notes`,
+ * git's `ssh://[user@]host[:port]/<path>` shape). `origin` is the canonical
+ * door address (default port absorbed, userinfo preserved) that grouping,
+ * drift notes, and re-registration are keyed on. Multi-segment or
+ * invalid-name paths make the whole url inadmissible. */
+export interface RemoteUrlParts {
+  scheme: "ssh" | "https" | "http";
+  /** ssh userinfo (`ssh://user@host`), preserved in `origin` and the tunnel target. */
+  user?: string;
+  host: string;
+  /** Explicit or scheme default (ssh 8570, https 443, http 80). */
+  port: number;
+  /** Present when the url carries the single door-endpoint path segment. */
+  endpointName?: string;
+  /** Canonical origin string (`ssh://ali`, `https://kb.example.com:8570`). */
+  origin: string;
+}
+
+const REMOTE_DEFAULT_PORTS: Record<RemoteUrlParts["scheme"], number> = { ssh: 8570, https: 443, http: 80 };
+
+export function parseRemoteUrl(raw: string): RemoteUrlParts | undefined {
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
     return undefined;
   }
-  if (parsed.protocol !== "ssh:" || parsed.pathname !== "/" && parsed.pathname !== "") return undefined;
+  const scheme = parsed.protocol.replace(/:$/, "");
+  if (scheme !== "ssh" && scheme !== "https" && scheme !== "http") return undefined;
+  if (scheme === "http" && !isLoopbackHttpUrl(raw)) return undefined;
   const host = parsed.hostname;
   if (host.length === 0) return undefined;
-  const port = parsed.port === "" ? 8570 : Number(parsed.port);
+  const port = parsed.port === "" ? REMOTE_DEFAULT_PORTS[scheme] : Number(parsed.port);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return undefined;
-  return { host, port };
+  const path = parsed.pathname.replace(/\/+$/, "");
+  if (path.includes("//")) return undefined;
+  let endpointName: string | undefined;
+  if (path !== "") {
+    const segment = path.replace(/^\//, "");
+    if (segment.includes("/") || !ENDPOINT_NAME.test(segment)) return undefined;
+    endpointName = segment;
+  }
+  const user = scheme === "ssh" && parsed.username !== "" ? parsed.username : undefined;
+  const origin =
+    `${scheme}://${user !== undefined ? `${user}@` : ""}${host}${port !== REMOTE_DEFAULT_PORTS[scheme] ? `:${port}` : ""}`;
+  return {
+    scheme,
+    ...(user !== undefined ? { user } : {}),
+    host,
+    port,
+    ...(endpointName !== undefined ? { endpointName } : {}),
+    origin,
+  };
 }
 
-/** Remote URL admission (ADR-REM-003 §7 + D-078): https always; plain http
- * only on loopback (local dogfood); ssh://host[:port] tunnels via SSH.
+/** `ssh://[user@]host[:port][/endpoint]` transport scheme (D-078; path
+ * segment since W7): the client tunnels to the remote host's loopback over
+ * SSH — encryption + host auth come from SSH, so the scheme is admissible
+ * wherever https is. */
+export function parseSshUrl(raw: string): { user?: string; host: string; port: number; endpointName?: string } | undefined {
+  const parts = parseRemoteUrl(raw);
+  if (parts === undefined || parts.scheme !== "ssh") return undefined;
+  return {
+    ...(parts.user !== undefined ? { user: parts.user } : {}),
+    host: parts.host,
+    port: parts.port,
+    ...(parts.endpointName !== undefined ? { endpointName: parts.endpointName } : {}),
+  };
+}
+
+/** Remote URL admission (ADR-REM-003 §7 + D-078; path semantics W7): https
+ * always; plain http only on loopback (local dogfood); ssh://[user@]host[:port]
+ * tunnels via SSH; the path, if any, must be a single endpoint name.
  * Enforced at registration AND at call time. */
 export function assertRemoteUrlAllowed(raw: string): void {
-  const ssh = parseSshUrl(raw);
-  if (ssh !== undefined) return;
+  if (parseRemoteUrl(raw) !== undefined) return;
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
     throw new RegistryError(`remote endpoint url is not a valid absolute URL: ${raw}`);
   }
-  if (parsed.protocol === "https:") return;
-  if (parsed.protocol === "http:" && isLoopbackHttpUrl(raw)) return;
+  const scheme = parsed.protocol.replace(/:$/, "");
+  const schemeAdmitted =
+    scheme === "https" || scheme === "ssh" || (scheme === "http" && isLoopbackHttpUrl(raw));
+  if (schemeAdmitted) {
+    const path = parsed.pathname.replace(/\/+$/, "");
+    const segment = path.replace(/^\//, "");
+    if (path !== "" && (segment.includes("/") || !ENDPOINT_NAME.test(segment))) {
+      throw new RegistryError(
+        `remote endpoint url path must be a single endpoint name ([a-z0-9-], one segment): ${raw}`,
+      );
+    }
+    // Admitted scheme, well-formed (empty) path: the failure is structural
+    // (empty host and the like) — the admission line names the valid shape.
+  }
   throw new RegistryError(
     `remote endpoint url must be https, ssh://host[:port], or loopback http: ${raw} (bare-IP https: 'ukp serve --tls')`,
   );

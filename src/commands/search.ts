@@ -11,11 +11,10 @@ import {
   type SearchResult,
 } from "../capabilities/search.ts";
 import {
+  createTransportPool,
   fetchDiscoveryDocument,
-  openRemoteTransport,
   remoteSearch,
   resolveRemoteToken,
-  type RemoteTransportHandle,
 } from "../capabilities/remote-client.ts";
 import { isRemoteBinding, readRegistry } from "../registry.ts";
 import { resolveScope, ScopeError } from "../scope.ts";
@@ -222,53 +221,57 @@ async function executeMixedSearch(
   const warnings: string[] = localResult !== undefined ? [...localResult.warnings] : [...baseWarnings];
 
   const remoteOutcomes = new Map<string, SearchEndpointOutcome>();
-  for (const binding of remotes) {
-    const token = resolveRemoteToken(binding);
-    let transport: RemoteTransportHandle | undefined;
-    try {
-      transport = await openRemoteTransport(binding, { registryPath: context.registryPath });
-      const discovery = await fetchDiscoveryDocument(binding, transport, token);
-      warnings.push(...discovery.warnings);
-      if (discovery.bearerRequired && token === undefined) {
-        warnings.push(
-          `endpoint '${binding.name}' requires a bearer token; pass --token at registration or set UKP_ENDPOINT_${binding.name.toUpperCase().replace(/-/g, "_")}_TOKEN`,
-        );
-      }
-      if (!("search" in discovery.doc.capabilities)) {
-        const message = `endpoint '${binding.name}' declares no search capability`;
-        // Local planned skips surface their reason as a warning (D-036 render
-        // contract); the remote skip joins them so stderr stays informative.
-        warnings.push(message);
+  // One transport pool for the whole invocation (W7 / O-5): same-origin door
+  // bindings share a single ssh tunnel instead of one per row.
+  const pool = createTransportPool({ registryPath: context.registryPath });
+  try {
+    for (const binding of remotes) {
+      const token = resolveRemoteToken(binding);
+      try {
+        const transport = await pool.acquire(binding);
+        const discovery = await fetchDiscoveryDocument(binding, transport, token);
+        warnings.push(...discovery.warnings);
+        if (discovery.bearerRequired && token === undefined) {
+          warnings.push(
+            `endpoint '${binding.name}' requires a bearer token; pass --token at registration or set UKP_ENDPOINT_${binding.name.toUpperCase().replace(/-/g, "_")}_TOKEN`,
+          );
+        }
+        if (!("search" in discovery.doc.capabilities)) {
+          const message = `endpoint '${binding.name}' declares no search capability`;
+          // Local planned skips surface their reason as a warning (D-036 render
+          // contract); the remote skip joins them so stderr stays informative.
+          warnings.push(message);
+          remoteOutcomes.set(binding.name, {
+            name: binding.name,
+            provider: null,
+            status: "skipped",
+            message,
+          });
+          continue;
+        }
+        const execution = await remoteSearch(binding, transport, token, parsed.request.query, parsed.request.limit);
+        remoteOutcomes.set(binding.name, {
+          ...execution.outcome,
+          ...(execution.results.length > 0 ? { providerOutput: JSON.stringify(execution.results) } : {}),
+          ...(execution.references !== undefined
+            ? { remoteUris: execution.references.map((entry) => entry.ukp_uri) }
+            : {}),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Local failures surface via warnings (D-036 render contract); remote
+        // transport failures join them so stderr stays the failure channel.
+        warnings.push(`endpoint '${binding.name}' provider failed: ${message}`);
         remoteOutcomes.set(binding.name, {
           name: binding.name,
           provider: null,
-          status: "skipped",
+          status: "failed",
           message,
         });
-        continue;
       }
-      const execution = await remoteSearch(binding, transport, token, parsed.request.query, parsed.request.limit);
-      remoteOutcomes.set(binding.name, {
-        ...execution.outcome,
-        ...(execution.results.length > 0 ? { providerOutput: JSON.stringify(execution.results) } : {}),
-        ...(execution.references !== undefined
-          ? { remoteUris: execution.references.map((entry) => entry.ukp_uri) }
-          : {}),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // Local failures surface via warnings (D-036 render contract); remote
-      // transport failures join them so stderr stays the failure channel.
-      warnings.push(`endpoint '${binding.name}' provider failed: ${message}`);
-      remoteOutcomes.set(binding.name, {
-        name: binding.name,
-        provider: null,
-        status: "failed",
-        message,
-      });
-    } finally {
-      transport?.close();
     }
+  } finally {
+    pool.close();
   }
 
   const byName = new Map((localResult?.endpoints ?? []).map((outcome) => [outcome.name, outcome]));

@@ -1,8 +1,20 @@
 import { connect as netConnect, isIP } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { X509Certificate } from "node:crypto";
-import { DISCOVERY_PATH, PROTOCOL_NAME, type DiscoveryDocument } from "../server.ts";
-import { assertRemoteUrlAllowed, parseSshUrl, refreshRemoteTlsCert, type RegistryBinding } from "../registry.ts";
+import {
+  DISCOVERY_PATH,
+  PROTOCOL_NAME,
+  type DiscoveryDocument,
+  type DoorDocument,
+  type DoorEndpointSummary,
+} from "../server.ts";
+import {
+  assertRemoteUrlAllowed,
+  parseRemoteUrl,
+  refreshRemoteTlsCert,
+  type RegistryBinding,
+  type RemoteUrlParts,
+} from "../registry.ts";
 import { spkiPinOf } from "./tls-identity.ts";
 import type { SearchEndpointOutcome } from "./search.ts";
 import type { NavEnvelope } from "./nav.ts";
@@ -163,13 +175,74 @@ export async function probeRemoteTls(url: string): Promise<RemoteTlsProbe | unde
   });
 }
 
+/** Door-endpoint wire prefix (ADR-REM-004 / O-3): a url with a path segment
+ * (`ssh://ali/notes`) addresses one endpoint THROUGH the door at origin —
+ * every wire route hangs off `/e/<name>`, so the path becomes this prefix
+ * on the transport base and downstream `${base}/v1/…` calls stay unchanged. */
+function wirePrefix(endpointName: string | undefined): string {
+  return endpointName === undefined ? "" : `/e/${endpointName}`;
+}
+
+function tlsAnchorOf(binding: RegistryBinding, options: { registryPath?: string }): RemoteTlsAnchor | undefined {
+  return binding.url !== undefined && binding.url.startsWith("https://") && binding.tls_cert !== undefined
+    ? {
+        ca: binding.tls_cert,
+        ...(binding.tls_pin !== undefined ? { pin: binding.tls_pin } : {}),
+        name: binding.name,
+        ...(options.registryPath !== undefined ? { registryPath: options.registryPath } : {}),
+      }
+    : undefined;
+}
+
+function directTransportHandle(
+  binding: RegistryBinding,
+  parts: RemoteUrlParts,
+  options: { registryPath?: string },
+): RemoteTransportHandle {
+  return {
+    base: parts.origin + wirePrefix(parts.endpointName),
+    close: () => {},
+    ...(tlsAnchorOf(binding, options) !== undefined ? { tls: tlsAnchorOf(binding, options)! } : {}),
+  };
+}
+
+/** One ephemeral ssh local forward (D-078): free local port → the remote
+ * host's loopback on `port`; encryption + host auth come from the user's
+ * SSH config/keys. Shared by the one-shot transport and the per-origin
+ * pool; `sshCommand` is a test injection point for the ssh binary. */
+async function openSshTunnel(
+  parts: { user?: string; host: string; port: number },
+  options: { sshCommand?: readonly string[] },
+  endpointLabel: string,
+): Promise<{ proc: ReturnType<typeof Bun.spawn>; base: string }> {
+  const localPort = await freePort();
+  const target = parts.user !== undefined ? `${parts.user}@${parts.host}` : parts.host;
+  const argv = [
+    ...(options.sshCommand ?? ["ssh"]),
+    "-N",
+    "-o", "ExitOnForwardFailure=yes",
+    "-o", "BatchMode=yes",
+    "-L", `127.0.0.1:${localPort}:127.0.0.1:${parts.port}`,
+    target,
+  ];
+  const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+  const ready = await portAccepts("127.0.0.1", localPort, 15_000);
+  if (!ready) {
+    proc.kill();
+    throw new RemoteTransportError(
+      `ssh tunnel to '${target}:${parts.port}' (endpoint '${endpointLabel}') did not become ready; check the host alias and key auth (BatchMode)`,
+    );
+  }
+  return { proc, base: `http://127.0.0.1:${localPort}` };
+}
+
 /** Ensure a usable wire base for one invocation (D-078 transparent ssh):
- * http/https urls are used directly; `ssh://host[:port]` opens an ephemeral
- * local forward over SSH (encryption + host auth come from the user's SSH
- * config/keys), waits for readiness, and returns the tunnel endpoint.
- * https bindings with a pinned certificate carry their TLS anchor on the
- * handle. `sshCommand` is a test injection point for the ssh binary
- * invocation; `registryPath` lets the renewal re-anchor persist. */
+ * http/https urls are used directly; `ssh://[user@]host[:port][/endpoint]`
+ * opens an ephemeral local forward over SSH and returns the tunnel endpoint
+ * (plus the `/e/<name>` prefix when the url selects a door endpoint). https
+ * bindings with a pinned certificate carry their TLS anchor on the handle.
+ * `sshCommand` is a test injection point for the ssh binary invocation;
+ * `registryPath` lets the renewal re-anchor persist. */
 export async function openRemoteTransport(
   binding: RegistryBinding,
   options: { sshCommand?: readonly string[]; registryPath?: string } = {},
@@ -178,42 +251,62 @@ export async function openRemoteTransport(
     throw new RemoteTransportError(`endpoint '${binding.name}' is not a remote binding`);
   }
   assertRemoteUrlAllowed(binding.url);
-  const ssh = parseSshUrl(binding.url);
-  if (ssh === undefined) {
-    const tls = binding.url.startsWith("https://") && binding.tls_cert !== undefined
-      ? {
-          ca: binding.tls_cert,
-          ...(binding.tls_pin !== undefined ? { pin: binding.tls_pin } : {}),
-          name: binding.name,
-          ...(options.registryPath !== undefined ? { registryPath: options.registryPath } : {}),
-        }
-      : undefined;
-    return {
-      base: binding.url.replace(/\/+$/, ""),
-      close: () => {},
-      ...(tls !== undefined ? { tls } : {}),
-    };
+  const parts = parseRemoteUrl(binding.url);
+  if (parts === undefined) {
+    throw new RemoteTransportError(`remote endpoint url is not admissible: ${binding.url}`);
   }
-  const localPort = await freePort();
-  const argv = [
-    ...(options.sshCommand ?? ["ssh"]),
-    "-N",
-    "-o", "ExitOnForwardFailure=yes",
-    "-o", "BatchMode=yes",
-    "-L", `127.0.0.1:${localPort}:127.0.0.1:${ssh.port}`,
-    ssh.host,
-  ];
-  const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
-  const ready = await portAccepts("127.0.0.1", localPort, 15_000);
-  if (!ready) {
-    proc.kill();
-    throw new RemoteTransportError(
-      `ssh tunnel to '${ssh.host}:${ssh.port}' (endpoint '${binding.name}') did not become ready; check the host alias and key auth (BatchMode)`,
-    );
+  if (parts.scheme !== "ssh") {
+    return directTransportHandle(binding, parts, options);
   }
+  const tunnel = await openSshTunnel(parts, options, binding.name);
   return {
-    base: `http://127.0.0.1:${localPort}`,
-    close: () => proc.kill(),
+    base: tunnel.base + wirePrefix(parts.endpointName),
+    close: () => tunnel.proc.kill(),
+  };
+}
+
+/** Per-invocation transport pool (W7 / O-5): same-origin ssh urls share ONE
+ * tunnel for the pool's lifetime — a 3-endpoint door's `ukp list` is one
+ * tunnel, not four (per-row + door fetch). Pure client-internal: handles it
+ * hands out have a noop `close`; the caller closes the pool when the
+ * invocation ends. Direct (https / loopback http) urls need no pooling and
+ * get the same one-shot handles as `openRemoteTransport`. */
+export interface RemoteTransportPool {
+  acquire(binding: RegistryBinding): Promise<RemoteTransportHandle>;
+  close(): void;
+}
+
+export function createTransportPool(
+  options: { sshCommand?: readonly string[]; registryPath?: string } = {},
+): RemoteTransportPool {
+  const tunnels = new Map<string, { proc: ReturnType<typeof Bun.spawn>; base: string }>();
+  return {
+    async acquire(binding) {
+      if (binding.kind !== "remote" || binding.url === undefined) {
+        throw new RemoteTransportError(`endpoint '${binding.name}' is not a remote binding`);
+      }
+      assertRemoteUrlAllowed(binding.url);
+      const parts = parseRemoteUrl(binding.url);
+      if (parts === undefined) {
+        throw new RemoteTransportError(`remote endpoint url is not admissible: ${binding.url}`);
+      }
+      if (parts.scheme !== "ssh") {
+        return directTransportHandle(binding, parts, options);
+      }
+      let tunnel = tunnels.get(parts.origin);
+      if (tunnel === undefined) {
+        tunnel = await openSshTunnel(parts, options, binding.name);
+        tunnels.set(parts.origin, tunnel);
+      }
+      return {
+        base: tunnel.base + wirePrefix(parts.endpointName),
+        close: () => {},
+      };
+    },
+    close() {
+      for (const { proc } of tunnels.values()) proc.kill();
+      tunnels.clear();
+    },
   };
 }
 
@@ -331,22 +424,44 @@ export async function fetchDiscoveryDocument(
   });
 }
 
+/** Raw well-known fetch shared by the endpoint and door document paths:
+ * decodes JSON, checks the protocol name/version, and reports whether the
+ * service declares bearer auth. Scope discrimination (absence of `scope` =
+ * endpoint document) is the callers' job — that IS the wire contract
+ * (ADR-REM-004 / O-1). */
+async function fetchWellKnownRecord(
+  base: string,
+  options: { token?: string; tlsAnchor?: RemoteTlsAnchor },
+): Promise<{ record: Record<string, unknown>; bearerRequired: boolean }> {
+  const url = `${base}${DISCOVERY_PATH}`;
+  const { body } = await fetchJson(url, { headers: authorizationHeaders(options.token) }, options.tlsAnchor);
+  const record = asRecord(body, url);
+  if (record.protocol !== PROTOCOL_NAME) {
+    throw new RemoteTransportError(`service at ${base} is not a ukp-remote service (protocol: ${String(record.protocol)})`);
+  }
+  if (record.protocol_version !== "1") {
+    throw new RemoteTransportError(`service at ${base} speaks ukp-remote protocol version ${String(record.protocol_version)}; this client supports 1`);
+  }
+  const schemes = (record.security as { schemes?: unknown } | undefined)?.schemes;
+  return { record, bearerRequired: Array.isArray(schemes) && schemes.includes("bearer") };
+}
+
 /** URL-addressed variant for registration (the name is not known yet — it
  * comes FROM this document per RQ-14). `tlsAnchor` carries the registration
- * probe's captured certificate for self-signed servers (W5'). */
+ * probe's captured certificate for self-signed servers (W5'). A door
+ * document here is a classified failure: this path is for endpoint
+ * documents; doors go through `fetchRegistrationDocument`. */
 export async function fetchDiscoveryDocumentAt(
   url: string,
   options: { name?: string; pinnedUid?: string; token?: string; tlsAnchor?: RemoteTlsAnchor } = {},
 ): Promise<DiscoveryFetch> {
   const base = url.replace(/\/+$/, "");
   const label = options.name ?? base;
-  const { body } = await fetchJson(`${base}${DISCOVERY_PATH}`, { headers: authorizationHeaders(options.token) }, options.tlsAnchor);
-  const record = asRecord(body, `${base}${DISCOVERY_PATH}`);
-  if (record.protocol !== PROTOCOL_NAME) {
-    throw new RemoteTransportError(`endpoint '${label}' at ${base} is not a ukp-remote service (protocol: ${String(record.protocol)})`);
-  }
-  if (record.protocol_version !== "1") {
-    throw new RemoteTransportError(`endpoint '${label}' speaks ukp-remote protocol version ${String(record.protocol_version)}; this client supports 1`);
+  const { record, bearerRequired } = await fetchWellKnownRecord(base, options);
+  if (record.scope === "host") {
+    throw new RemoteTransportError(
+      `service at ${base} is a host door (scope:"host"); register it with 'ukp register --url ${base}' to import its endpoints`,
+    );
   }
   const warnings: string[] = [];
   if (options.pinnedUid !== undefined && record.instance_uid !== options.pinnedUid) {
@@ -358,12 +473,82 @@ export async function fetchDiscoveryDocumentAt(
     }
     warnings.push(detail);
   }
-  const schemes = (record.security as { schemes?: unknown } | undefined)?.schemes;
   return {
     doc: record as unknown as DiscoveryDocument,
     warnings,
-    bearerRequired: Array.isArray(schemes) && schemes.includes("bearer"),
+    bearerRequired,
   };
+}
+
+/** Door roster validation (O-1): every `endpoints[]` entry must carry a
+ * string name + instance_uid — the trust payload clients pin per endpoint. */
+function parseDoorEndpoints(record: Record<string, unknown>, base: string): DoorEndpointSummary[] {
+  const rawEndpoints = record.endpoints;
+  if (!Array.isArray(rawEndpoints) || rawEndpoints.length === 0) {
+    throw new RemoteTransportError(`host door at ${base} declares no endpoints`);
+  }
+  const endpoints: DoorEndpointSummary[] = [];
+  for (const entry of rawEndpoints) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new RemoteTransportError(`host door at ${base} declares a malformed endpoints[] entry`);
+    }
+    const summary = entry as Record<string, unknown>;
+    if (typeof summary.name !== "string" || typeof summary.instance_uid !== "string") {
+      throw new RemoteTransportError(`host door at ${base} declares an endpoint without name/instance_uid`);
+    }
+    endpoints.push(summary as unknown as DoorEndpointSummary);
+  }
+  return endpoints;
+}
+
+export interface DoorFetch {
+  doc: DoorDocument;
+  bearerRequired: boolean;
+}
+
+/** Fetch + validate a host door document (ADR-REM-004 / O-1): requires
+ * `scope:"host"` and a well-formed `endpoints[]` roster. Per-endpoint TOFU
+ * happens on the per-endpoint documents at import/call time — the door
+ * itself carries no identity. */
+export async function fetchDoorDocument(
+  url: string,
+  options: { token?: string; tlsAnchor?: RemoteTlsAnchor } = {},
+): Promise<DoorFetch> {
+  const base = url.replace(/\/+$/, "");
+  const { record, bearerRequired } = await fetchWellKnownRecord(base, options);
+  if (record.scope !== "host") {
+    throw new RemoteTransportError(`service at ${base} is not a host door (scope: ${String(record.scope)}); register it directly with 'ukp register --url ${base}'`);
+  }
+  return {
+    doc: { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, base) },
+    bearerRequired,
+  };
+}
+
+/** Registration-time well-known fetch with scope discrimination (O-1): the
+ * document at the url's origin self-describes — `scope:"host"` routes to the
+ * door import flow, absence routes to today's single-endpoint registration.
+ * One fetch, one verdict. */
+export type RegistrationFetch =
+  | { kind: "door"; door: DoorFetch }
+  | { kind: "endpoint"; discovery: DiscoveryFetch };
+
+export async function fetchRegistrationDocument(
+  url: string,
+  options: { token?: string; tlsAnchor?: RemoteTlsAnchor } = {},
+): Promise<RegistrationFetch> {
+  const base = url.replace(/\/+$/, "");
+  const { record, bearerRequired } = await fetchWellKnownRecord(base, options);
+  if (record.scope === "host") {
+    return {
+      kind: "door",
+      door: {
+        doc: { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, base) },
+        bearerRequired,
+      },
+    };
+  }
+  return { kind: "endpoint", discovery: { doc: record as unknown as DiscoveryDocument, warnings: [], bearerRequired } };
 }
 
 export interface RemoteSearchExecution {
