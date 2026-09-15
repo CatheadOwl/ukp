@@ -14,9 +14,10 @@ import {
   DISCOVERY_PATH,
   startUkpServer,
   type DiscoveryDocument,
+  type DoorDocument,
   type StartedServe,
 } from "../src/server.ts";
-import { parseServeArgs } from "../src/commands/serve.ts";
+import { parseServeArgs, renderServeBanner } from "../src/commands/serve.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
 // Private fixture copy (see helper doc: invocation state is written into the
@@ -47,6 +48,9 @@ function createService(folderName: string, endpointName: string): string {
 
 const serviceFolder = createService("serve-svc", "serve-fixture");
 registerAt(registryPath, "serve-fixture", serviceFolder);
+// A second servable endpoint for door-mode rosters (W7).
+const doorSecondFolder = createService("door-second-svc", "door-second");
+registerAt(registryPath, "door-second", doorSecondFolder);
 
 const started: StartedServe[] = [];
 function start(overrides: Partial<Parameters<typeof startUkpServer>[0]> = {}): StartedServe {
@@ -58,6 +62,14 @@ function start(overrides: Partial<Parameters<typeof startUkpServer>[0]> = {}): S
     port: 0,
     ...overrides,
   });
+  started.push(handle);
+  return handle;
+}
+
+/** Door-mode starter: no endpointName = serve the whole registry (W7). */
+function startDoor(overrides: Partial<Parameters<typeof startUkpServer>[0]> = {}): StartedServe {
+  const { endpointName: _omitted, ...rest } = { endpointName: undefined, ...overrides };
+  const handle = startUkpServer({ currentDirectory: root, registryPath, qmdCommand, port: 0, ...rest });
   started.push(handle);
   return handle;
 }
@@ -394,7 +406,11 @@ describe("serve argument parsing", () => {
     expect(() => parseServeArgs(["--endpoint", "cad", "--port", "99999"])).toThrow(
       "--port must be an integer between 1 and 65535",
     );
-    expect(() => parseServeArgs(["-g"])).toThrow("serve requires --endpoint <name>");
+  });
+
+  test("--endpoint is optional: its absence is host door mode (W7)", () => {
+    expect(parseServeArgs([])).toEqual({ host: "127.0.0.1", port: 8570 });
+    expect(() => parseServeArgs(["-g"])).toThrow(/unknown option '-g'|no option/);
   });
 });
 
@@ -449,5 +465,109 @@ describe("serve TLS (W5' / D-079)", () => {
     const half = executeServeCommand(["--endpoint", "serve-fixture", "--tls-cert", "x.pem"], context);
     expect(half.exitCode).toBe(2);
     expect(half.stderr).toContain("--tls-cert and --tls-key are used together");
+  });
+});
+
+describe("serve host door mode (W7 / ADR-REM-004)", () => {
+  test("GET /.well-known/ukp.json serves the scope:\"host\" door document with the full roster", async () => {
+    const { info } = startDoor();
+    const response = await fetch(`${info.url}${DISCOVERY_PATH}`);
+    expect(response.status).toBe(200);
+    const doc = await response.json() as DoorDocument;
+    expect(doc.protocol).toBe("ukp-remote");
+    expect(doc.protocol_version).toBe("1");
+    expect(doc.scope).toBe("host");
+    expect(doc.security.schemes).toEqual([]);
+    expect(doc.endpoints.map((endpoint) => endpoint.name)).toEqual(["door-second", "serve-fixture"]);
+    for (const endpoint of doc.endpoints) {
+      expect(endpoint.instance_uid).toMatch(/^[0-9a-f-]{36}$/);
+      expect(endpoint.capabilities.read).toEqual({ provider: "file", derived: true });
+      expect(endpoint.capabilities.search).toEqual({ provider: "qmd" });
+    }
+    // No door-level identity: trust anchors are the per-endpoint pins.
+    expect("instance_uid" in doc).toBe(false);
+  });
+
+  test("per-endpoint documents behind /e/<name>/ are byte-identical to single-endpoint mode", async () => {
+    const door = startDoor();
+    const single = start();
+    const throughDoor = await (await fetch(`${door.info.url}/e/serve-fixture${DISCOVERY_PATH}`)).json() as DiscoveryDocument;
+    const direct = await (await fetch(`${single.info.url}${DISCOVERY_PATH}`)).json() as DiscoveryDocument;
+    expect(throughDoor).toEqual(direct);
+  });
+
+  test("/e/<name>/v1/* routes capabilities by name (search + read smoke)", async () => {
+    const { info } = startDoor();
+    const search = await fetch(`${info.url}/e/serve-fixture/v1/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "fixture-cad-search-token", limit: 5 }),
+    });
+    expect(search.status).toBe(200);
+    const envelope = await search.json() as { endpoints?: Array<{ name?: string; status?: string }> };
+    expect(envelope.endpoints?.[0]?.name).toBe("serve-fixture");
+    expect(envelope.endpoints?.[0]?.status).toBe("succeeded");
+
+    const read = await fetch(`${info.url}/e/door-second/v1/read?ref=documents/cad-notes.md`);
+    expect(read.status).toBe(200);
+    const body = await read.json() as { ok?: boolean; content?: string };
+    expect(body.ok).toBe(true);
+    expect(body.content).toContain("CAD fixture note content");
+  });
+
+  test("unknown and invalid /e/<name>/ segments 404 with the available roster", async () => {
+    const { info } = startDoor();
+    // `%2F` (encoded slash) is the injection canary: it stays one opaque
+    // segment end-to-end (WHATWG URLs normalize `%2e%2e` dot-segments but
+    // never decode `%2F` into a separator), so it must die on the name gate
+    // — path injection is unreachable by construction (ENDPOINT_NAME).
+    for (const segment of ["missing", "Bad_Segment", "foo%2Fbar"]) {
+      const response = await fetch(`${info.url}/e/${segment}${DISCOVERY_PATH}`);
+      expect(response.status).toBe(404);
+      const body = await response.json() as { error: { message: string } };
+      expect(body.error.message).toContain(`no such endpoint '${segment}' on this host door (available: `);
+      expect(body.error.message).toContain("serve-fixture");
+    }
+    // Door-mode route hint for non-/e/ paths.
+    const alien = await fetch(`${info.url}/v1/search`, { method: "POST" });
+    expect(alien.status).toBe(404);
+    expect(((await alien.json()) as { error: { message: string } }).error.message).toContain("host door");
+  });
+
+  test("door-level auth: bearer covers /e/*/v1/*, documents stay public (RQ-16/18)", async () => {
+    const { info } = startDoor({ tokens: ["door-token"] });
+    expect((await fetch(`${info.url}${DISCOVERY_PATH}`)).status).toBe(200);
+    expect((await fetch(`${info.url}/e/serve-fixture${DISCOVERY_PATH}`)).status).toBe(200);
+    const denied = await fetch(`${info.url}/e/serve-fixture/v1/read?ref=documents/cad-notes.md`);
+    expect(denied.status).toBe(401);
+    const allowed = await fetch(`${info.url}/e/serve-fixture/v1/read?ref=documents/cad-notes.md`, {
+      headers: { authorization: "Bearer door-token" },
+    });
+    expect(allowed.status).toBe(200);
+  });
+
+  test("the door grows without restart: a late registration appears in the roster", async () => {
+    const { info } = startDoor();
+    const before = await (await fetch(`${info.url}${DISCOVERY_PATH}`)).json() as DoorDocument;
+    expect(before.endpoints.map((endpoint) => endpoint.name)).not.toContain("late-endpoint");
+    const lateFolder = createService("late-svc", "late-endpoint");
+    registerAt(registryPath, "late-endpoint", lateFolder);
+    const after = await (await fetch(`${info.url}${DISCOVERY_PATH}`)).json() as DoorDocument;
+    expect(after.endpoints.map((endpoint) => endpoint.name)).toContain("late-endpoint");
+    const read = await fetch(`${info.url}/e/late-endpoint/v1/read?ref=documents/cad-notes.md`);
+    expect(read.status).toBe(200);
+  });
+
+  test("banner: door form announces the roster and the ssh-door auth posture", () => {
+    const door = startDoor();
+    const doorBanner = renderServeBanner(door.info);
+    expect(doorBanner).toContain("serving host door (ukp-remote v1)");
+    expect(doorBanner).toContain(`discovery: ${door.info.url}${DISCOVERY_PATH} (host door)`);
+    expect(doorBanner).toMatch(/endpoints: .*\bserve-fixture\b/);
+    expect(doorBanner).toContain("auth: no token (loopback bind; ssh-forwarded clients authenticate by SSH key)");
+    const tokenDoor = startDoor({ tokens: ["t"] });
+    expect(renderServeBanner(tokenDoor.info)).toContain("auth: bearer token required");
+    const single = start();
+    expect(renderServeBanner(single.info)).toContain("serving endpoint 'serve-fixture' (ukp-remote v1)");
   });
 });

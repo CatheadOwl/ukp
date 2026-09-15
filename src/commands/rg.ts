@@ -15,11 +15,10 @@ import {
 } from "../capabilities/rg.ts";
 import { EXTERNAL_PROVIDER } from "../config/external-tool.ts";
 import {
+  createTransportPool,
   fetchDiscoveryDocument,
-  openRemoteTransport,
   remoteRg,
   resolveRemoteToken,
-  type RemoteTransportHandle,
 } from "../capabilities/remote-client.ts";
 import { isRemoteBinding, readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope, ScopeError } from "../scope.ts";
@@ -281,45 +280,49 @@ async function executeMixedRg(
   const interrupted = localResult?.endpoints.some((outcome) => outcome.status === "interrupted") ?? false;
 
   const remoteOutcomes = new Map<string, RgEndpointOutcome>();
-  for (const binding of remotes) {
-    if (interrupted) {
-      remoteOutcomes.set(binding.name, { name: binding.name, provider: EXTERNAL_PROVIDER, status: "cancelled" });
-      continue;
-    }
-    const token = resolveRemoteToken(binding);
-    let transport: RemoteTransportHandle | undefined;
-    try {
-      transport = await openRemoteTransport(binding, { registryPath: context.registryPath });
-      const discovery = await fetchDiscoveryDocument(binding, transport, token);
-      warnings.push(...discovery.warnings);
-      if (discovery.bearerRequired && token === undefined) {
-        warnings.push(
-          `endpoint '${binding.name}' requires a bearer token; pass --token at registration or set UKP_ENDPOINT_${binding.name.toUpperCase().replace(/-/g, "_")}_TOKEN`,
-        );
+  // One transport pool for the whole invocation (W7 / O-5): same-origin door
+  // bindings share a single ssh tunnel instead of one per row.
+  const pool = createTransportPool({ registryPath: context.registryPath });
+  try {
+    for (const binding of remotes) {
+      if (interrupted) {
+        remoteOutcomes.set(binding.name, { name: binding.name, provider: EXTERNAL_PROVIDER, status: "cancelled" });
+        continue;
       }
-      const execution = await remoteRg(binding, transport, token, {
-        query: parsed.request.query,
-        limit: parsed.request.limit,
-        ...(parsed.options.glob !== undefined ? { glob: parsed.options.glob } : {}),
-        ...(parsed.options.type !== undefined ? { type: parsed.options.type } : {}),
-        ...(parsed.options.ignoreCase === true ? { ignoreCase: true } : {}),
-        ...(parsed.options.count === true ? { count: true } : {}),
-        passthrough: parsed.options.passthrough,
-      });
-      remoteOutcomes.set(binding.name, execution.outcome);
-      warnings.push(...execution.warnings);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      warnings.push(`endpoint '${binding.name}' rg failed: ${message}`);
-      remoteOutcomes.set(binding.name, {
-        name: binding.name,
-        provider: EXTERNAL_PROVIDER,
-        status: "failed",
-        message,
-      });
-    } finally {
-      transport?.close();
+      const token = resolveRemoteToken(binding);
+      try {
+        const transport = await pool.acquire(binding);
+        const discovery = await fetchDiscoveryDocument(binding, transport, token);
+        warnings.push(...discovery.warnings);
+        if (discovery.bearerRequired && token === undefined) {
+          warnings.push(
+            `endpoint '${binding.name}' requires a bearer token; pass --token at registration or set UKP_ENDPOINT_${binding.name.toUpperCase().replace(/-/g, "_")}_TOKEN`,
+          );
+        }
+        const execution = await remoteRg(binding, transport, token, {
+          query: parsed.request.query,
+          limit: parsed.request.limit,
+          ...(parsed.options.glob !== undefined ? { glob: parsed.options.glob } : {}),
+          ...(parsed.options.type !== undefined ? { type: parsed.options.type } : {}),
+          ...(parsed.options.ignoreCase === true ? { ignoreCase: true } : {}),
+          ...(parsed.options.count === true ? { count: true } : {}),
+          passthrough: parsed.options.passthrough,
+        });
+        remoteOutcomes.set(binding.name, execution.outcome);
+        warnings.push(...execution.warnings);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        warnings.push(`endpoint '${binding.name}' rg failed: ${message}`);
+        remoteOutcomes.set(binding.name, {
+          name: binding.name,
+          provider: EXTERNAL_PROVIDER,
+          status: "failed",
+          message,
+        });
+      }
     }
+  } finally {
+    pool.close();
   }
 
   const byName = new Map((localResult?.endpoints ?? []).map((outcome) => [outcome.name, outcome]));

@@ -1,6 +1,6 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
-import { loadManifest, type LoadedManifest } from "./config/manifest.ts";
+import { ENDPOINT_NAME, loadManifest, type LoadedManifest } from "./config/manifest.ts";
 import { localPathOf, readRegistry } from "./registry.ts";
 import { FILE_NATIVE_CAPABILITIES } from "./config/file-native.ts";
 import { certSanOf, ensureSelfSignedTlsFiles, spkiPinOf } from "./capabilities/tls-identity.ts";
@@ -30,22 +30,32 @@ import {
 } from "./capabilities/rg.ts";
 import { KitUsageError } from "./commands/kit.ts";
 
-/** ukp-remote wire v1 server core (ADR-REM-001/002/003, ukp_remote W1
- * slice): exposes ONE registered endpoint over HTTP — a discovery document
+/** ukp-remote wire v1 server core (ADR-REM-001/002/003, ukp_remote W1/W7):
+ * two serving shapes over one wire. Single-endpoint mode exposes ONE
+ * registered endpoint; door mode (`endpointName` absent, ADR-REM-004) serves
+ * every local binding in the registry, routed by name at `/e/<name>/…` with
+ * a `scope:"host"` door document — the registry is read fresh per request so
+ * the door grows without restart. Both shapes expose a discovery document
  * (manifest projection + protocol version + instance identity) plus the
- * read-side capability routes (search/read since W1, nav/rg since W6). The
- * capability layer runs unchanged behind the routes (provider/transport
- * axes stay orthogonal): search via `runSearch` with a single-endpoint
- * scope, read via `runRead`, nav via `runNav`, rg via `runRg`. There is no
- * session, no streaming, and no server-side artifact: responses inline the
- * reference data (RQ-07) and generate a serve-scoped run id. */
+ * read-side capability routes (search/read since W1, nav/rg since W6); the
+ * per-endpoint documents are byte-identical across modes, so client-side
+ * TOFU and name-assertion paths are shared. The capability layer runs
+ * unchanged behind the routes (provider/transport axes stay orthogonal):
+ * search via `runSearch` with a single-endpoint scope, read via `runRead`,
+ * nav via `runNav`, rg via `runRg`. There is no session, no streaming, and
+ * no server-side artifact: responses inline the reference data (RQ-07) and
+ * generate a serve-scoped run id. */
 
 export const PROTOCOL_NAME = "ukp-remote";
 export const PROTOCOL_VERSION = "1";
 export const DISCOVERY_PATH = "/.well-known/ukp.json";
 
 export interface ServeConfig {
-  endpointName: string;
+  /** Absent = host door mode (ADR-REM-004 / O-2): serve EVERY local binding
+   * in the registry over one listener, routed by name at `/e/<name>/…`, with
+   * a `scope:"host"` door document at the well-known path. Present = the
+   * original single-endpoint mode (N=1 retreat stays legal long-term). */
+  endpointName?: string;
   currentDirectory: string;
   registryPath: string;
   qmdCommand?: readonly string[];
@@ -55,12 +65,15 @@ export interface ServeConfig {
   /** When set, /v1/* requires `Authorization: Bearer <token>` matching ANY
    * listed token (RQ-16 multi-token: `UKP_SERVE_TOKEN=a,b,c`); the discovery
    * document stays public (ADR-REM-003: security is declared, the card is
-   * readable without it). */
+   * readable without it). In door mode the same gate covers all
+   * `/e/<name>/v1/*` routes (door-level auth, O-2). */
   tokens?: readonly string[];
   /** TLS transport (W5' / D-079): `self-signed` generates and persists an
-   * identity under the Service folder (`.ukp/tls/`); `certificates` serves
-   * operator-provided PEM files (Let's Encrypt IP certs, mkcert, private
-   * CA). `opensslCommand` is a test injection point for the self-signing. */
+   * identity under the Service folder (`.ukp/tls/`) — in door mode under the
+   * registry's directory, since a door has no single Service folder;
+   * `certificates` serves operator-provided PEM files (Let's Encrypt IP
+   * certs, mkcert, private CA). `opensslCommand` is a test injection point
+   * for the self-signing. */
   tls?:
     | { mode: "self-signed"; opensslCommand?: readonly string[] }
     | { mode: "certificates"; certPath: string; keyPath: string };
@@ -76,10 +89,35 @@ export interface DiscoveryDocument {
   security: { schemes: string[] };
 }
 
+/** Door discovery document (ADR-REM-004 / O-1): shares the well-known path
+ * with endpoint documents and self-describes via `scope:"host"` — clients
+ * discriminate on that field (absence = endpoint document, byte-identical to
+ * the pre-door era). No door-level instance_uid: the trust anchors are the
+ * per-endpoint pins inside `endpoints[]`. */
+export interface DoorEndpointSummary {
+  name: string;
+  instance_uid: string;
+  capabilities: Record<string, { provider: string; derived?: boolean }>;
+}
+
+export interface DoorDocument {
+  protocol: typeof PROTOCOL_NAME;
+  protocol_version: typeof PROTOCOL_VERSION;
+  scope: "host";
+  endpoints: DoorEndpointSummary[];
+  security: { schemes: string[] };
+}
+
 export interface ServeInfo {
-  endpoint: string;
-  folder: string;
-  instanceUid: string;
+  /** `"door"` when serving the whole registry (endpointName absent). */
+  mode: "endpoint" | "door";
+  /** Single-endpoint mode fields (present iff mode === "endpoint"). */
+  endpoint?: string;
+  folder?: string;
+  instanceUid?: string;
+  /** Door mode fields (present iff mode === "door"): the startup snapshot of
+   * servable endpoint names (the door itself grows without restart). */
+  door?: { endpoints: string[] };
   url: string;
   host: string;
   port: number;
@@ -119,14 +157,10 @@ function readInstanceUid(serviceFolder: string): string {
   return uid;
 }
 
-/** Discovery document = manifest projection + transport metadata. Derived
+/** Capability projection shared by endpoint and door documents: derived
  * file-native defaults (read/nav) are always present; declared capabilities
  * override or extend them (a declared nav replaces the derived entry). */
-export function buildDiscoveryDocument(
-  loaded: LoadedManifest,
-  instanceUid: string,
-  bearerRequired: boolean,
-): DiscoveryDocument {
+function projectCapabilities(loaded: LoadedManifest): DiscoveryDocument["capabilities"] {
   const capabilities: DiscoveryDocument["capabilities"] = {};
   for (const [name, spec] of Object.entries(FILE_NATIVE_CAPABILITIES)) {
     if (spec.derived) capabilities[name] = { provider: "file", derived: true };
@@ -135,13 +169,69 @@ export function buildDiscoveryDocument(
     const declared = loaded.manifest.capabilities[name]!;
     capabilities[name] = { provider: declared.provider ?? "file" };
   }
+  return capabilities;
+}
+
+/** Discovery document = manifest projection + transport metadata. */
+export function buildDiscoveryDocument(
+  loaded: LoadedManifest,
+  instanceUid: string,
+  bearerRequired: boolean,
+): DiscoveryDocument {
   return {
     protocol: PROTOCOL_NAME,
     protocol_version: PROTOCOL_VERSION,
     instance_uid: instanceUid,
     name: loaded.effectiveName,
     ...(loaded.manifest.description !== undefined ? { description: loaded.manifest.description } : {}),
-    capabilities,
+    capabilities: projectCapabilities(loaded),
+    security: { schemes: bearerRequired ? ["bearer"] : [] },
+  };
+}
+
+/** Servable endpoints of a door (O-2): every LOCAL binding in the registry,
+ * read fresh by the caller per request (new endpoints appear without a
+ * restart). Remote bindings are not servable and never make the roster. */
+function listDoorEndpoints(registryPath: string): Array<{ name: string; folder: string }> {
+  return readRegistry(registryPath)
+    .filter((binding) => binding.kind !== "remote")
+    .map((binding) => ({ name: binding.name, folder: binding.path! }));
+}
+
+/** Door document (O-1): per-endpoint projection of the same fields an
+ * endpoint document carries (name, instance_uid, capabilities). Endpoints
+ * whose manifest is unreadable or whose name drifted from the binding
+ * (RQ-14) are omitted from the roster with a serve-side stderr note — a
+ * broken Service must not take the whole door document down. */
+function buildDoorDocument(
+  endpoints: ReadonlyArray<{ name: string; folder: string }>,
+  bearerRequired: boolean,
+): DoorDocument {
+  const summaries: DoorEndpointSummary[] = [];
+  for (const endpoint of endpoints) {
+    try {
+      const loaded = loadManifest(endpoint.folder);
+      if (loaded.effectiveName !== endpoint.name) {
+        console.error(
+          `ukp serve: door endpoint '${endpoint.name}' skipped: binding resolves to a Service declaring '${loaded.effectiveName}'`,
+        );
+        continue;
+      }
+      summaries.push({
+        name: endpoint.name,
+        instance_uid: readInstanceUid(endpoint.folder),
+        capabilities: projectCapabilities(loaded),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`ukp serve: door endpoint '${endpoint.name}' skipped: ${reason.split("\n")[0]}`);
+    }
+  }
+  return {
+    protocol: PROTOCOL_NAME,
+    protocol_version: PROTOCOL_VERSION,
+    scope: "host",
+    endpoints: summaries,
     security: { schemes: bearerRequired ? ["bearer"] : [] },
   };
 }
@@ -330,8 +420,227 @@ export interface StartedServe {
   info: ServeInfo;
 }
 
+/** TLS material resolution (W5' / D-079), shared by both serve modes: a
+ * self-signed identity is generated/persisted under `identityDir` (the
+ * Service folder's `.ukp/tls/` in endpoint mode, the registry directory in
+ * door mode — a door has no single Service folder), explicit certificates
+ * are read from the operator's paths. Bun.serve takes PEM contents
+ * (path-string handling is platform-dependent). */
+function resolveTlsMaterial(
+  config: ServeConfig,
+  identityDir: string,
+): { cert: string; key: string; pin: string; san: string; source: "generated" | "persisted" | "operator" } | undefined {
+  if (config.tls === undefined) return undefined;
+  const tls = config.tls;
+  const paths = tls.mode === "self-signed"
+    ? (() => {
+        const identity = ensureSelfSignedTlsFiles(
+          identityDir,
+          tls.mode === "self-signed" && tls.opensslCommand !== undefined ? { opensslCommand: tls.opensslCommand } : {},
+        );
+        return {
+          certPath: identity.certPath,
+          keyPath: identity.keyPath,
+          source: identity.created ? ("generated" as const) : ("persisted" as const),
+        };
+      })()
+    : { certPath: tls.certPath, keyPath: tls.keyPath, source: "operator" as const };
+  try {
+    const cert = readFileSync(paths.certPath, "utf8");
+    return {
+      cert,
+      key: readFileSync(paths.keyPath, "utf8"),
+      pin: spkiPinOf(cert),
+      san: certSanOf(cert),
+      source: paths.source,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ServeSetupError(`TLS material is unusable (${paths.certPath}): ${reason}`);
+  }
+}
+
+function bearerGate(
+  request: Request,
+  tokens: readonly string[] | undefined,
+): Response | undefined {
+  if ((tokens?.length ?? 0) === 0) return undefined;
+  const authorization = request.headers.get("authorization");
+  if (!tokens!.some((token) => authorization === `Bearer ${token}`)) {
+    return jsonResponse(
+      errorBody("auth-failure", "missing or invalid bearer token (Authorization: Bearer <token>)"),
+      401,
+    );
+  }
+  return undefined;
+}
+
+/** Per-request endpoint resolution for door routing (O-2): the registry is
+ * read fresh, the name segment has already passed ENDPOINT_NAME (injection
+ * unreachable), unknown and non-servable names get the roster 404, and the
+ * RQ-14 binding↔manifest identity check runs per request like the
+ * single-mode discovery fetch does. */
+function resolveDoorRoute(
+  registryPath: string,
+  name: string,
+): { folder: string } | { response: Response } {
+  let binding;
+  try {
+    binding = readRegistry(registryPath).find((entry) => entry.name === name);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { response: jsonResponse(errorBody("provider-unavailable", `Host Registry is not readable: ${reason}`), 503) };
+  }
+  if (binding === undefined || binding.kind === "remote") {
+    const roster = listDoorEndpoints(registryPath).map((endpoint) => endpoint.name).join(", ");
+    return {
+      response: jsonResponse(
+        errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
+        404,
+      ),
+    };
+  }
+  let folder: string;
+  try {
+    folder = localPathOf(binding);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { response: jsonResponse(errorBody("provider-unavailable", reason), 503) };
+  }
+  try {
+    const loaded = loadManifest(folder);
+    if (loaded.effectiveName !== name) {
+      return {
+        response: jsonResponse(
+          errorBody(
+            "identity-mismatch",
+            `binding '${name}' resolves to a Service declaring '${loaded.effectiveName}'`,
+          ),
+          503,
+        ),
+      };
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { response: jsonResponse(errorBody("provider-unavailable", `Service Manifest is not readable: ${reason}`), 503) };
+  }
+  return { folder };
+}
+
+/** Door-mode routing table (ADR-REM-004 / O-2). The door document and the
+ * per-endpoint documents stay public (ADR-REM-003 declaration/capability
+ * divide); every `/e/<name>/v1/*` route passes the door-level bearer gate. */
+function doorNotFound(name: string | undefined, registryPath: string): Response {
+  if (name !== undefined) {
+    const roster = listDoorEndpoints(registryPath).map((endpoint) => endpoint.name).join(", ");
+    return jsonResponse(
+      errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
+      404,
+    );
+  }
+  return jsonResponse(
+    errorBody(
+      "not-found",
+      `no such route (ukp-remote v1 host door: GET ${DISCOVERY_PATH}, GET /e/<name>${DISCOVERY_PATH}, POST /e/<name>/v1/search, GET /e/<name>/v1/read, GET /e/<name>/v1/nav, GET /e/<name>/v1/rg)`,
+    ),
+    404,
+  );
+}
+
+function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnType<typeof resolveTlsMaterial>): StartedServe {
+  const handler = async (request: Request): Promise<Response> => {
+    const url = new URL(request.url);
+
+    if (url.pathname === DISCOVERY_PATH) {
+      if (request.method !== "GET") {
+        return jsonResponse(errorBody("method-not-allowed", `the discovery document is a GET resource`), 405);
+      }
+      try {
+        return jsonResponse(buildDoorDocument(listDoorEndpoints(config.registryPath), (config.tokens?.length ?? 0) > 0));
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return jsonResponse(errorBody("provider-unavailable", `Host Registry is not readable: ${reason}`), 503);
+      }
+    }
+
+    // /e/<name>/… — the name segment is validated against ENDPOINT_NAME
+    // before any filesystem work; anything else cannot name an endpoint.
+    const routeMatch = url.pathname.match(/^\/e\/([^/]+)(\/.*)?$/);
+    if (routeMatch !== null) {
+      const name = routeMatch[1]!;
+      const rest = routeMatch[2] ?? "/";
+      if (!ENDPOINT_NAME.test(name)) {
+        return doorNotFound(name, config.registryPath);
+      }
+      if (rest === DISCOVERY_PATH) {
+        if (request.method !== "GET") {
+          return jsonResponse(errorBody("method-not-allowed", `the discovery document is a GET resource`), 405);
+        }
+        const resolved = resolveDoorRoute(config.registryPath, name);
+        if ("response" in resolved) return resolved.response;
+        try {
+          const loaded = loadManifest(resolved.folder);
+          return jsonResponse(
+            buildDiscoveryDocument(loaded, readInstanceUid(resolved.folder), (config.tokens?.length ?? 0) > 0),
+          );
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          return jsonResponse(errorBody("provider-unavailable", `Service Manifest is not readable: ${reason}`), 503);
+        }
+      }
+      if (rest === "/v1/search" || rest === "/v1/read" || rest === "/v1/nav" || rest === "/v1/rg") {
+        const denied = bearerGate(request, config.tokens);
+        if (denied !== undefined) return denied;
+        const resolved = resolveDoorRoute(config.registryPath, name);
+        if ("response" in resolved) return resolved.response;
+        if (rest === "/v1/search") {
+          return await handleSearch(request, config, name, resolved.folder);
+        }
+        if (rest === "/v1/read") {
+          return handleRead(url, request, config, name);
+        }
+        if (rest === "/v1/nav") {
+          return handleNav(url, request, config, name);
+        }
+        return handleRg(url, request, config, name);
+      }
+      return doorNotFound(undefined, config.registryPath);
+    }
+
+    return doorNotFound(undefined, config.registryPath);
+  };
+
+  const server = Bun.serve({
+    hostname: host,
+    port: config.port ?? 8570,
+    ...(tlsMaterial !== undefined ? { tls: { cert: tlsMaterial.cert, key: tlsMaterial.key } } : {}),
+    fetch: handler,
+  });
+
+  const info: ServeInfo = {
+    mode: "door",
+    door: { endpoints: listDoorEndpoints(config.registryPath).map((endpoint) => endpoint.name) },
+    url: `${tlsMaterial !== undefined ? "https" : "http"}://${host}:${server.port ?? (config.port ?? 8570)}`,
+    host,
+    port: server.port ?? (config.port ?? 8570),
+    authRequired: (config.tokens?.length ?? 0) > 0,
+    ...(tlsMaterial !== undefined
+      ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
+      : {}),
+  };
+  return { server, info };
+}
+
 export function startUkpServer(config: ServeConfig): StartedServe {
   const host = config.host ?? "127.0.0.1";
+
+  if (config.endpointName === undefined) {
+    // Door mode: no single binding to resolve; the registry is read per
+    // request (new endpoints appear without restart, O-2).
+    const tlsMaterial = resolveTlsMaterial(config, join(dirname(config.registryPath), "tls"));
+    return startDoorServer(config, host, tlsMaterial);
+  }
+
   const registry = readRegistry(config.registryPath);
   const binding = registry.find((entry) => entry.name === config.endpointName);
   if (binding === undefined) {
@@ -351,40 +660,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     );
   }
 
-  // TLS material (W5' / D-079) is resolved before the listener starts: a
-  // self-signed identity is generated/persisted beside the manifest, explicit
-  // certificates are read from the operator's paths. Bun.serve takes PEM
-  // contents (path-string handling is platform-dependent).
-  let tlsMaterial: { cert: string; key: string; pin: string; san: string; source: "generated" | "persisted" | "operator" } | undefined;
-  if (config.tls !== undefined) {
-    const tls = config.tls;
-    const paths = tls.mode === "self-signed"
-      ? (() => {
-          const identity = ensureSelfSignedTlsFiles(
-            join(serviceFolder, ".ukp", "tls"),
-            tls.mode === "self-signed" && tls.opensslCommand !== undefined ? { opensslCommand: tls.opensslCommand } : {},
-          );
-          return {
-            certPath: identity.certPath,
-            keyPath: identity.keyPath,
-            source: identity.created ? ("generated" as const) : ("persisted" as const),
-          };
-        })()
-      : { certPath: tls.certPath, keyPath: tls.keyPath, source: "operator" as const };
-    try {
-      const cert = readFileSync(paths.certPath, "utf8");
-      tlsMaterial = {
-        cert,
-        key: readFileSync(paths.keyPath, "utf8"),
-        pin: spkiPinOf(cert),
-        san: certSanOf(cert),
-        source: paths.source,
-      };
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new ServeSetupError(`TLS material for '${binding.name}' is unusable (${paths.certPath}): ${reason}`);
-    }
-  }
+  const tlsMaterial = resolveTlsMaterial(config, join(serviceFolder, ".ukp", "tls"));
 
   const handler = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -423,15 +699,8 @@ export function startUkpServer(config: ServeConfig): StartedServe {
       || url.pathname === "/v1/nav"
       || url.pathname === "/v1/rg"
     ) {
-      if ((config.tokens?.length ?? 0) > 0) {
-        const authorization = request.headers.get("authorization");
-        if (!config.tokens!.some((token) => authorization === `Bearer ${token}`)) {
-          return jsonResponse(
-            errorBody("auth-failure", "missing or invalid bearer token (Authorization: Bearer <token>)"),
-            401,
-          );
-        }
-      }
+      const denied = bearerGate(request, config.tokens);
+      if (denied !== undefined) return denied;
       if (url.pathname === "/v1/search") {
         return await handleSearch(request, config, binding.name, serviceFolder);
       }
@@ -461,6 +730,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
   });
 
   const info: ServeInfo = {
+    mode: "endpoint",
     endpoint: binding.name,
     folder: serviceFolder,
     instanceUid: readInstanceUid(serviceFolder),

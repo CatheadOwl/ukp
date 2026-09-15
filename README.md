@@ -126,8 +126,8 @@ display concern only: every command stays a flat `ukp <verb>`.
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url> [--token <t>]` registers a remote `ukp serve` endpoint (`https://`, `ssh://host[:port]` with transparent tunneling, or loopback `http://`): the name and instance identity come from its discovery document and are pinned TOFU-style; `--token` stores the credential in the binding (env overrides at call time). For self-signed HTTPS the certificate is TOFU-pinned automatically at registration (SPKI pin; certificate renewals keeping the key re-anchor transparently, a different key blocks until re-register). |
-| `ukp list` | Lists registered endpoint bindings (local paths and remote urls, with per-endpoint declared capabilities). |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url> [--token <t>]` registers a remote `ukp serve` endpoint (`https://`, `ssh://host[:port]` with transparent tunneling, or loopback `http://`): the name and instance identity come from its discovery document and are pinned TOFU-style; `--token` stores the credential in the binding (env overrides at call time). A **host door** url (its document declares `scope:"host"`) imports every endpoint behind the door in one gesture — `--select <names>` narrows, a url with a path segment (`ssh://host/notes`) imports exactly that endpoint; re-running refreshes pins/credentials idempotently. For self-signed HTTPS the certificate is TOFU-pinned automatically at registration (SPKI pin; certificate renewals keeping the key re-anchor transparently, a different key blocks until re-register). |
+| `ukp list` | Lists registered endpoint bindings (local paths and remote urls, with per-endpoint declared capabilities). Door-imported endpoints whose door has grown show a stderr drift note (`door <url>: N unimported endpoint(s) … run 'ukp register --url <url>'`) — importing always stays an explicit gesture. |
 
 ### Operations commands
 
@@ -136,7 +136,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
 | `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared. |
-| `ukp serve` | Exposes one registered endpoint over HTTP using the ukp-remote wire: a discovery document (`/.well-known/ukp.json`), `POST /v1/search`, `GET /v1/read`, `GET /v1/nav`, and `GET /v1/rg`. Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth, and a non-loopback `--host` without a token is refused. `--tls` serves HTTPS with an auto-generated self-signed identity; `--tls-cert/--tls-key` serve your own certificate (Let's Encrypt IP certs, mkcert, private CA). |
+| `ukp serve` | Exposes one registered endpoint over HTTP using the ukp-remote wire: a discovery document (`/.well-known/ukp.json`), `POST /v1/search`, `GET /v1/read`, `GET /v1/nav`, and `GET /v1/rg`. Without `--endpoint` it serves the **whole registry as a host door** — every local endpoint behind one port, routed by name at `/e/<name>/…`, growing without restart. Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth (door-level for `/e/*/v1/*`), and a non-loopback `--host` without a token is refused. `--tls` serves HTTPS with an auto-generated self-signed identity; `--tls-cert/--tls-key` serve your own certificate (Let's Encrypt IP certs, mkcert, private CA). |
 
 ### Help commands
 
@@ -162,6 +162,10 @@ commands that support global scope.
   HTTP, register it from another machine with `ukp register --url`, then
   `search`/`read`/`nav`/`rg`/`list` against it (`ukp://` handoffs, TOFU
   identity pin, bearer tokens via `UKP_ENDPOINT_<NAME>_TOKEN`);
+- host door access: `ukp serve` without `--endpoint` serves the whole
+  registry behind one port (`/e/<name>/` routing), and one gesture —
+  `ukp register --url ssh://<host>` — imports every endpoint behind the door
+  (`--select` narrows; `ukp list` notes door drift until you import it);
 - QMD-backed `search`, `read`, and `update`;
 - agent-oriented JSON output and artifacts;
 - explicit recursive search over direct authority/context dependencies.
@@ -216,6 +220,39 @@ tunnel, no env ceremony once the token is stored.
 ukp register --url ssh://<host>:8570 --token <token>   # once; TOFU + token stored
 ukp read --endpoint <name> notes/x.md                   # just works, like local
 ```
+
+### Host door (one host, many endpoints — one gesture, zero tokens)
+
+Trust's natural unit is the host, not the endpoint: if you can ssh to a
+machine, per-endpoint tokens are ceremony. Run `ukp serve` **without**
+`--endpoint` and the whole registry answers behind one loopback port
+(`docker DOCKER_HOST=ssh://` posture — SSH carries encryption and auth, so
+`--allow-anonymous` on loopback is the owner deployment):
+
+```bash
+# on the host (systemd: the same unit with --endpoint dropped):
+ukp serve --allow-anonymous
+# serving host door (ukp-remote v1)
+#   listening:  http://127.0.0.1:8570
+#   endpoints:  archive, notes            <- every local binding, grows without restart
+
+# on your machine — one gesture imports everything behind the door:
+ukp register --url ssh://<host>
+# door ssh://<host>: 2 endpoint(s)
+# imported: notes    (search,propose)
+# imported: archive  (-)
+ukp list                       # flat rows, urls like ssh://<host>/notes
+ukp read ukp://notes/plan.md   # day-2 is byte-identical to today's remotes
+```
+
+Imported endpoints are ordinary remote bindings (`url = <door>/<name>`); a
+name already bound elsewhere is skipped with a visible reason, re-running
+the import refreshes pins idempotently, and `--select a,b` narrows the
+take. When the door grows, `ukp list` says so on stderr (`1 unimported
+endpoint(s): …`) — importing it stays your call. The consumer variant of
+the same door is public: `ukp serve --host 0.0.0.0 --tls-cert …` with
+`UKP_SERVE_TOKEN`, imported with `ukp register --url https://<ip>:8570
+--token <t>` (token and pinned certificate copied into each binding).
 
 ### Behind Caddy (public domain)
 
