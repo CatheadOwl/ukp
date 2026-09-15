@@ -2,10 +2,12 @@
 
 Local-first Unified Knowledge Plane CLI for named knowledge endpoints.
 
-UKP turns folders into services that can be addressed by name. That gives
-humans and agents one stable command surface for inspecting, navigating,
-reading, searching, and updating knowledge without memorizing physical
-paths or provider-specific commands.
+UKP turns folders into knowledge endpoints that can be addressed by name. That
+gives humans and agents one stable command surface: navigate, read, and search
+each endpoint — local or remote, same commands — plus a suggestion-box write
+path that proposes changes to the endpoint's owner, and provider-owned index
+updates (local today). No physical paths to memorize, no provider-specific
+commands to relearn.
 
 > [!NOTE]
 > UKP is the current public MVP CLI. It is not a stable 1.0 protocol.
@@ -20,23 +22,33 @@ Use UKP when:
 
 - the right knowledge already lives in folders;
 - callers should address it by service name, not path;
+- changes should come back as reviewable proposals for the owner to decide,
+  not as unreviewed edits;
 - provider setup should stay with the provider instead of leaking into every
   caller.
 
 ## What It Does
 
-- Register local folders as named knowledge endpoints.
+- Register local folders as named knowledge endpoints — a registered folder
+  is a *Service*, addressed by its endpoint name.
 - Inspect what a command will touch before running it.
 - Navigate the Markdown structure of an endpoint—folders, descriptions,
   depth—with zero provider dependency.
 - Read endpoint-scoped references through `read/file`; QMD-backed `read/qmd`
-  is optional. `read` and `nav` are derived defaults of every registered
-  local Service.
+  is optional (QMD is an external tool — see Requirements). `read` and `nav`
+  are derived defaults of every registered local Service.
+- Run base lexical search with `rg` across endpoint files — provider-free and
+  on by default, with results shaped into `read`-ready references.
 - Search one endpoint, a workspace default scope, the whole local Registry, or
   direct authority/context dependencies with explicit recursion (QMD-backed).
-- Update provider-owned indexes through a stable UKP command (QMD-backed).
-- Give agents JSON output and provider-native artifacts when they need
-  machine-readable handoff.
+- Propose changes as an idempotent, reviewable suggestion — the proposal lands
+  in the endpoint's inbox and the verdict stays with its owner.
+- Update provider-owned indexes through a stable UKP command (QMD-backed;
+  local today — remote operation of `update` is not supported yet, see Not
+  Yet).
+- Serve an endpoint over HTTP and consume it from another machine with the
+  same commands: a registered remote endpoint takes the local command surface
+  as-is.
 
 ## Install
 
@@ -65,14 +77,12 @@ bun run src/cli.ts guide service
 
 Requirements:
 
-- Bun `1.3.14` or newer in the verified baseline family. The package is
-  published through npm, but the CLI currently runs on Bun.
+- Bun `1.3.14` or newer in the verified baseline family — the CLI runs on Bun.
 - QMD on `PATH` for `search/qmd`, `read/qmd`, and `update/qmd`. QMD is an
   external tool maintained as a separate project; it is required for the
   QMD-backed search, read, and update capabilities, which reach it through
   UKP's provider path. See QMD's own release channel and documentation for
   installation.
-- Node/npm for package dry-runs and publishing workflows.
 
 UKP can be installed without QMD, but QMD-backed capabilities will report as
 unavailable until the `qmd` executable is available.
@@ -90,6 +100,9 @@ For a human or agent starting from a folder:
    provider availability.
 6. `ukp search "<query>" --endpoint <name>` finds matches.
 7. `ukp read --endpoint <name> <reference>` reads a result.
+
+No QMD installed? Skip step 6 — `nav`, `read`, `rg`, and `propose` work on any
+endpoint without it.
 
 An agent can carry out the same flow on your behalf. UKP handles naming,
 routing, and the command surface; the provider handles collection setup,
@@ -119,15 +132,15 @@ display concern only: every command stays a flat `ukp <verb>`.
 | `ukp read` | Reads an endpoint-scoped resource reference from one registered Service — local or remote. On a slot miss, layered rename recovery runs (git history, then search re-anchor) with `ukp-pin` content-hash verification (`--pin`); `--format json` emits a structured failure envelope. |
 | `ukp nav` | Navigates the Markdown structure of one endpoint — local or remote (`--depth`, `[path]`, `[truncated: N]` folders, respects `.gitignore`); on by default, configurable via `[capabilities.nav] exclude_files/exclude_dirs`. |
 | `ukp rg` | Runs base lexical search (ripgrep) across endpoints — local or remote, available on every registered endpoint by default (a missing rg binary degrades to a skip, never a fault); results are shaped into `read`-ready `ukp://` references; `--count` lists per-file counts; `--` passes rg flags through on an allowlist. |
-| `ukp propose` | Submits an idempotent change proposal to one endpoint — local or remote — through the file provider (PUT `/v1/propose/<id>` on the wire); resubmitting the same id updates the same proposal (created/unchanged/updated, revision bump). |
+| `ukp propose` | Submits an idempotent change proposal to one endpoint — local (file provider) or remote (PUT `/v1/propose/<id>` on the wire); resubmitting the same id updates the same proposal (created/unchanged/updated; the revision bumps only on `updated`). The proposal lands in the Service's inbox; deciding what happens next is the owner's call. |
 
 ### Registry commands
 
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url> [--token <t>]` registers a remote `ukp serve` endpoint (`https://`, `ssh://host[:port]` with transparent tunneling, or loopback `http://`): the name and instance identity come from its discovery document and are pinned TOFU-style; `--token` stores the credential in the binding (env overrides at call time). A **host door** url (its document declares `scope:"host"`) imports every endpoint behind the door in one gesture — `--select <names>` narrows, a url with a path segment (`ssh://host/notes`) imports exactly that endpoint; re-running refreshes pins/credentials idempotently. For self-signed HTTPS the certificate is TOFU-pinned automatically at registration (SPKI pin; certificate renewals keeping the key re-anchor transparently, a different key blocks until re-register). |
-| `ukp list` | Lists registered endpoint bindings (local paths and remote urls, with per-endpoint declared capabilities). Door-imported endpoints whose door has grown show a stderr drift note (`door <url>: N unimported endpoint(s) … run 'ukp register --url <url>'`) — importing always stays an explicit gesture. |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url> [--token <t>]` registers a remote `ukp serve` endpoint (`https://`, `ssh://host[:port]` with transparent tunneling, or loopback `http://`): the endpoint name comes from its discovery document and is asserted exactly (no manual naming), while the instance identity (`instance_uid`) is pinned TOFU-style (trust on first use); `--token` stores the credential in the binding (env overrides at call time). A **host door** url (its document declares `scope:"host"`) imports every endpoint behind the door in one gesture — `--select <names>` narrows, a url with a path segment (`ssh://host/notes`) imports exactly that endpoint; re-running refreshes pins/credentials idempotently. For self-signed HTTPS the certificate is TOFU-pinned automatically at registration (SPKI pin; certificate renewals keeping the key re-anchor transparently, a different key blocks until re-register). |
+| `ukp list` | Lists registered endpoint bindings (local paths and remote urls, with per-endpoint declared capabilities). Door-imported endpoints whose door has grown show a stderr drift note (`door <origin>: N unimported endpoint(s) … run 'ukp register --url <origin>'`) — importing always stays an explicit gesture. |
 
 ### Operations commands
 
@@ -135,7 +148,7 @@ display concern only: every command stays a flat `ukp <verb>`.
 |---|---|
 | `ukp diagnose` | Checks a local Service folder or registered endpoint scope. |
 | `ukp inspect` | Explains current scope, Registry bindings, Manifest capabilities, and provider availability. |
-| `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared. |
+| `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared (local endpoints today). |
 | `ukp serve` | Exposes one registered endpoint over HTTP using the ukp-remote wire: a discovery document (`/.well-known/ukp.json`), `POST /v1/search`, `GET /v1/read`, `GET /v1/nav`, `GET /v1/rg`, and `PUT /v1/propose/<id>` (the write face — an endpoint must declare the propose capability to have one). Without `--endpoint` it serves the **whole registry as a host door** — every local endpoint behind one port, routed by name at `/e/<name>/…`, growing without restart. Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth (door-level for `/e/*/v1/*`), and a non-loopback `--host` without a token is refused. `--tls` serves HTTPS with an auto-generated self-signed identity; `--tls-cert/--tls-key` serve your own certificate (Let's Encrypt IP certs, mkcert, private CA). |
 
 ### Help commands
@@ -156,12 +169,16 @@ commands that support global scope.
 
 - local-first CLI;
 - TOML Service Manifest, Host Registry, and Client Config;
-- onboarding, diagnosis, registration, inspection, search, read, update, and
-  HTTP serving (`ukp serve`) command surface;
+- zero-declaration Services: an empty `[capabilities]` table is valid and
+  registers a read-only endpoint (the derived `read`/`nav` defaults only);
+- onboarding, diagnosis, registration, inspection, navigation, lexical search
+  (`rg`), indexed search, read, update, propose, and HTTP serving (`ukp serve`)
+  command surface;
 - remote endpoint consumption (ukp-remote wire v1): serve one endpoint over
   HTTP, register it from another machine with `ukp register --url`, then
-  `search`/`read`/`nav`/`rg`/`list` against it (`ukp://` handoffs, TOFU
-  identity pin, bearer tokens via `UKP_ENDPOINT_<NAME>_TOKEN`);
+  `search`/`read`/`nav`/`rg`/`propose`/`list` against it (`ukp://` handoffs,
+  TOFU identity pin, self-signed certificate pinning at registration, bearer
+  tokens via `UKP_ENDPOINT_<NAME>_TOKEN`);
 - host door access: `ukp serve` without `--endpoint` serves the whole
   registry behind one port (`/e/<name>/` routing), and one gesture —
   `ukp register --url ssh://<host>` — imports every endpoint behind the door
@@ -172,21 +189,25 @@ commands that support global scope.
 
 ## Not Yet
 
-- remote operation of `update` and a formal network protocol;
+- remote operation of `update`, and a formally specified network protocol
+  beyond the current ukp-remote wire v1;
+- semantic search tier, API Search, query rewrite, reranking, or deduplication;
+- full Client Scope with aliases, visibility, inheritance, or profiles;
+- automatic artifact browsing, cleanup, or "select result N" references;
+- standalone binary distribution.
 
 ## Remote Deployment
 
 `ukp serve` speaks plain HTTP by default; TLS and public exposure are either
 **native** (`--tls` self-signs through the local openssl, `--tls-cert/--tls-key`
 serve your own certificate) or **delegated to a fronting component** (reverse
-proxy, SSH tunnel, overlay). The trust model is public PKI or TOFU pinning for
-bare IPs. **Authentication is deny-by-default**: serving requires
-`UKP_SERVE_TOKEN`; tokenless serving needs an explicit `--allow-anonymous`
-and is refused off loopback. A reverse proxy on the same host forwards from
-the public side to the loopback bind, so proxied deployments treat the token
-as mandatory (serve cannot see past its own bind address). The full
-real-machine walkthrough (worked example on the author's VPS) lives in the
-repository handbook: `handbooks/ukp-remote-deployment/`.
+proxy, SSH tunnel, overlay). The trust model is public PKI, or automatic TOFU
+pinning for self-signed and private-CA certificates. **Authentication is
+deny-by-default**: serving requires `UKP_SERVE_TOKEN`; tokenless serving needs
+an explicit `--allow-anonymous` and is refused off loopback. A reverse proxy on
+the same host forwards from the public side to the loopback bind, so proxied
+deployments treat the token as mandatory (serve cannot see past its own bind
+address).
 
 ### Native TLS (bare IP, no domain — zero extra components)
 
@@ -206,14 +227,15 @@ A certificate renewal that keeps the key re-anchors transparently; a new key
 (reinstall) blocks with both fingerprints until you re-register. Prefer real
 certificates? Let's Encrypt issues IP-address certificates (GA 2026-01) —
 run certbot with a renewal timer and point `--tls-cert/--tls-key` at the
-files; clients then need no pinning at all (recipe in the handbook).
+files; clients then need no pinning at all.
 
 ### Via SSH (two personal machines — zero extra components, zero ceremony)
 
 The `ssh://` URL scheme makes the transport transparent: ukp opens an
 ephemeral SSH tunnel per invocation (key auth from your SSH config), so a
-registered remote endpoint behaves exactly like a local one — no manual
-tunnel, no env ceremony once the token is stored.
+registered remote endpoint takes the same commands as a local one — search,
+read, nav, rg, propose — with no manual tunnel and no env ceremony once the
+token is stored.
 
 ```bash
 ukp register --url ssh://<host>:8570 --token <token>   # once; TOFU + token stored
@@ -285,7 +307,7 @@ UKP_ENDPOINT_<NAME>_TOKEN=<token> ukp register --url https://<machine>.<tailnet>
 
 The overlay covers LAN and roaming machines alike; a fully offline LAN (no
 coordination reachability) is the one gap — a dedicated private-CA recipe is
-deferred until that is a real constraint.
+not covered in this guide.
 
 ### Hardening posture
 
@@ -295,18 +317,11 @@ deferred until that is a real constraint.
   (any listed token authorizes);
 - identity pinning is TOFU on `instance_uid`: a changed endpoint warns by
   default; set `UKP_TOFU=block` on hostile networks to refuse it outright.
-- semantic search tier (5b), API Search, query rewrite, reranking, or deduplication;
-- full Client Scope with aliases, visibility, inheritance, or profiles;
-- automatic artifact browsing, cleanup, or "select result N" references;
-- standalone binary distribution.
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and release
+packaging notes.
 
 - Repository: https://github.com/CatheadOwl/ukp
 - Issues: https://github.com/CatheadOwl/ukp/issues
-
-The npm package is intentionally allowlisted. The public tarball should contain
-runtime source, README, package metadata, lock/config files, and the project
-license only.

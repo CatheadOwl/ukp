@@ -13,13 +13,19 @@ bun run typecheck
 npm pack --dry-run --json
 ```
 
-Release maintainers run additional release preflight checks before
-publishing; see the release process.
+Release maintainers run a release preflight before publishing: git hygiene,
+the full test suite, typecheck, package metadata and tarball allowlist
+review, private-material leak scans, and a publish dry-run. The npm tarball
+is intentionally allowlisted — runtime source, README, package metadata,
+lock/config files, and the project license only.
 
 ## Boundaries
 
 - Do not publish or depend on any private development material outside this
   repository.
 - Keep QMD collection, index, ranking, and maintenance internals provider-owned.
-- Do not add Remote, semantic search tier, API Search, full Client Scope, or
-  standalone binary distribution unless that scope has been explicitly accepted.
+- The ukp-remote wire v1 slices (serve, `register --url`, the host door, and
+  remote `search`/`read`/`nav`/`rg`/`propose`) are accepted and shipped; do
+  not add remote `update`, a formally specified network protocol, the
+  semantic search tier, API Search, full Client Scope, or standalone binary
+  distribution unless that scope has been explicitly accepted.

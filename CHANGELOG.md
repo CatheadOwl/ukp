@@ -22,7 +22,8 @@ The first public release; the date is set when the package is published.
   `/v1/propose/<id>` with the same three-state semantics).
 - Registry commands: `ukp init service`, `ukp register`, `ukp unregister`, and
   `ukp list`.
-- Operations commands: `ukp diagnose`, `ukp inspect`, and `ukp update`.
+- Operations commands: `ukp diagnose`, `ukp inspect`, `ukp update`, and
+  `ukp serve`.
 - Help commands: `ukp version`, `ukp guide service`, `ukp guide service qmd`,
   `ukp guide client`, and `ukp guide propose`.
 - `ukp://<endpoint>/<relative-path>` addressing as a durable reference form,
