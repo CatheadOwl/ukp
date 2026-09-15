@@ -10,12 +10,16 @@ The first public release; the date is set when the package is published.
 
 - Local-first CLI for named Knowledge Service endpoints, with TOML Service
   Manifest, Host Registry, and Client Config.
+- Zero-declaration readonly Services: a Service Manifest with an empty
+  `[capabilities]` table is valid and registers an endpoint exposing only the
+  derived file-native `read`/`nav` capabilities.
 - Endpoint commands: `ukp search` (indexed search through the endpoint's search
   provider, with `--recursive` over direct authority/context dependencies),
   `ukp read` (endpoint-scoped resource references, layered rename recovery, and
   `ukp-pin` content-hash verification), `ukp nav`, `ukp rg` (base lexical search
   over endpoint files), and `ukp propose` (idempotent change proposals through
-  the file provider).
+  the file provider, over the wire on remote endpoints too: PUT
+  `/v1/propose/<id>` with the same three-state semantics).
 - Registry commands: `ukp init service`, `ukp register`, `ukp unregister`, and
   `ukp list`.
 - Operations commands: `ukp diagnose`, `ukp inspect`, and `ukp update`.
@@ -31,9 +35,9 @@ The first public release; the date is set when the package is published.
 
 - This is an MVP/demo-but-usable release, not a stable 1.0 protocol.
 - QMD collection, index, ranking, and maintenance stay provider-owned.
-- Remote endpoints work over the ukp-remote wire v1 (read-side: `serve`,
-  `register --url`, `search`/`read`/`nav`/`rg`/`list`); not included: remote
-  `update`/`propose` and a formal network protocol; the semantic
+- Remote endpoints work over the ukp-remote wire v1 (`serve`,
+  `register --url`, `search`/`read`/`nav`/`rg`/`list`/`propose`); not included:
+  remote `update` and a formal network protocol; the semantic
   search tier, API Search, query rewrite, reranking, or deduplication; full
   Client Scope with aliases, visibility, inheritance, or profiles; automatic
   artifact browsing, cleanup, or result-selection references; standalone binary

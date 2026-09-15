@@ -16,6 +16,8 @@ import { executeSearchCommand } from "../src/commands/search.ts";
 import { executeReadCommand } from "../src/commands/read.ts";
 import { executeNavCommand } from "../src/commands/nav.ts";
 import { executeRgCommand } from "../src/commands/rg.ts";
+import { executeProposeCommand } from "../src/commands/propose.ts";
+import { renderProposeJson } from "../src/capabilities/propose.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
 // ukp_remote W2 client-side tests. The "remote" is real: startUkpServer (the
@@ -61,6 +63,23 @@ const outsideFolder = (() => {
   return folder;
 })();
 registerAt(serverRegistryPath, "outside-endpoint", outsideFolder);
+
+// W8 write-face fixtures on the SERVER side: a propose-declaring Service and
+// a zero-declaration readonly Service (D-081) — same two-machine topology.
+const writeServiceFolder = (() => {
+  const folder = join(root, "write-svc");
+  mkdirSync(join(folder, ".ukp"), { recursive: true });
+  writeFileSync(join(folder, ".ukp", "service.toml"), 'name = "write-notes"\n\n[capabilities.propose]\n', "utf8");
+  return folder;
+})();
+registerAt(serverRegistryPath, "write-notes", writeServiceFolder);
+const zeroServiceFolder = (() => {
+  const folder = join(root, "zero-svc");
+  mkdirSync(join(folder, ".ukp"), { recursive: true });
+  writeFileSync(join(folder, ".ukp", "service.toml"), 'name = "zero-archive"\n\n[capabilities]\n', "utf8");
+  return folder;
+})();
+registerAt(serverRegistryPath, "zero-archive", zeroServiceFolder);
 
 const started: StartedServe[] = [];
 function startRemote(overrides: Partial<Parameters<typeof startUkpServer>[0]> = {}): StartedServe {
@@ -859,4 +878,121 @@ describe("remote TLS identity (W5' / D-079)", () => {
     // Windows cold start).
     30000,
   );
+});
+
+// ---------------------------------------------------------------------------
+// ukp_remote W8: propose over the wire (ADR-REM-005). The remote is the real
+// product server; the client goes through executeProposeCommand's remote
+// branch — same two-machine topology as the W2/W6 suites above.
+
+describe("ukp_remote W8: propose over the wire", () => {
+  function writeProposal(name: string, content: string): string {
+    const path = join(root, name);
+    writeFileSync(path, content, "utf8");
+    return path;
+  }
+
+  test("remote propose runs the three-state upsert with local-identical output", async () => {
+    const { info } = startRemote({ endpointName: "write-notes" });
+    registerRemoteAt(registryPath, { name: "write-notes", url: info.url });
+    const context = { currentDirectory: root, registryPath };
+
+    const file = writeProposal("w8-remote.md", "# W8\n\nfirst\n");
+    const created = await asResult(executeProposeCommand(["--endpoint", "write-notes", "--file", file], context));
+    expect(created.exitCode).toBe(0);
+    expect(created.stdout).toBe("proposal w8-remote created (revision 1)\n");
+    expect(created.stderr).toBe("");
+
+    // Byte parity: the wire envelope renders through the same local
+    // renderer — zero output divergence (ADR-PRO-004's promise).
+    const json = await asResult(executeProposeCommand(["--endpoint", "write-notes", "--file", file, "--json"], context));
+    expect(json.exitCode).toBe(0);
+    expect(json.stdout).toBe(renderProposeJson("write-notes", { id: "w8-remote", status: "unchanged", revision: 1 }));
+
+    writeProposal("w8-remote.md", "# W8\n\nrevised\n");
+    const updated = await asResult(executeProposeCommand(["--endpoint", "write-notes", "--file", file], context));
+    expect(updated.exitCode).toBe(0);
+    expect(updated.stdout).toBe("proposal w8-remote updated (revision 2)\n");
+
+    // The proposal landed in the SERVER's inbox folder, not the client's.
+    const stored = readFileSync(join(writeServiceFolder, "inbox", "w8-remote.md"), "utf8");
+    expect(stored).toContain("id: w8-remote");
+    expect(stored).toContain("revised");
+  });
+
+  test("undeclared write face passes capability-undeclared through the wire", async () => {
+    const { info } = startRemote({ endpointName: "zero-archive" });
+    registerRemoteAt(registryPath, { name: "zero-archive", url: info.url });
+    const file = writeProposal("ghost.md", "should not land\n");
+    const result = await asResult(executeProposeCommand(["--endpoint", "zero-archive", "--file", file], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("does not declare the propose capability");
+  });
+
+  test("token-required server: no token fails with the credential hint, token succeeds", async () => {
+    const { info } = startRemote({ endpointName: "write-notes", tokens: ["w8-secret"] });
+    registerRemoteAt(registryPath, { name: "write-notes", url: info.url });
+    const file = writeProposal("authed.md", "content\n");
+    const denied = await asResult(executeProposeCommand(["--endpoint", "write-notes", "--file", file], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(denied.exitCode).toBe(1);
+    expect(denied.stderr).toContain("UKP_ENDPOINT_WRITE_NOTES_TOKEN");
+
+    process.env.UKP_ENDPOINT_WRITE_NOTES_TOKEN = "w8-secret";
+    try {
+      const allowed = await asResult(executeProposeCommand(["--endpoint", "write-notes", "--file", file], {
+        currentDirectory: root,
+        registryPath,
+      }));
+      expect(allowed.exitCode).toBe(0);
+      expect(allowed.stdout).toBe("proposal authed created (revision 1)\n");
+    } finally {
+      delete process.env.UKP_ENDPOINT_WRITE_NOTES_TOKEN;
+    }
+  });
+
+  test("an older serve without /v1/propose degrades to a failed call, not a crash", async () => {
+    // ADR-REM-005 §5 mapping: a pre-W8 serve 404s the propose route; the
+    // client folds it into provider-unsupported with the server's message.
+    const stub = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname === DISCOVERY_PATH) {
+          return Response.json({
+            protocol: "ukp-remote",
+            protocol_version: "1",
+            instance_uid: "00000000-0000-0000-0000-000000000000",
+            name: "old-serve",
+            capabilities: {
+              read: { provider: "file", derived: true },
+              nav: { provider: "file", derived: true },
+            },
+            security: { schemes: [] },
+          });
+        }
+        return Response.json(
+          { error: { class: "not-found", message: `no such route '${url.pathname}'` } },
+          { status: 404 },
+        );
+      },
+    });
+    registerRemoteAt(registryPath, { name: "old-serve", url: `http://127.0.0.1:${stub.port}` });
+    try {
+      const file = writeProposal("old.md", "x\n");
+      const result = await asResult(executeProposeCommand(["--endpoint", "old-serve", "--file", file], {
+        currentDirectory: root,
+        registryPath,
+      }));
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("no such route '/v1/propose/old'");
+    } finally {
+      stub.stop(true);
+    }
+  });
 });

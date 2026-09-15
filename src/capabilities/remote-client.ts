@@ -18,6 +18,7 @@ import {
 import { spkiPinOf } from "./tls-identity.ts";
 import type { SearchEndpointOutcome } from "./search.ts";
 import type { NavEnvelope } from "./nav.ts";
+import type { ProposeResult, ProposeStatus } from "./propose.ts";
 import { EXTERNAL_PROVIDER } from "../config/external-tool.ts";
 import type { RgEndpointOutcome, RgMatch, RgCountEntry } from "./rg.ts";
 
@@ -801,5 +802,55 @@ export async function remoteRg(
       ...(entry.truncated === true ? { truncated: true } : {}),
     },
     warnings,
+  };
+}
+
+export interface RemoteProposeResult {
+  status: number;
+  /** Success marker: the ukp.propose.v1 envelope with a valid three-state
+   * status and revision — schema + field presence is the verdict (nav
+   * precedent). */
+  ok: boolean;
+  result?: ProposeResult;
+  /** Transport-shape error fields for failures (class/message). */
+  errorClass?: string;
+  errorMessage?: string;
+}
+
+const PROPOSE_WIRE_STATUSES = new Set<ProposeStatus>(["created", "unchanged", "updated"]);
+
+/** PUT /v1/propose/{id} — the write face (W8 / ADR-REM-005). Body is the
+ * proposal text itself (UTF-8); classification into ProposeFailure happens
+ * in the propose command adapter where the local vocabulary lives. */
+export async function remotePropose(
+  transport: RemoteTransportHandle,
+  token: string | undefined,
+  id: string,
+  content: string,
+): Promise<RemoteProposeResult> {
+  const base = transport.base;
+  const url = `${base}/v1/propose/${id}`;
+  const { status, body } = await fetchJson(url, {
+    method: "PUT",
+    headers: { "content-type": "text/plain; charset=utf-8", ...authorizationHeaders(token) },
+    body: content,
+  }, transport.tls);
+  const record = asRecord(body, url);
+  const error = record.error as { class?: unknown; message?: unknown } | undefined;
+  const ok = record.schema === "ukp.propose.v1"
+    && typeof record.id === "string"
+    && typeof record.status === "string"
+    && PROPOSE_WIRE_STATUSES.has(record.status as ProposeStatus)
+    && typeof record.revision === "number"
+    && Number.isSafeInteger(record.revision)
+    && record.revision >= 1;
+  return {
+    status,
+    ok,
+    ...(ok
+      ? { result: { id: record.id as string, status: record.status as ProposeStatus, revision: record.revision as number } }
+      : {}),
+    ...(!ok && error !== undefined && typeof error.class === "string" ? { errorClass: error.class } : {}),
+    ...(!ok && error !== undefined && typeof error.message === "string" ? { errorMessage: error.message } : {}),
   };
 }

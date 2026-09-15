@@ -96,18 +96,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function removeLegacyGetCapability(raw: unknown): { normalized: unknown; hadLegacyGet: boolean } {
+function removeLegacyGetCapability(raw: unknown): unknown {
   if (!isRecord(raw) || !isRecord(raw.capabilities) || !Object.hasOwn(raw.capabilities, "get")) {
-    return { normalized: raw, hadLegacyGet: false };
+    return raw;
   }
 
   const { get: _ignoredLegacyGet, ...capabilities } = raw.capabilities;
   return {
-    normalized: {
-      ...raw,
-      capabilities,
-    },
-    hadLegacyGet: true,
+    ...raw,
+    capabilities,
   };
 }
 
@@ -144,7 +141,7 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
   }
   assertRestrictedToml(raw);
 
-  const { normalized: withoutLegacyGet, hadLegacyGet } = removeLegacyGetCapability(raw);
+  const withoutLegacyGet = removeLegacyGetCapability(raw);
   // Flat file-native declaration keys (table-driven, ADR 0016) fold into
   // `config` before the strict schema parse.
   const normalized = normalizeFileNativeFlatKeys(withoutLegacyGet, (message) => {
@@ -155,9 +152,9 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
     throw new ManifestError(`Service Manifest schema is invalid: ${result.error.message}`);
   }
   const manifest = result.data;
-  if (Object.keys(manifest.capabilities).length === 0 && !hadLegacyGet) {
-    throw new ManifestError("Service Manifest must declare at least one capability");
-  }
+  // A zero-declaration Manifest is valid (D-081): read/nav are derived
+  // file-native defaults for every registered local Service, so an empty
+  // [capabilities] table still yields a usable, diagnosable endpoint.
 
   const nameSource = manifest.name === undefined ? "folder-name" : "manifest";
   const effectiveName = parseName(manifest.name ?? basename(folder), nameSource);

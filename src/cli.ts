@@ -200,7 +200,7 @@ export function renderHelp(): string {
     "",
     "A Service's declared capabilities are backed by a provider (QMD backs search and update today); rg and nav work on endpoint files directly, no provider needed.",
     "",
-    "A Service is a folder with a manifest (a name plus declared capabilities); registering it binds that name as an endpoint you address with --endpoint. The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given; 'ukp guide client' shows how to set the workspace default.",
+    "A Service is a folder with a manifest (a name plus optional declared capabilities); registering it binds that name as an endpoint you address with --endpoint. The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given; 'ukp guide client' shows how to set the workspace default.",
     "",
     "Guides:",
     ...GUIDE_TOPICS.map(([topic, summary]) => `  ukp ${`guide ${topic}`.padEnd(17)} ${summary}`),
@@ -383,7 +383,7 @@ export function runCli(
   }
 
   if (command === "propose") {
-    return writeCommandResult(executeProposeCommand(args.slice(1), {
+    return writeCommandResultMaybeAsync(executeProposeCommand(args.slice(1), {
       currentDirectory,
       registryPath,
     }), stdout, stderr);

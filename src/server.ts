@@ -2,7 +2,14 @@ import { dirname, join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 import { ENDPOINT_NAME, loadManifest, type LoadedManifest } from "./config/manifest.ts";
 import { localPathOf, readRegistry } from "./registry.ts";
-import { FILE_NATIVE_CAPABILITIES } from "./config/file-native.ts";
+import { FILE_NATIVE_CAPABILITIES, resolveFileNativeCapability } from "./config/file-native.ts";
+import {
+  PROPOSE_SLUG,
+  ProposeBusyError,
+  ProposeProviderError,
+  proposeEnvelope,
+  proposeUpsert,
+} from "./capabilities/propose.ts";
 import { certSanOf, ensureSelfSignedTlsFiles, spkiPinOf } from "./capabilities/tls-identity.ts";
 import {
   buildInlineReferences,
@@ -49,6 +56,10 @@ import { KitUsageError } from "./commands/kit.ts";
 export const PROTOCOL_NAME = "ukp-remote";
 export const PROTOCOL_VERSION = "1";
 export const DISCOVERY_PATH = "/.well-known/ukp.json";
+
+/** PUT /v1/propose/{id} body cap (ADR-REM-005 §5): proposals are markdown
+ * long-form text; 1 MiB is generous headroom and bounds serve memory. */
+export const PROPOSE_BODY_LIMIT_BYTES = 1024 * 1024;
 
 export interface ServeConfig {
   /** Absent = host door mode (ADR-REM-004 / O-2): serve EVERY local binding
@@ -116,8 +127,10 @@ export interface ServeInfo {
   folder?: string;
   instanceUid?: string;
   /** Door mode fields (present iff mode === "door"): the startup snapshot of
-   * servable endpoint names (the door itself grows without restart). */
-  door?: { endpoints: string[] };
+   * servable endpoint names (the door itself grows without restart), plus
+   * the snapshot of write-capable (propose-declaring) names — the banner's
+   * "you opened a write face" line (ADR-REM-005 verdict C). */
+  door?: { endpoints: string[]; write: string[] };
   url: string;
   host: string;
   port: number;
@@ -196,6 +209,24 @@ function listDoorEndpoints(registryPath: string): Array<{ name: string; folder: 
   return readRegistry(registryPath)
     .filter((binding) => binding.kind !== "remote")
     .map((binding) => ({ name: binding.name, folder: binding.path! }));
+}
+
+/** Startup snapshot of write-capable (propose-declaring) door endpoints —
+ * the banner line that makes the opened write face visible (ADR-REM-005
+ * verdict C). Unreadable/name-drifted Services drop out silently here;
+ * they are already reported by the roster/discovery paths. */
+function listWriteEndpoints(registryPath: string): string[] {
+  return listDoorEndpoints(registryPath).flatMap((endpoint) => {
+    try {
+      const loaded = loadManifest(endpoint.folder);
+      return loaded.effectiveName === endpoint.name
+        && resolveFileNativeCapability(loaded.manifest, "propose") !== undefined
+        ? [endpoint.name]
+        : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** Door document (O-1): per-endpoint projection of the same fields an
@@ -541,7 +572,7 @@ function doorNotFound(name: string | undefined, registryPath: string): Response 
   return jsonResponse(
     errorBody(
       "not-found",
-      `no such route (ukp-remote v1 host door: GET ${DISCOVERY_PATH}, GET /e/<name>${DISCOVERY_PATH}, POST /e/<name>/v1/search, GET /e/<name>/v1/read, GET /e/<name>/v1/nav, GET /e/<name>/v1/rg)`,
+      `no such route (ukp-remote v1 host door: GET ${DISCOVERY_PATH}, GET /e/<name>${DISCOVERY_PATH}, POST /e/<name>/v1/search, GET /e/<name>/v1/read, GET /e/<name>/v1/nav, GET /e/<name>/v1/rg, PUT /e/<name>/v1/propose/<id>)`,
     ),
     404,
   );
@@ -588,6 +619,15 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
           return jsonResponse(errorBody("provider-unavailable", `Service Manifest is not readable: ${reason}`), 503);
         }
       }
+      if (rest.startsWith("/v1/propose/")) {
+        const denied = bearerGate(request, config.tokens);
+        if (denied !== undefined) return denied;
+        const id = rest.slice("/v1/propose/".length);
+        if (id.includes("/")) return doorNotFound(undefined, config.registryPath);
+        const resolved = resolveDoorRoute(config.registryPath, name);
+        if ("response" in resolved) return resolved.response;
+        return await handlePropose(request, config, name, resolved.folder, id);
+      }
       if (rest === "/v1/search" || rest === "/v1/read" || rest === "/v1/nav" || rest === "/v1/rg") {
         const denied = bearerGate(request, config.tokens);
         if (denied !== undefined) return denied;
@@ -619,7 +659,10 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
 
   const info: ServeInfo = {
     mode: "door",
-    door: { endpoints: listDoorEndpoints(config.registryPath).map((endpoint) => endpoint.name) },
+    door: {
+      endpoints: listDoorEndpoints(config.registryPath).map((endpoint) => endpoint.name),
+      write: listWriteEndpoints(config.registryPath),
+    },
     url: `${tlsMaterial !== undefined ? "https" : "http"}://${host}:${server.port ?? (config.port ?? 8570)}`,
     host,
     port: server.port ?? (config.port ?? 8570),
@@ -693,6 +736,22 @@ export function startUkpServer(config: ServeConfig): StartedServe {
       }
     }
 
+    if (url.pathname.startsWith("/v1/propose/")) {
+      const denied = bearerGate(request, config.tokens);
+      if (denied !== undefined) return denied;
+      const id = url.pathname.slice("/v1/propose/".length);
+      if (id.includes("/")) {
+        return jsonResponse(
+          errorBody(
+            "not-found",
+            `no such route '${url.pathname}' (ukp-remote v1: GET ${DISCOVERY_PATH}, POST /v1/search, GET /v1/read, GET /v1/nav, GET /v1/rg, PUT /v1/propose/<id>)`,
+          ),
+          404,
+        );
+      }
+      return await handlePropose(request, config, binding.name, serviceFolder, id);
+    }
+
     if (
       url.pathname === "/v1/search"
       || url.pathname === "/v1/read"
@@ -716,7 +775,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     return jsonResponse(
       errorBody(
         "not-found",
-        `no such route '${url.pathname}' (ukp-remote v1: GET ${DISCOVERY_PATH}, POST /v1/search, GET /v1/read, GET /v1/nav, GET /v1/rg)`,
+        `no such route '${url.pathname}' (ukp-remote v1: GET ${DISCOVERY_PATH}, POST /v1/search, GET /v1/read, GET /v1/nav, GET /v1/rg, PUT /v1/propose/<id>)`,
       ),
       404,
     );
@@ -871,4 +930,82 @@ function handleRg(url: URL, request: Request, config: ServeConfig, endpointName:
     registryPath: config.registryPath,
   });
   return jsonResponse(projectRgEnvelope(result, parsed.parsed.options.count === true));
+}
+
+/** PUT /v1/propose/{id} (W8 / ADR-REM-005): the write face. Body = the
+ * proposal text itself (UTF-8); the response IS the ukp.propose.v1
+ * envelope, byte-equivalent to the CLI --json rendering. Wire guards: slug
+ * re-validation (422), body cap (413), strict UTF-8 (415); the write-face
+ * scope is the manifest declaration (RQ-23) — an endpoint not declaring
+ * propose has no writable route (503 capability-undeclared). */
+async function handlePropose(
+  request: Request,
+  _config: ServeConfig,
+  endpointName: string,
+  endpointFolder: string,
+  id: string,
+): Promise<Response> {
+  if (request.method !== "PUT") {
+    return jsonResponse(errorBody("method-not-allowed", "/v1/propose/<id> is a PUT route"), 405);
+  }
+  if (!PROPOSE_SLUG.test(id)) {
+    return jsonResponse(
+      errorBody("usage-error", `invalid proposal id '${id}': expected 1-63 lowercase ASCII slug characters ([a-z0-9-])`),
+      422,
+    );
+  }
+  // Size gate before reading (declared length) and after (truth) — the
+  // content-length header can be absent or a lie; the post-read check is
+  // the authoritative bound (the transport-level buffer ceiling is
+  // Bun.serve's default request-body cap, not this limit).
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declaredLength) && declaredLength > PROPOSE_BODY_LIMIT_BYTES) {
+    return jsonResponse(errorBody("payload-too-large", `proposal body exceeds ${PROPOSE_BODY_LIMIT_BYTES} bytes`), 413);
+  }
+  let buffer: ArrayBuffer;
+  try {
+    buffer = await request.arrayBuffer();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return jsonResponse(errorBody("usage-error", `cannot read proposal body: ${reason}`), 400);
+  }
+  if (buffer.byteLength > PROPOSE_BODY_LIMIT_BYTES) {
+    return jsonResponse(errorBody("payload-too-large", `proposal body exceeds ${PROPOSE_BODY_LIMIT_BYTES} bytes`), 413);
+  }
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return jsonResponse(errorBody("unsupported-content-type", "proposal body must be valid UTF-8 text"), 415);
+  }
+
+  let loaded: LoadedManifest;
+  try {
+    loaded = loadManifest(endpointFolder);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return jsonResponse(errorBody("provider-unavailable", `Service Manifest is not readable: ${reason}`), 503);
+  }
+  const resolved = resolveFileNativeCapability(loaded.manifest, "propose");
+  if (!resolved) {
+    return jsonResponse(
+      errorBody("capability-undeclared", `endpoint '${endpointName}' does not declare the propose capability`),
+      503,
+    );
+  }
+
+  try {
+    const result = proposeUpsert(endpointFolder, resolved.capability, id, content);
+    return jsonResponse(proposeEnvelope(endpointName, result));
+  } catch (error) {
+    if (error instanceof ProposeBusyError || error instanceof ProposeProviderError) {
+      // Same-family transient/provider failures on the write path (lock
+      // contention, folder config, stored-document corruption): the
+      // message is factual data ("retry shortly" for busy) and maps to
+      // the provider-failed transport class (RQ-09).
+      return jsonResponse(errorBody("provider-failed", error.message), 503);
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    return jsonResponse(errorBody("provider-failed", `proposal submission failed: ${reason}`), 500);
+  }
 }
