@@ -26,6 +26,9 @@ $ ukp rg "Goals" --endpoint notes           # no search provider needed
 $ ukp read ukp://notes/2026/q3-plan.md      # read straight from the reference
 # Q3 Plan
 Goals for Q3: ship the knowledge plane.
+
+$ ukp propose --endpoint notes --id typo-fix --file typo-fix.md   # the write face: declare propose first
+proposal typo-fix created (revision 1)
 ```
 
 ## Why UKP
@@ -50,11 +53,11 @@ predictable scope, and a single command surface. Use UKP when:
   command will touch before running it.
 - Navigate the Markdown structure of an endpoint — folders, descriptions,
   depth — with zero provider dependency.
-- Read endpoint-scoped references through `read/file`, with layered rename
-  recovery (git history, then search re-anchor) and `ukp-pin` content-hash
-  verification when files move. The optional `read/qmd` goes through QMD
-  (an external tool — see Requirements). `read` and `nav` are derived
-  defaults of every local Service.
+- Read endpoint-scoped references through `read/file` — if a file moves,
+  reference recovery re-finds it (git history first, then search). The
+  optional `read/qmd` goes through QMD (an external tool — see
+  Requirements). `read` and `nav` are derived defaults of every local
+  Service.
 - Run base lexical search with `rg` across endpoint files — provider-free
   and on by default, shaped into `read`-ready references.
 - Search one endpoint, a workspace default scope, the whole local Registry,
@@ -62,13 +65,11 @@ predictable scope, and a single command surface. Use UKP when:
   (authority/context links), with explicit recursion (QMD-backed).
 - Propose changes as an idempotent, reviewable suggestion — the proposal
   lands in the endpoint's inbox and the verdict stays with its owner.
-- Update provider-owned indexes through a stable UKP command (QMD-backed;
-  local today — remote operation of `update` is not supported yet, see Not
-  Yet).
-- Serve an endpoint over HTTP and consume it remotely with the same
-  commands: `search`/`read`/`nav`/`rg`/`propose` work on remote endpoints.
-  A Manifest with an empty `[capabilities]` table is valid too — a
-  zero-declaration, read-only endpoint.
+- Update provider-owned indexes through a stable UKP command (QMD-backed).
+- Serve an endpoint over HTTP — a single endpoint, or the whole registry as
+  a host door — when you want it reachable from other machines.
+- Want a read-only endpoint? Declare zero capabilities — an empty
+  `[capabilities]` table still registers one (derived `read`/`nav` only).
 - Give agents JSON output (`--format json`), reference sidecars, and
   `ukp://` handoff keys when they need machine-readable results.
 
@@ -113,9 +114,7 @@ For a human or agent starting from a folder:
 No QMD installed? Skip step 6 — `nav`, `read`, `rg`, and `propose` work on any
 endpoint without it.
 
-An agent can carry out the same flow on your behalf. UKP handles naming,
-routing, and the command surface; the provider handles collection setup,
-indexing, ranking, and maintenance.
+An agent can carry out the same flow on your behalf.
 
 For workspace defaults, use `ukp guide client` and `.ukp/client.toml`.
 
@@ -126,22 +125,25 @@ Grouping below follows `ukp --help`; every command stays a flat
 (`-c` is a compatibility alias); `-g` selects the full local Host Registry
 where supported.
 
+The same five commands work on local and remote endpoints — consuming a
+remote endpoint is a one-command gesture (see below).
+
 Endpoint commands:
 
 | Command | What it does |
 |---|---|
-| `ukp search` | Indexed search through the endpoint's provider (QMD today); `--recursive` expands endpoints explicitly declared as dependencies (authority/context). Local or remote; results hand off via `ukp://` references. |
-| `ukp read` | Reads an endpoint-scoped resource — exact path, `ukp://` URI, or `docid` handoff key. Local or remote. |
-| `ukp nav` | Markdown outline of an endpoint (`--depth`, respects `.gitignore`); on by default, configurable via `[capabilities.nav]`. Local or remote. |
+| `ukp search` | Indexed search through the endpoint's provider (QMD today); `--recursive` expands endpoints explicitly declared as dependencies (authority/context). Results hand off via `ukp://` references. |
+| `ukp read` | Reads an endpoint-scoped resource — exact path, `ukp://` URI, or `docid` handoff key. |
+| `ukp nav` | Markdown outline of an endpoint (`--depth`, respects `.gitignore`); on by default, configurable via `[capabilities.nav]`. |
 | `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; results become `read`-ready `ukp://` references. A missing rg binary degrades to a skip, never a fault. |
-| `ukp propose` | Submits an idempotent change proposal (suggestion box — the owner decides what happens next). Created/unchanged/updated; the revision bumps only on `updated`. Local (file provider) or remote (wire). |
+| `ukp propose` | Submits an idempotent change proposal (suggestion box — the owner decides what happens next). Created/unchanged/updated; the revision bumps only on `updated`. |
 
 Registry commands:
 
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry endpoint bindings. `ukp register --url <url>` registers a remote `ukp serve` endpoint (HTTPS, SSH with transparent tunneling, or loopback HTTP) — the endpoint name comes from its discovery document (asserted exactly), the instance identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it in one gesture (`--select` narrows; re-running refreshes idempotently). Lifecycle details: [deployment guide](https://github.com/CatheadOwl/ukp/blob/main/docs/remote-deployment.md). |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings. `ukp register --url <url>` registers a remote endpoint — the name comes from its discovery document (asserted, not chosen), the identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it (`--select` narrows; re-running refreshes idempotently). |
 | `ukp list` | Lists registered endpoints with their declared capabilities. Door drift shows as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture. |
 
 Operations commands:
@@ -151,7 +153,7 @@ Operations commands:
 | `ukp diagnose` | Checks a Service folder or endpoint scope for wiring problems. |
 | `ukp inspect` | Explains current scope, bindings, manifest capabilities, and provider availability. |
 | `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared (local endpoints today). |
-| `ukp serve` | Serves one endpoint — or, without `--endpoint`, the whole registry as a **host door** — over HTTP: a discovery document plus search/read/nav/rg/propose routes (the write face requires the endpoint to declare propose). Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth; `--tls` / `--tls-cert/--tls-key` for HTTPS. Deployment shapes: [deployment guide](https://github.com/CatheadOwl/ukp/blob/main/docs/remote-deployment.md). |
+| `ukp serve` | Serves one endpoint — or, without `--endpoint`, the whole registry as a **host door** — over HTTP: a discovery document plus the five command routes (the write face requires the endpoint to declare propose). Loopback by default; `UKP_SERVE_TOKEN` enables bearer auth; `--tls` for HTTPS. |
 
 Help commands:
 
