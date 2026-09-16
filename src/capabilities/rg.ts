@@ -291,7 +291,11 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
       continue;
     }
 
-    const result = spawnSync(command[0]!, [...command.slice(1), ...rgToolArgs(parsed)], {
+    // Explicit search root: an implicit-cwd search is environment-sensitive
+    // (first Linux CI run: rg 14.1.1 walked zero bytes with no path operand
+    // while an explicit "." matched). "." keeps rg's rendered paths
+    // endpoint-relative; the "./" prefix is stripped at both intakes below.
+    const result = spawnSync(command[0]!, [...command.slice(1), ...rgToolArgs(parsed), "."], {
       cwd: endpoint.folder,
       encoding: "utf8",
       windowsHide: true,
@@ -340,7 +344,7 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
         if (separator <= 0) continue;
         const count = Number(line.slice(separator + 1));
         if (!Number.isSafeInteger(count)) continue;
-        counts.push({ path: line.slice(0, separator).replace(/\\/g, "/"), count });
+        counts.push({ path: line.slice(0, separator).replace(/\\/g, "/").replace(/^\.\//, ""), count });
       }
       if (counts.length === 0) {
         succeeded = true; // no matches is a successful result (D-036 stance)
@@ -370,7 +374,7 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
       }
       const path = event.data?.path?.text;
       if (typeof path !== "string" || path.length === 0) continue;
-      const entry: RgMatch = { path: path.replace(/\\/g, "/") };
+      const entry: RgMatch = { path: path.replace(/\\/g, "/").replace(/^\.\//, "") };
       const lineNumber = event.data?.line_number;
       if (Number.isSafeInteger(lineNumber) && (lineNumber as number) > 0) entry.line = lineNumber;
       const text = event.data?.lines?.text;
