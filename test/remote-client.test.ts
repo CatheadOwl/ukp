@@ -118,10 +118,14 @@ afterAll(() => {
 
 describe("registry remote bindings (D-077)", () => {
   test("parses, validates, and round-trips remote bindings; locals stay byte-identical", () => {
+    // Platform-neutral absolute local path: the registry validates absolute
+    // paths with the host's isAbsolute, so a drive shape would only parse on
+    // Windows hosts. Forward slashes keep the fixture TOML-safe.
+    const cadPath = join(tmpdir(), "cad").replace(/\\/g, "/");
     const source = [
       "[[endpoints]]",
       'name = "cad"',
-      'path = "C:/abs/cad"',
+      `path = ${JSON.stringify(cadPath)}`,
       "",
       "[[endpoints]]",
       'name = "cad-remote"',
@@ -131,7 +135,7 @@ describe("registry remote bindings (D-077)", () => {
       "",
     ].join("\n");
     const bindings = parseRegistry(source);
-    expect(bindings[0]).toEqual({ name: "cad", path: "C:/abs/cad" });
+    expect(bindings[0]).toEqual({ name: "cad", path: cadPath });
     expect(bindings[1]).toEqual({
       name: "cad-remote",
       kind: "remote",
