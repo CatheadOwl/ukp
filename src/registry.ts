@@ -272,7 +272,7 @@ export function readRegistry(registryPath: string): RegistryBinding[] {
   }
 }
 
-/** Canonical serialization (configuration-contracts 规范序列化): local rows
+/** Canonical serialization (configuration-contracts canonical form): local rows
  * `{name, path}`, remote rows `{name, kind, url, instance_uid?}` — key order
  * is insertion order, so build plain ordered objects before stringify. */
 function toSerializableBinding(binding: RegistryBinding): Record<string, string> {

@@ -327,7 +327,7 @@ function unreachableError(url: string, error: unknown): RemoteTransportError {
   );
 }
 
-/** Renewal re-anchor attempt (W5' / D-079, 裁决点 B): after a fetch-phase
+/** Renewal re-anchor attempt (W5' / D-079, adjudication point B): after a fetch-phase
  * failure with an anchor present, probe the CURRENT peer certificate.
  * Same SPKI pin → server renewed its certificate keeping the key: swap the
  * anchor (and persist) and let the caller retry once, invisibly. Different
