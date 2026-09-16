@@ -26,3 +26,25 @@ jobs:
       - run: bun test
       - run: bun run typecheck
       - run: npm pack --dry-run --json
+
+  # rg 版本矩阵第二条腿（dev 验证基线 15.1.0）：rg 是用户自备的外部工具，
+  # 主腿的 apt rg（14.x）恰好覆盖发行版真实分布，本腿补 dev 基线组合——
+  # 两腿合起来就是已验证的版本容忍矩阵。typecheck/pack 由主 job 承担。
+  test-rg-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install ripgrep 15.1.0 (verified dev baseline)
+        run: |
+          curl -fsSL -o /tmp/rg.tar.gz https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz
+          tar -xzf /tmp/rg.tar.gz -C /tmp
+          sudo install /tmp/ripgrep-15.1.0-x86_64-unknown-linux-musl/rg /usr/local/bin/rg
+          rg --version
+
+      - run: bun install --frozen-lockfile
+      - run: bun test
