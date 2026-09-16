@@ -1,16 +1,16 @@
 # UKP
 
-Local-first Unified Knowledge Plane CLI for named knowledge endpoints.
+Folder as a Service: turn folders into named knowledge endpoints — one
+stable command surface, on this machine or your own server.
 
-UKP turns folders into knowledge endpoints that can be addressed by name —
-one stable command surface for humans and agents, on this machine or a
-remote one. Navigate, read, and search endpoints; propose changes back to
-the owner as reviewable suggestions; update provider-owned indexes (local
-today). No physical paths to memorize, no provider-specific commands to
-relearn.
+Register a folder and it becomes an endpoint for humans and agents alike —
+nothing is started, the folder stays a folder. Navigate, read, and search
+it; propose changes back to the owner as reviewable suggestions; update
+provider-owned indexes (local today). No physical paths to memorize, no
+provider-specific commands to relearn.
 
 > [!NOTE]
-> UKP is the current public MVP CLI. It is not a stable 1.0 protocol.
+> Early-stage CLI (MVP) — commands and behavior may still change.
 
 ```bash
 $ ukp init service --name notes && ukp register
