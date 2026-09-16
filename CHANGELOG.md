@@ -2,9 +2,9 @@
 
 All notable public changes to UKP will be documented in this file.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-09-17
 
-The first public release; the date is set when the package is published.
+The first public release.
 
 ### Added
 
