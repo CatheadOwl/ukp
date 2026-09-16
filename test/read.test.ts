@@ -1478,7 +1478,14 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
       // covered by exit code + list shape below).
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("multiple resources match");
-      const suggestions = result.stderr.split("\n").filter((line) => line.includes("missing-note.md"));
+      const lines = result.stderr.split("\n").filter((line) => line.includes("missing-note.md"));
+      const suggestions = lines.filter((line) => !line.includes("multiple resources match"));
+      // Budget 2: the walk stops once the running file count passes it, so
+      // 2–3 of the five directories' matches reach the candidate list (the
+      // count includes non-matching entries like `.ukp/service.toml`, whose
+      // position is readdir-order dependent — alphabetical-first on NTFS,
+      // arbitrary on Linux — hence the window, not an exact number). Never
+      // all five (budget ignored) and never a single auto-resolved match.
       expect(suggestions.length).toBeGreaterThanOrEqual(2);
       expect(suggestions.length).toBeLessThanOrEqual(3);
     } finally {

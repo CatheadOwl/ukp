@@ -44,8 +44,13 @@ describe("splitEndpointRelativeSegments (T2)", () => {
 
 describe("isInsideRealRoot (T3)", () => {
   test("accepts a strictly-inside target", () => {
-    expect(isInsideRealRoot("C:\\svc", "C:\\svc\\docs\\a.md")).toBe(true);
+    // POSIX-shaped containment holds on every host. The Windows-shaped pair
+    // is only meaningful on a Windows host: the primitive receives
+    // already-realpathed HOST paths, so a POSIX host never sees drive shapes.
     expect(isInsideRealRoot("/svc", "/svc/docs/a.md")).toBe(true);
+    if (process.platform === "win32") {
+      expect(isInsideRealRoot("C:\\svc", "C:\\svc\\docs\\a.md")).toBe(true);
+    }
   });
 
   test("rejects escape and sibling-dotdot lookalikes (prefix guard, read stance)", () => {
