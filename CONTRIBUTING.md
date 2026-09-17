@@ -15,7 +15,9 @@ npm pack --dry-run --json
 
 Release maintainers run a release preflight before publishing: git hygiene,
 the full test suite, typecheck, package metadata and tarball allowlist
-review, private-material leak scans, and a publish dry-run. The npm tarball
+review, private-material leak scans, and a publish dry-run. After publishing,
+verify the npm page renders the package README (registry readme metadata has
+been observed to go missing). The npm tarball
 is intentionally allowlisted — runtime source, README, package metadata,
 lock/config files, and the project license only.
 
