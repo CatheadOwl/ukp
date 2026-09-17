@@ -457,6 +457,12 @@ function runHumanMode(
       continue;
     }
     outcome.status = providerOutput ? "succeeded" : "no_matches";
+    if (outcome.status === "no_matches") {
+      // An empty provider result is indistinguishable from an unconfigured
+      // provider to a first-run caller — surface the setup path as guidance
+      // (search's own contract stays: no matches is a result, not a failure).
+      warnings.push(`endpoint '${endpoint.name}' returned no matches; if the QMD provider has not been set up for this Service yet, see 'ukp guide service qmd'`);
+    }
   }
   return {
     query: parsed.request.query,
