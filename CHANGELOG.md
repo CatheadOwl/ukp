@@ -2,17 +2,17 @@
 
 All notable public changes to UKP will be documented in this file.
 
-## [Unreleased]
+## [0.1.1] - 2026-09-17
 
 ### Changed
 
 - `ukp search` emits the durable `uri:` line / `ukp_uri` sidecar field only
   after verifying the mapped candidate file's content hash against the hit's
-  docid (ADR 0025): subfolder-rooted collections emit verified uris again
-  (real on-disk paths, provider path normalization tolerated), same-named
-  different-content files never receive a wrong reference again, and stale
-  index entries are honestly refused. Unemitted results carry
-  `ukp_uri_omission_reason` in the `--json` reference sidecar.
+  docid: subfolder-rooted collections emit verified uris again (real on-disk
+  paths, tolerant of provider path normalization differences across
+  versions), same-named different-content files never receive a wrong
+  reference again, and stale index entries are honestly refused. Unemitted
+  results carry `ukp_uri_omission_reason` in the `--json` reference sidecar.
 - `ukp init service` prints a provider-agnostic note when the folder already
   carries a provider index (`.qmd/`), routing to `ukp guide service qmd`.
 - `ukp register` (local) prints a cross-workspace consumption pointer to
