@@ -159,6 +159,10 @@ export function executeRegisterCommand(
       `registered: ${report.service.effectiveName}`,
       ...(report.service.manifest.description ? [`description: ${report.service.manifest.description}`] : []),
       `location: ${report.service.folder}`,
+      // Register never edits Client Config (guide client owns that); this is
+      // a pointer for the cross-workspace consumption case, which is the
+      // standard follow-up after registering a Service others will reference.
+      "next: to use this endpoint by default from another workspace, see 'ukp guide client' (workspace .ukp/client.toml)",
     ];
     return {
       exitCode: 0,

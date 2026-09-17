@@ -193,6 +193,13 @@ function executeInitServiceCommand(args: readonly string[], context: InitCommand
         `location: ${result.folder}`,
         "capability: search",
         "provider: qmd",
+        // Folder-existence probe only (no provider state read): an existing
+        // provider index means collections may already be registered — route
+        // to the provider-scoped topic instead of naming provider commands
+        // (provider-agnostic stdout, same pattern as diagnose's hint).
+        ...(existsSync(join(result.folder, ".qmd"))
+          ? ["note: existing provider index detected (.qmd/); align collection naming before adding new ones (see 'ukp guide service qmd')"]
+          : []),
         "next: ukp guide service qmd",
         "next: ukp diagnose",
         "next: ukp register",

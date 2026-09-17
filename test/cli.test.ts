@@ -345,6 +345,7 @@ describe("CLI bootstrap", () => {
     const guide = output.join("\n");
     expect(guide).toContain("qmd init");
     expect(guide).toContain("qmd collection add");
+    expect(guide).toContain("qmd collection list");
     expect(guide).toContain("provider-owned");
     expect(guide).toContain("qmd collection add --help");
     expect(guide).toContain("relevant QMD subcommand help");
@@ -524,9 +525,34 @@ describe("CLI bootstrap", () => {
       expect(output.join("\n")).toContain("next: ukp diagnose");
       expect(output.join("\n")).toContain("next: ukp register");
       expect(output.join("\n")).not.toContain("qmd init");
+      expect(output.join("\n")).not.toContain("existing provider index");
       expect(existsSync(registryPath)).toBe(false);
       expect(existsSync(join(service, ".ukp", "client.toml"))).toBe(false);
       expect(existsSync(join(service, ".qmd"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("init service notes an existing provider index without provider command names", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-service-qmd-note-"));
+    const service = join(root, "kb-like");
+    const output: string[] = [];
+    mkdirSync(service);
+    mkdirSync(join(service, ".qmd"));
+    try {
+      expect(runCli(["init", "service"], (message) => output.push(message), undefined, {
+        currentDirectory: service,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(0);
+      const stdout = output.join("\n");
+      expect(stdout).toContain("note: existing provider index detected (.qmd/)");
+      expect(stdout).toContain("ukp guide service qmd");
+      // Provider-agnostic stdout: the note routes to the guide topic and
+      // never names provider commands (D-046, same guard family as the
+      // diagnose hint and the init next: lines).
+      expect(stdout).not.toContain("qmd collection");
+      expect(stdout).not.toContain("qmd init");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1282,6 +1308,7 @@ describe("CLI bootstrap", () => {
     };
     const output: string[] = [];
     expect(runCli(["register"], (message) => output.push(message), undefined, context)).toBe(0);
+    expect(output.join("\n")).toContain("next: to use this endpoint by default from another workspace, see 'ukp guide client'");
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(output.join("\n")).toContain("fixture-qmd");
     expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");

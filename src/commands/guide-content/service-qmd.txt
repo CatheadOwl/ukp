@@ -18,10 +18,15 @@ Fast path for a simple knowledge folder:
 1. Initialize QMD (qmd init)
 2. Add the searchable collections (qmd collection add)
    For a pure knowledge base, add the folder root; otherwise add the folder(s)
-   whose content should be searchable.
+   whose content should be searchable. Check what already exists first
+   (qmd collection list): re-adding an already-indexed folder creates a
+   duplicate collection, and add does not warn about it.
 3. Use a stable short collection name (qmd collection rename)
-   QMD names a collection from the indexed folder; rename it to a short
-   stable name so provider-native artifact URIs stay clean.
+   By default add registers the collection under the folder's full path as
+   its name; the short name comes from this rename, never from add itself.
+   rename matches the exact current name only, so re-check collection list
+   before renaming — the short name you had in mind may already belong to an
+   existing collection.
 4. Update the index (qmd update, qmd status)
 5. Verify the provider before returning to UKP (qmd search / qmd get)
    If a search returns matches, the provider is ready; return to
