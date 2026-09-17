@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildQmdInvocation, defaultQmdCommand, providerTimeoutMs } from "./qmd.ts";
-import { endpointRelativePathOf, providerLocationOf } from "./search.ts";
+import { buildEndpointFileIndex, docidOf, providerLocationOf, verifiedEndpointRouteOf } from "./search.ts";
 
 // ADR 0020: read-time layered rename recovery. This module owns the
 // miss-path descent (L1 git-derived -> L2 search re-anchor -> exhausted) and
@@ -160,13 +160,17 @@ function reanchorViaSearch(request: RecoveryRequest): string[] {
     return [];
   }
   if (!Array.isArray(nativeResults)) return [];
+  // ADR 0025: recalled routes are content-verified against each hit's docid
+  // (same verified mapping as search emission) — a wrong or drifted
+  // candidate never enters the recovery candidate list.
+  const index = buildEndpointFileIndex(request.serviceFolder);
   const routes = new Set<string>();
   for (const item of nativeResults) {
     const location = providerLocationOf(item);
     if (!location) continue;
-    const route = endpointRelativePathOf(location, request.serviceFolder);
-    if (route && route.split("/").pop() === basename && route !== request.route) {
-      routes.add(route);
+    const { relPath } = verifiedEndpointRouteOf(location, request.serviceFolder, docidOf(item), index);
+    if (relPath && relPath.split("/").pop() === basename && relPath !== request.route) {
+      routes.add(relPath);
     }
   }
   return [...routes].sort();

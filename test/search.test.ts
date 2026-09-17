@@ -1,4 +1,5 @@
 import { describe, expect, test, afterAll } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -10,6 +11,13 @@ import {
 import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import { executeReadCommand as executeReadCommandMaybeAsync, type ReadCommandResult } from "../src/commands/read.ts";
+
+// ADR 0025 verified emission: the fixture computes disk-honest docids
+// (sha256 of the raw file bytes, first 6 hex) for branches whose documents
+// exist on disk; assertions compute the same prefix from the content they
+// wrote instead of hardcoding provider values.
+const shaPrefix = (content: string): string =>
+  createHash("sha256").update(content).digest("hex").slice(0, 6);
 
 // ukp_remote W2 conditional-async seam: local reads stay synchronous; this
 // wrapper keeps the call sites untouched (see read.test.ts for the pattern).
@@ -127,7 +135,12 @@ describe("search", () => {
       expect(result.stdout).toContain("== fixture-qmd ==");
       expect(result.stdout).toContain("1. CAD fixture note — cad-notes.md:1");
       expect(result.stdout).toContain("   CAD fixture note content.");
-      expect(result.stdout).toContain("   read: ukp read --endpoint fixture-qmd a1b2c3:1");
+      // The fixture copy carries documents/cad-notes.md on disk, so the
+      // docid is the disk-honest sha256 prefix (ADR 0025) and the verified
+      // uri line is emitted alongside the session handoff.
+      const cadContent = readFileSync(join(fixture, "documents", "cad-notes.md"), "utf8");
+      expect(result.stdout).toContain(`   read: ukp read --endpoint fixture-qmd ${shaPrefix(cadContent)}:1`);
+      expect(result.stdout).toContain("uri: ukp://fixture-qmd/documents/cad-notes.md");
       expect(result.stdout).not.toContain("UKP reference:");
       expect(result.stdout).not.toContain("qmd://");
       expect(result.stdout).not.toContain("(search/qmd)");
@@ -690,14 +703,14 @@ describe("search", () => {
       );
       expect(references[0]).toMatchObject({
         endpoint: "collection-shaped",
-        reference: "b2c3d4",
+        reference: shaPrefix("alpha\nbeta\ngamma\n"),
         line: 3,
         status: "read_ready",
         read_adapter: "qmd",
       });
       expect(references[1]).toMatchObject({
         endpoint: "path-shaped",
-        reference: "c3d4e5",
+        reference: shaPrefix("one\ntwo\n"),
         line: 7,
         status: "read_ready",
         read_adapter: "qmd",
@@ -1031,8 +1044,9 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(human.exitCode).toBe(0);
-      // Dual-key result unit: session handoff line + durable slot line.
-      expect(human.stdout).toContain("read: ukp read --endpoint collection-shaped b2c3d4:3");
+      // Dual-key result unit: session handoff line + durable slot line. The
+      // docid is the disk-honest sha256 prefix of the file content.
+      expect(human.stdout).toContain(`read: ukp read --endpoint collection-shaped ${shaPrefix("# Collection note\n\nalpha\nbeta\ngamma\n")}:3`);
       expect(human.stdout).toContain("uri: ukp://collection-shaped/docs/collection-note.md");
       // A location that does not resolve to an endpoint-local file gets no uri.
       expect(human.stdout).not.toContain("uri: ukp://unmapped-location/");

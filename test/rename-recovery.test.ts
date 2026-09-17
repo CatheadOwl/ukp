@@ -306,12 +306,23 @@ describe("rename recovery", () => {
   }
 
   /** Stub qmd: ignores args, prints a JSON search result array pointing at
-   * the given files (absolute path-shaped provider locations). */
+   * the given files (absolute path-shaped provider locations) with honest
+   * docids — sha256 of each file's raw bytes, first 6 hex (ADR 0025): the
+   * verified L2 re-anchor adjudicates candidates by content fingerprint. */
   function writeSearchStub(root: string, files: string[]): string {
     const stub = join(root, "qmd-stub.mjs");
     const script = files.length === 0
       ? `process.stdout.write("[]\\n");\n`
-      : `process.stdout.write(JSON.stringify([${files.map((file) => `{ file: "qmd://" + ${JSON.stringify(file)} }`)}]) + "\\n");\n`;
+      : [
+        "import { createHash } from \"node:crypto\";",
+        "import { readFileSync } from \"node:fs\";",
+        `const files = ${JSON.stringify(files)};`,
+        "const results = files.map((file) => ({",
+        "  docid: \"#\" + createHash(\"sha256\").update(readFileSync(file)).digest(\"hex\").slice(0, 6),",
+        "  file: \"qmd://\" + file,",
+        "}));",
+        "process.stdout.write(JSON.stringify(results) + \"\\n\");",
+      ].join("\n");
     writeFileSync(stub, script, "utf8");
     return stub;
   }

@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   statSync,
@@ -496,6 +498,8 @@ interface QmdReferenceMapping {
   status: "read_ready" | "provider_only";
   read_adapter?: "qmd";
   ukp_uri?: string;
+  /** REF-4 (ADR 0025): why no `ukp_uri` was emitted for this result. */
+  ukp_uri_omission_reason?: UriOmissionReason;
   reason?: string;
 }
 
@@ -510,7 +514,10 @@ function maybeLine(line: number | undefined): { line?: number } {
   return line ? { line } : {};
 }
 
-function docidOf(result: unknown): string | undefined {
+/** The bare 6-hex content fingerprint of one QMD result (`#` stripped and
+ * body-validated); exported for the rename-recovery L2 re-anchor, which
+ * verifies recalled candidates against the same fingerprint (ADR 0025). */
+export function docidOf(result: unknown): string | undefined {
   if (typeof result !== "object" || result === null || !("docid" in result)) return undefined;
   const docid = (result as { docid?: unknown }).docid;
   if (typeof docid !== "string") return undefined;
@@ -545,91 +552,223 @@ function encodeUkpUriSegment(segment: string): string {
 }
 
 /**
- * Derive the endpoint-relative path of one QMD result location (ADR 0019).
- *
- * The provider location is either path-shaped (`qmd://<absolute path>` — the
- * collection root is a filesystem path) or collection-shaped
- * (`qmd://<collection>/<rel>`). Only a location that resolves *inside* the
- * Service folder to an existing regular file yields a `ukp://` URI: the URI is
- * a slot promise (`ukp read` resolves it exactly), so it must never be emitted
- * for provider-managed or out-of-folder resources. Collection names are never
- * assumed to equal endpoint names — the resolved-containment + existence check,
- * not name matching, decides (lexical containment plus a realpath pass so
- * symlink escapes cannot yield an unreadable slot, mirroring the read hit path).
+ * Verified emission (ADR 0025 / D-082; REF-1 + REF-2 in
+ * `docs/concepts/reference-integrity.md`): a `ukp://` URI is emitted only
+ * when a candidate endpoint-local file's content hash matches the hit's
+ * docid — `sha256(raw on-disk bytes)[0:6]`, the provider's content
+ * fingerprint (empirically pinned 2026-09-17). Existence alone never
+ * suffices (REF-2: existence ≠ identity); enumeration may guess
+ * (normalization-insensitive matching — the provider location vocabulary is
+ * not filesystem-literal, e.g. `session_format` → `session-format`), the
+ * hash decides; every failure degrades to no-uri with an auditable reason
+ * (REF-4), never to a wrong uri. If the provider ever changes its hash
+ * scheme, verification fails closed: coverage drops, correctness never
+ * breaks.
  */
-/** Exported for the rename-recovery L2 re-anchor (ADR 0020): maps a provider
- * location to an endpoint-relative route when it safely resolves inside the
- * Service folder to an existing regular file. */
-export function endpointRelativePathOf(providerLocation: string, endpointFolder: string): string | undefined {
-  if (!providerLocation.startsWith("qmd://")) return undefined;
-  const rest = providerLocation.slice("qmd://".length);
-  let candidate: string;
-  if (isAbsoluteShapedPath(rest)) {
-    const rel = relative(resolve(endpointFolder), resolve(rest));
-    // Cross-drive / UNC↔drive targets: `relative()` returns the absolute
-    // target itself, which never starts with `..` — reject explicitly so the
-    // containment boundary cannot be bypassed (ADR 0019 emission rule).
-    if (isAbsoluteShapedPath(rel)) return undefined;
-    candidate = rel.split(/[\\/]/).join("/");
-  } else {
-    const firstSlash = rest.indexOf("/");
-    if (firstSlash <= 0) return undefined;
-    candidate = rest.slice(firstSlash + 1).split(/[\\/]/).join("/");
-  }
-  if (candidate === "" || candidate.split("/").includes("..")) return undefined;
-  const absolute = resolve(endpointFolder, ...candidate.split("/"));
-  if (!isInsideRealRoot(resolve(endpointFolder), absolute)) return undefined;
-  // Resolved containment, aligned with the read hit path (G5 defect closure):
-  // a folder-internal symlink escaping the Service folder passes the lexical
-  // checks above but must not yield a URI the exact slot route would refuse.
-  let resolved: string;
-  let resolvedFolder: string;
-  try {
-    resolved = realpathSync(absolute);
-    resolvedFolder = realpathSync(endpointFolder);
-  } catch {
-    return undefined;
-  }
-  if (!isInsideRealRoot(resolvedFolder, resolved)) return undefined;
-  let stat;
-  try {
-    stat = statSync(resolved);
-  } catch {
-    return undefined;
-  }
-  if (!stat.isFile()) return undefined;
-  return candidate;
+
+/** REF-4: why a `ukp_uri` was not emitted for a result. */
+export type UriOmissionReason =
+  | "no-docid"
+  | "no-candidate"
+  | "hash-mismatch"
+  | "ambiguous"
+  | "out-of-folder";
+
+export interface VerifiedRoute {
+  relPath?: string;
+  reason?: UriOmissionReason;
 }
 
-function ukpUriOf(providerLocation: string, endpointName: string, endpointFolder: string): string | undefined {
-  const relPath = endpointRelativePathOf(providerLocation, endpointFolder);
-  if (!relPath) return undefined;
+/** Enumeration-only normalization (deliberately loose — the hash is the
+ * authority): folds the provider's observed `_`→`-` location vocabulary and
+ * case so wrong guesses stay cheap and harmless. */
+function normalizeSegmentForEnumeration(segment: string): string {
+  return segment.toLowerCase().replaceAll("_", "-");
+}
+
+/** Endpoint file index: normalized endpoint-relative path → real rel paths.
+ * Built once per emission call (per endpoint). Symlinked files resolving
+ * back inside the folder are included (mirroring the read hit path);
+ * symlinked directories are not descended; `.git`/`.qmd` internals are
+ * skipped. The index only *generates candidates* — the resolved-containment
+ * safety gate and the content hash below decide. */
+export type EndpointFileIndex = Map<string, string[]>;
+
+/** Structural shape of a `readdirSync(withFileTypes)` entry as the index
+ * uses it (avoids the Dirent<Buffer> overload inference). */
+interface IndexDirent {
+  name: string;
+  isDirectory(): boolean;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+export function buildEndpointFileIndex(endpointFolder: string): EndpointFileIndex {
+  const index: EndpointFileIndex = new Map();
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(endpointFolder);
+  } catch {
+    return index;
+  }
+  const walk = (directory: string, prefix: string): void => {
+    let entries: IndexDirent[];
+    try {
+      entries = readdirSync(directory, { withFileTypes: true }) as unknown as IndexDirent[];
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === ".git" || entry.name === ".qmd") continue;
+      const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(join(directory, entry.name), rel);
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        // Include only symlinked files that resolve back inside the root
+        // (G5: a symlink escaping the folder must never yield a slot).
+        try {
+          if (!statSync(join(directory, entry.name)).isFile()) continue;
+          if (!isInsideRealRoot(realRoot, realpathSync(join(directory, entry.name)))) continue;
+        } catch {
+          continue;
+        }
+      } else if (!entry.isFile()) {
+        continue;
+      }
+      const normalized = rel.split("/").map(normalizeSegmentForEnumeration).join("/");
+      const bucket = index.get(normalized);
+      if (bucket === undefined) index.set(normalized, [rel]);
+      else bucket.push(rel);
+    }
+  };
+  walk(realRoot, "");
+  return index;
+}
+
+function sha256Prefix6Of(file: string): string | undefined {
+  try {
+    return createHash("sha256").update(readFileSync(file)).digest("hex").slice(0, 6);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * ADR 0025 core: map a provider location to an endpoint-relative route only
+ * when a candidate file verifies as the hit's content. Layered policy over
+ * the shared primitives (ADR 0023): candidate generation (path-shaped by
+ * folder-relative containment, collection-shaped by normalization-insensitive
+ * suffix match — the collection-root assumption that broke ISSUE-014 is
+ * gone) → resolved containment + isFile safety gate → sha256-prefix
+ * adjudication against the docid. Zero or multiple verified matches decline
+ * (ambiguity never emits).
+ */
+export function verifiedEndpointRouteOf(
+  providerLocation: string,
+  endpointFolder: string,
+  docid: string | undefined,
+  index: EndpointFileIndex,
+): VerifiedRoute {
+  if (!providerLocation.startsWith("qmd://")) return {};
+  if (docid === undefined) return { reason: "no-docid" };
+  const rest = providerLocation.slice("qmd://".length);
+  let candidates: string[];
+  if (isAbsoluteShapedPath(rest)) {
+    // Path-shaped (collection name is the full on-disk path): folder-relative
+    // containment, with the cross-drive / UNC escape rejected explicitly
+    // (`relative()` returns the absolute target itself there).
+    const rel = relative(resolve(endpointFolder), resolve(rest));
+    if (isAbsoluteShapedPath(rel)) return { reason: "out-of-folder" };
+    const candidate = rel.split(/[\\/]/).join("/");
+    if (candidate === "" || candidate.split("/").includes("..")) return { reason: "out-of-folder" };
+    candidates = [candidate];
+  } else {
+    // Collection-shaped: strip the collection name, then match the remainder
+    // against the folder's normalized paths as an exact-or-suffix key. The
+    // suffix arm is what recovers subfolder-rooted collections (ISSUE-014
+    // false negatives) without knowing any collection root.
+    const firstSlash = rest.indexOf("/");
+    if (firstSlash <= 0) return { reason: "no-candidate" };
+    const rel = rest.slice(firstSlash + 1).split(/[\\/]/).join("/");
+    if (rel === "" || rel.split("/").includes("..")) return { reason: "no-candidate" };
+    const normalizedRel = rel.split("/").map(normalizeSegmentForEnumeration).join("/");
+    candidates = [];
+    for (const [normalized, paths] of index) {
+      if (normalized === normalizedRel || normalized.endsWith(`/${normalizedRel}`)) {
+        candidates.push(...paths);
+      }
+    }
+    if (candidates.length === 0) return { reason: "no-candidate" };
+  }
+  // Safety gate (aligned with the read hit path, G5 defect closure): lexical
+  // containment, then realpath containment, then isFile.
+  const folderRoot = resolve(endpointFolder);
+  let realFolderRoot: string;
+  try {
+    realFolderRoot = realpathSync(folderRoot);
+  } catch {
+    return { reason: "no-candidate" };
+  }
+  const safe: string[] = [];
+  for (const candidate of candidates) {
+    const absolute = resolve(folderRoot, ...candidate.split("/"));
+    if (!isInsideRealRoot(realFolderRoot, absolute)) continue;
+    let realAbsolute: string;
+    try {
+      realAbsolute = realpathSync(absolute);
+    } catch {
+      continue;
+    }
+    if (!isInsideRealRoot(realFolderRoot, realAbsolute)) continue;
+    try {
+      if (!statSync(realAbsolute).isFile()) continue;
+    } catch {
+      continue;
+    }
+    safe.push(candidate);
+  }
+  if (safe.length === 0) return { reason: "out-of-folder" };
+  const matches: string[] = [];
+  for (const candidate of safe) {
+    if (sha256Prefix6Of(resolve(folderRoot, ...candidate.split("/"))) === docid) matches.push(candidate);
+  }
+  if (matches.length === 1) return { relPath: matches[0] };
+  if (matches.length === 0) return { reason: "hash-mismatch" };
+  return { reason: "ambiguous" };
+}
+
+function ukpUriFromRelPath(endpointName: string, relPath: string): string {
   return `ukp://${endpointName}/${relPath.split("/").map(encodeUkpUriSegment).join("/")}`;
 }
 
 /**
- * Map one QMD search result to a UKP read-ready reference (ADR 0011).
- *
- * QMD-indexed results carry a stable `docid` content fingerprint. `search`
- * emits it as a bare handoff key (`#` stripped), not the weak `qmd://`/path
- * name; `read` re-adds the `#` and resolves by fingerprint exactly. Name, title,
- * and path become display-only provenance (`provider_location`). A result with
- * no usable docid has no UKP read route and is `provider_only`.
+ * Map one QMD search result to a UKP read-ready reference (ADR 0011) under
+ * the ADR 0025 verified-emission rule: the durable `ukp_uri` is emitted only
+ * when a candidate file's sha256 prefix matches the docid; otherwise the
+ * omission reason lands in the sidecar (REF-4). Name, title, and path stay
+ * display-only provenance (`provider_location`). A result with no usable
+ * docid has no UKP read route and no verifiable uri — `provider_only`.
  */
 function mapQmdResultToReference(
   endpointName: string,
   endpointFolder: string,
   result: unknown,
+  index: EndpointFileIndex,
 ): QmdReferenceMapping {
   const providerLocation = providerLocationOf(result);
-  const ukpUri = ukpUriOf(providerLocation, endpointName, endpointFolder);
   const docid = docidOf(result);
+  const route = providerLocation !== ""
+    ? verifiedEndpointRouteOf(providerLocation, endpointFolder, docid, index)
+    : {};
+  const ukpUri = route.relPath !== undefined ? ukpUriFromRelPath(endpointName, route.relPath) : undefined;
   if (!docid) {
     return {
       provider_location: providerLocation,
       endpoint: endpointName,
       status: "provider_only",
-      ...(ukpUri ? { ukp_uri: ukpUri } : {}),
+      ...(route.reason !== undefined ? { ukp_uri_omission_reason: route.reason } : {}),
       reason: "qmd result has no usable docid",
     };
   }
@@ -640,7 +779,11 @@ function mapQmdResultToReference(
     ...maybeLine(lineOf(result)),
     status: "read_ready",
     read_adapter: "qmd",
-    ...(ukpUri ? { ukp_uri: ukpUri } : {}),
+    ...(ukpUri !== undefined
+      ? { ukp_uri: ukpUri }
+      : route.reason !== undefined
+        ? { ukp_uri_omission_reason: route.reason }
+        : {}),
   };
 }
 
@@ -690,6 +833,7 @@ function renderResultUnit(
   endpointName: string,
   endpointFolder: string,
   result: unknown,
+  resolveIndex: () => EndpointFileIndex,
   remoteUri?: string,
   remoteEndpoint = false,
 ): string {
@@ -698,8 +842,13 @@ function renderResultUnit(
   const line = lineOf(result);
   // Remote endpoints carry the server-declared ukp_uri (RQ-06/RQ-09): it is
   // the handoff key, so the read line addresses the URI directly and the
-  // local docid serves provenance only.
-  const ukpUri = remoteUri ?? ukpUriOf(providerLocation, endpointName, endpointFolder);
+  // local docid serves provenance only. Local emission is ADR 0025 verified:
+  // the uri line appears only when a candidate file's hash matches the docid.
+  const verified = remoteUri !== undefined || endpointFolder === ""
+    ? {}
+    : verifiedEndpointRouteOf(providerLocation, endpointFolder, docid, resolveIndex());
+  const ukpUri = remoteUri
+    ?? (verified.relPath !== undefined ? ukpUriFromRelPath(endpointName, verified.relPath) : undefined);
   const title = rawTitleOf(result);
   const base = basenameOf(providerLocation);
   const location = base ? (line ? `${base}:${line}` : base) : "";
@@ -750,8 +899,14 @@ function renderResultUnits(
   }
   if (!Array.isArray(nativeResults)) return null;
   if (nativeResults.length === 0) return "(no matches)";
+  // One endpoint-file index per endpoint render (ADR 0025): built lazily so
+  // empty result sets and pure-remote endpoints pay no walk.
+  let index: EndpointFileIndex | undefined;
+  const resolveIndex = (): EndpointFileIndex => index ??= buildEndpointFileIndex(endpointFolder);
   return nativeResults
-    .map((result, index) => renderResultUnit(index + 1, endpointName, endpointFolder, result, remoteUris?.[index], remoteUris !== undefined))
+    .map((result, index_) =>
+      renderResultUnit(index_ + 1, endpointName, endpointFolder, result, resolveIndex, remoteUris?.[index_], remoteUris !== undefined)
+    )
     .join("\n\n");
 }
 
@@ -796,13 +951,15 @@ function buildQmdReferenceSidecar(
   if (!Array.isArray(nativeResults)) {
     throw new Error("qmd-json output is not an array");
   }
+  // One endpoint-file index per sidecar build (ADR 0025).
+  const index = nativeResults.length > 0 ? buildEndpointFileIndex(endpointFolder) : new Map();
   return {
     schema: "ukp.search.references.v1",
     endpoint: endpointName,
     source_artifact: sourceArtifact,
-    results: nativeResults.map((result, index) => ({
-      index,
-      ...mapQmdResultToReference(endpointName, endpointFolder, result),
+    results: nativeResults.map((result, index_) => ({
+      index: index_,
+      ...mapQmdResultToReference(endpointName, endpointFolder, result, index),
     })),
   };
 }
@@ -843,12 +1000,15 @@ export function buildInlineReferences(
     return undefined;
   }
   if (!Array.isArray(nativeResults)) return undefined;
+  // One endpoint-file index per inline build (ADR 0025) — same verified
+  // mapping as the sidecar, so remote inline references stay in lockstep.
+  const index = nativeResults.length > 0 ? buildEndpointFileIndex(endpointFolder) : new Map();
   return {
     schema: "ukp.search.references.v1",
     endpoint: endpointName,
-    results: nativeResults.map((result, index) => ({
-      index,
-      ...mapQmdResultToReference(endpointName, endpointFolder, result),
+    results: nativeResults.map((result, index_) => ({
+      index: index_,
+      ...mapQmdResultToReference(endpointName, endpointFolder, result, index),
     })),
   };
 }

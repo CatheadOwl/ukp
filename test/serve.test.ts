@@ -1,4 +1,5 @@
 import { describe, expect, test, afterAll } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -9,6 +10,11 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// ADR 0025: the fixture emits disk-honest docids; the assertion computes
+// the same sha256 prefix from the served file's content.
+const shaPrefix = (content: string): string =>
+  createHash("sha256").update(content).digest("hex").slice(0, 6);
 import { registerAt } from "../src/registry.ts";
 import {
   DISCOVERY_PATH,
@@ -142,7 +148,7 @@ describe("serve /v1/search", () => {
     expect(body.endpoints[0]).toMatchObject({ name: "serve-fixture", status: "succeeded" });
     expect(body.references.schema).toBe("ukp.search.references.v1");
     expect(body.references.results[0]).toMatchObject({
-      reference: "a1b2c3",
+      reference: shaPrefix("# CAD notes\n\nCAD fixture note content.\n"),
       status: "read_ready",
       ukp_uri: "ukp://serve-fixture/documents/cad-notes.md",
     });

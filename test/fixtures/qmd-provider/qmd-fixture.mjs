@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { appendFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import process from "node:process";
 
@@ -36,8 +38,12 @@ const shouldFail = serviceFolder.includes("provider-fail");
 const shouldCancel = serviceFolder.includes("provider-sigint");
 
 // docid → body map so a search→get round-trip resolves the same content by
-// fingerprint (ADR 0011). The docid is QMD's content-hash prefix; the fixture
-// hardcodes stable values for its known documents.
+// fingerprint (ADR 0011). The docid is QMD's content-hash prefix
+// (sha256 of the raw file bytes, first 6 hex — ADR 0025 pin); for branches
+// whose document exists on disk the fixture computes the honest prefix so
+// verified emission can adjudicate, and `get` resolves disk docids back to
+// the file content. Stable fallback values keep virtual (no-disk-file)
+// branches working.
 const docidBodies = {
   a1b2c3: "# CAD notes\n\nCAD fixture note content.",
   b2c3d4: "# Collection note\n\nalpha\nbeta\ngamma\n",
@@ -46,6 +52,23 @@ const docidBodies = {
   e5f6a7: "# External note\n\nExternal fixture note content.",
   f6a7b8: "# Provider note\n\nProvider note content.",
 };
+
+const diskDocid = (rel) => {
+  try {
+    return "#" + createHash("sha256")
+      .update(readFileSync(join(process.cwd(), ...rel.split("/"))))
+      .digest("hex").slice(0, 6);
+  } catch {
+    return undefined;
+  }
+};
+
+const knownDiskDocs = [
+  "documents/cad-notes.md",
+  "docs/collection-note.md",
+  "docs/path-note.md",
+  "docs/external-note.md",
+];
 
 if (shouldCancel) {
   process.stderr.write("fixture provider cancelled\n");
@@ -76,10 +99,20 @@ if (isGet) {
     process.exit(0);
   }
   // Resolve a bare or hash-prefixed docid (`a1b2c3`, `#a1b2c3`, `#a1b2c3:2`, ...)
-  // by content fingerprint; otherwise fall back to weak-reference token matching.
+  // by content fingerprint: stable bodies first, then any known on-disk
+  // document whose sha256 prefix matches (ADR 0025 disk-honest docids);
+  // otherwise fall back to weak-reference token matching.
   const docidMatch = /^#?([a-f0-9]{6})(?::\d+(?::\d+)?)?$/.exec(reference);
   const docid = docidMatch ? docidMatch[1] : undefined;
   let body = docid ? docidBodies[docid] : undefined;
+  if (!body && docid) {
+    for (const rel of knownDiskDocs) {
+      if (diskDocid(rel) === `#${docid}`) {
+        body = readFileSync(join(process.cwd(), ...rel.split("/")), "utf8");
+        break;
+      }
+    }
+  }
   if (!body) {
     body = "# Default fixture note\n\nBody for an accepted weak reference.";
     if (reference.includes("running")) {
@@ -99,13 +132,21 @@ if (isUpdate) {
   process.stdout.write("fixture update complete\n");
 } else if (outputFormat === "json" && !serviceFolder.includes("no-json")) {
   let result = [];
-  if (hasMatch) {
+  // Invariant-harness override (ADR 0025): a `qmd-fixture-results.json` in
+  // the service folder is emitted verbatim, letting tests declare arbitrary
+  // (emitter × layout) corpora with docids they compute themselves.
+  const overridePath = join(process.cwd(), "qmd-fixture-results.json");
+  if (existsSync(overridePath)) {
+    result = JSON.parse(readFileSync(overridePath, "utf8"));
+  } else if (hasMatch) {
+    const cadDocid = diskDocid("documents/cad-notes.md") ?? "#a1b2c3";
+    const collectionDocid = diskDocid("docs/collection-note.md") ?? "#b2c3d4";
     if (serviceFolder.includes("path-shaped")) {
-      result = [{ docid: "#c3d4e5", file: `qmd://${join(process.cwd(), "docs", "path-note.md")}`, line: 7, title: "Path-shaped fixture note", score: 1, snippet: "one\ntwo\n" }];
+      result = [{ docid: diskDocid("docs/path-note.md") ?? "#c3d4e5", file: `qmd://${join(process.cwd(), "docs", "path-note.md")}`, line: 7, title: "Path-shaped fixture note", score: 1, snippet: "one\ntwo\n" }];
     } else if (serviceFolder.includes("same-authority-external")) {
       result = [{ docid: "#e5f6a7", file: "qmd://same-authority-external/docs/external-note.md", line: 4, title: "Same-authority external fixture note", score: 1, snippet: "External fixture note content." }];
     } else if (serviceFolder.includes("collection-shaped")) {
-      result = [{ docid: "#b2c3d4", file: "qmd://collection-shaped/docs/collection-note.md", line: 3, title: "Collection-shaped fixture note", score: 1, snippet: "alpha\nbeta\ngamma\n" }];
+      result = [{ docid: collectionDocid, file: "qmd://collection-shaped/docs/collection-note.md", line: 3, title: "Collection-shaped fixture note", score: 1, snippet: "alpha\nbeta\ngamma\n" }];
     } else if (serviceFolder.includes("outside-result")) {
       result = [{ docid: "#d4e5f6", file: `qmd://${join(dirname(process.cwd()), "outside.md")}`, line: 2, title: "Outside fixture note", score: 1, snippet: "Body from a path-shaped collection." }];
     } else if (serviceFolder.includes("embedded-uri")) {
@@ -120,11 +161,11 @@ if (isUpdate) {
       result = [{ docid: "#d2e3f4", file: "qmd://fixture-qmd/documents/banner.md", line: 1, title: "Banner fixture note", score: 1, snippet: "---\ntitle: Banner fixture\n---\nBanner body text." }];
     } else if (serviceFolder.includes("multi-result")) {
       result = [
-        { docid: "#a1b2c3", file: "qmd://fixture-qmd/documents/cad-notes.md", line: 1, title: "CAD fixture note", score: 1, snippet: "CAD fixture note content." },
-        { docid: "#b2c3d4", file: "qmd://collection-shaped/docs/collection-note.md", line: 3, title: "Collection-shaped fixture note", score: 1, snippet: "alpha beta gamma" },
+        { docid: cadDocid, file: "qmd://fixture-qmd/documents/cad-notes.md", line: 1, title: "CAD fixture note", score: 1, snippet: "CAD fixture note content." },
+        { docid: collectionDocid, file: "qmd://collection-shaped/docs/collection-note.md", line: 3, title: "Collection-shaped fixture note", score: 1, snippet: "alpha beta gamma" },
       ];
     } else {
-      result = [{ docid: "#a1b2c3", file: "qmd://fixture-qmd/documents/cad-notes.md", line: 1, title: "CAD fixture note", score: 1, snippet: "CAD fixture note content." }];
+      result = [{ docid: cadDocid, file: "qmd://fixture-qmd/documents/cad-notes.md", line: 1, title: "CAD fixture note", score: 1, snippet: "CAD fixture note content." }];
     }
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
