@@ -291,10 +291,12 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
       continue;
     }
 
-    // Explicit search root: an implicit-cwd search is environment-sensitive
-    // (first Linux CI run: rg 14.1.1 walked zero bytes with no path operand
-    // while an explicit "." matched). "." keeps rg's rendered paths
-    // endpoint-relative; the "./" prefix is stripped at both intakes below.
+    // Explicit search root: with no path operand rg searches stdin instead
+    // of the cwd whenever stdin is not a tty (ISSUE-013 root cause,
+    // confirmed on the ali repro host: spawned rg read an empty pipe and
+    // exited 1 with zero traversal; tty and /dev/null stdin walk the cwd).
+    // "." keeps rg's rendered paths endpoint-relative; the "./" prefix is
+    // stripped at both intakes below.
     const result = spawnSync(command[0]!, [...command.slice(1), ...rgToolArgs(parsed), "."], {
       cwd: endpoint.folder,
       encoding: "utf8",
