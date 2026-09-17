@@ -135,7 +135,7 @@ Endpoint commands:
 | `ukp search` | Indexed search through the endpoint's provider (QMD today); `--recursive` expands endpoints explicitly declared as dependencies (authority/context). Results hand off via `ukp://` references. |
 | `ukp read` | Reads an endpoint-scoped resource — exact path, `ukp://` URI, or `docid` handoff key. |
 | `ukp nav` | Markdown outline of an endpoint (`--depth`, respects `.gitignore`); on by default, configurable via `[capabilities.nav]`. |
-| `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; results become `read`-ready `ukp://` references. A missing rg binary degrades to a skip, never a fault. |
+| `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; results become `read`-ready `ukp://` references. A missing rg binary skips the endpoint with a warning (a single-endpoint run exits non-zero). |
 | `ukp propose` | Submits an idempotent change proposal (suggestion box — the owner decides what happens next). Created/unchanged/updated; the revision bumps only on `updated`. |
 
 Registry commands:
@@ -204,5 +204,6 @@ and the hardening posture — lives in the
   SSH/HTTPS, the host door, Caddy and Tailscale fronting, the certificate
   pinning lifecycle, and the hardening posture.
 - [Contributing](https://github.com/CatheadOwl/ukp/blob/main/CONTRIBUTING.md) — development setup and release packaging.
+- [Changelog](https://github.com/CatheadOwl/ukp/blob/main/CHANGELOG.md) — what changed per release.
 - Repository: https://github.com/CatheadOwl/ukp ·
   Issues: https://github.com/CatheadOwl/ukp/issues
