@@ -19,6 +19,7 @@ import {
   renderServiceGuide,
   renderServiceQmdGuide,
   renderClientGuide,
+  renderRemoteGuide,
   renderProposeGuide,
   renderProposeHelp,
   renderNavHelp,
@@ -364,6 +365,21 @@ describe("CLI bootstrap", () => {
     expect(guide).not.toContain("-n 3 --format json");
     expect(guide).not.toContain("short-name");
     expect(guide).not.toContain("<searchable-folder>");
+  });
+
+  test("guide remote covers host door setup, expected-name assertions, and transports", () => {
+    const output: string[] = [];
+    expect(renderRemoteGuide()).toContain("UKP Remote quickstart");
+    expect(renderGuideHelp()).toContain("remote");
+    expect(renderHelp()).toContain("ukp guide remote");
+    expect(runCli(["guide", "remote"], (message) => output.push(message))).toBe(0);
+    const guide = output.join("\n");
+    expect(guide).toContain("ukp serve --allow-anonymous");
+    expect(guide).toContain("ukp register --url ssh://<host>");
+    expect(guide).toContain("UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls");
+    expect(guide).toContain("ukp register --url https://<ip>:8570 --endpoint <name> --token <token>");
+    expect(guide).toContain("expected-name assertion, not an alias");
+    expect(guide).toContain("The current CLI does not install or autostart a remote door for you.");
   });
 
   test("guide shows help when -h/--help follows a topic or subtopic", () => {
@@ -744,13 +760,13 @@ describe("CLI bootstrap", () => {
   });
 
   test("guide help lists the topics and subtopics", () => {
-    expect(renderGuideHelp()).toContain("guide topic: service | service qmd | client | propose");
+    expect(renderGuideHelp()).toContain("guide topic: service | service qmd | client | remote | propose");
   });
 
   test("guide rejects unknown topics with recovery guidance", () => {
     const errors: string[] = [];
-    expect(runCli(["guide", "remote"], undefined, (message) => errors.push(message))).toBe(2);
-    expect(errors.join("\n")).toContain("unknown guide topic 'remote'");
+    expect(runCli(["guide", "unknown-topic"], undefined, (message) => errors.push(message))).toBe(2);
+    expect(errors.join("\n")).toContain("unknown guide topic 'unknown-topic'");
     expect(errors.join("\n")).toContain("Run 'ukp guide --help' for details.");
   });
 

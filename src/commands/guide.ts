@@ -24,6 +24,7 @@ export const GUIDE_TOPICS: ReadonlyArray<readonly [topic: string, summary: strin
   ["service", "first Service setup with provider-free nav/read/rg baseline"],
   ["service qmd", "provider setup for the default QMD provider"],
   ["client", "use registered Services by default from a workspace; set your default scope here"],
+  ["remote", "serve and consume remote endpoints with a host door, ssh, or TLS"],
   ["propose", "submit idempotent change proposals to a Service"],
 ];
 
@@ -37,7 +38,7 @@ export const GUIDE_SPEC: UkpCommandSpec = {
   description: "Show short operational guides.",
   usage: "<topic> [subtopic]",
   arguments: [
-    { name: "topic", required: true, help: "guide topic: service | service qmd | client | propose" },
+    { name: "topic", required: true, help: "guide topic: service | service qmd | client | remote | propose" },
     { name: "subtopic", help: "provider subtopic for a topic, e.g. 'qmd' as in 'ukp guide service qmd'" },
   ],
   strictArguments: true,
@@ -71,15 +72,17 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
       return { exitCode: 0, stdout: renderServiceGuide(), stderr: "" };
     }
     if (subtopic) {
-      throw new KitUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client, propose`);
+      throw new KitUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client, remote, propose`);
     }
     switch (topic) {
       case "client":
         return { exitCode: 0, stdout: renderClientGuide(), stderr: "" };
+      case "remote":
+        return { exitCode: 0, stdout: renderRemoteGuide(), stderr: "" };
       case "propose":
         return { exitCode: 0, stdout: renderProposeGuide(), stderr: "" };
       default:
-        throw new KitUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client, propose`);
+        throw new KitUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client, remote, propose`);
     }
   } catch (error) {
     if (error instanceof HelpRequestError) {
@@ -110,6 +113,10 @@ export function renderServiceQmdGuide(): string {
 
 export function renderClientGuide(): string {
   return readGuideContent("client.txt");
+}
+
+export function renderRemoteGuide(): string {
+  return readGuideContent("remote.txt");
 }
 
 export function renderProposeGuide(): string {

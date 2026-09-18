@@ -160,6 +160,18 @@ describe("ukp register --url <door> (W7 import)", () => {
     expect(bindings[0]!.url).toBe(`${info.url}/notes`);
   });
 
+  test("--endpoint imports exactly one host-door endpoint and refuses mismatched path assertions", async () => {
+    const { info } = startDoor();
+    const result = await asResult(executeRegisterCommand(["--url", info.url, "--endpoint", "notes"], context));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("imported: notes");
+    expect(readRegistry(registryPath).map((binding) => binding.name)).toEqual(["notes"]);
+
+    const mismatch = await asResult(executeRegisterCommand(["--url", `${info.url}/archive`, "--endpoint", "notes"], context));
+    expect(mismatch.exitCode).toBe(2);
+    expect(mismatch.stderr).toContain("remote url selects endpoint 'archive', but --endpoint asserts 'notes'");
+  });
+
   test("--select narrows; unknown names are usage errors with the door roster", async () => {
     const { info } = startDoor();
     const narrowed = await asResult(executeRegisterCommand(["--url", info.url, "--select", "notes"], context));

@@ -1,0 +1,55 @@
+UKP Remote quickstart
+
+Goal: expose registered Services from one machine and consume them from another with the same endpoint commands: search, read, nav, rg, and propose when declared.
+
+Current model:
+- Remote access uses a running ukp serve process on the host machine.
+- Prefer host door mode: run ukp serve without --endpoint to expose every local endpoint behind one port.
+- The door reads the host Registry fresh on each request, so newly registered local endpoints appear without restarting the door.
+- Endpoint names still come from the host Service Manifest or discovery document. Client-side --endpoint during register is an expected-name assertion, not an alias.
+
+Owner path over SSH:
+1. On the host machine, keep a loopback host door running
+   ukp serve --allow-anonymous
+
+2. On the consuming machine, import the door
+   ukp register --url ssh://<host>
+
+3. Use the imported endpoints by name
+   ukp list
+   ukp read --endpoint <name> notes/x.md
+   ukp rg "keyword" --endpoint <name>
+
+LAN HTTPS path:
+1. On the host machine, run a tokened TLS door
+   UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls
+
+2. On the consuming machine, import either the whole door or one endpoint
+   ukp register --url https://<ip>:8570 --token <token>
+   ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
+
+3. Use the imported endpoint normally
+   ukp nav --endpoint <name>
+   ukp read --endpoint <name> notes/x.md
+   ukp rg "keyword" --endpoint <name>
+
+Single endpoint mode:
+Use this when you deliberately want to expose only one endpoint instead of the whole host Registry.
+   UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --tls
+   ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
+
+Name and identity:
+- register --url fetches /.well-known/ukp.json and registers the name declared there.
+- --endpoint <name> on register asserts the expected name; if discovery declares a different name, registration fails.
+- A host door can import everything, --select a comma-separated subset, or --endpoint exactly one endpoint.
+- Self-signed HTTPS certificates are pinned on first registration; compare the pinned fingerprint with the serve banner on untrusted networks.
+- Non-loopback plain http is refused. Use https, ssh://, or loopback http for local testing.
+
+Operational note:
+- For a real host, keep ukp serve under your normal process manager, for example systemd, Task Scheduler, or a terminal multiplexer.
+- The current CLI does not install or autostart a remote door for you.
+
+Remember:
+- Local registration makes a folder addressable on the host.
+- Remote registration imports host-discovered endpoint bindings into the consumer Registry.
+- Client Config still stores endpoint names only; after remote import, guide client works the same way as local endpoints.
