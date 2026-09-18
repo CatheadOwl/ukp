@@ -29,8 +29,20 @@ Model:
 4. Dangling defaults warn instead of failing silently
    A default_endpoints entry not registered yet is reported as a warning by inspect, and commands still run on the resolvable ones.
 
+5. Pin your own ukp:// references (optional; powers rename recovery)
+   A pin is a same-line HTML comment carrying the target's content hash:
+   see ukp://endpoint-a/docs/foo.md   <!-- ukp-pin: sha256-<64 lowercase hex> -->
+   Compute one from the file bytes with CRLF line endings normalized to LF:
+   sed 's/\r$//' docs/foo.md | sha256sum   (prefix the digest with sha256-)
+   When 'ukp read' recovers a moved target, the pin is verified against the
+   recovered file; a mismatch refuses. Boundary: without git history only
+   same-name moves are recoverable (search re-anchor); a true rename in a
+   non-git folder stays resource-missing.
+
 Remember:
 - Client path consumes Services; provider path (ukp guide service) creates them.
 - Client Config lists names, not paths or provider details.
 - Explicit selectors always beat Client Config defaults.
 - Register does not edit Client Config, and Client Config does not register endpoints.
+- Search run artifacts live outside your folders: %LOCALAPPDATA%\ukp\artifacts
+  on Windows, ~/.cache/ukp/artifacts (or $XDG_CACHE_HOME) elsewhere.

@@ -89,7 +89,7 @@ export const READ_SPEC: UkpCommandSpec = {
       flags: "--from <route>",
       help: "resolve a document-relative reference (../x.md, bare filename) against this source document's endpoint-relative route",
     },
-    { flags: "--pin <sha256-hex>", help: "verify rename recovery against this ukp-pin content hash (sha256-<64 hex>)" },
+    { flags: "--pin <sha256-hex>", help: "verify rename recovery against this ukp-pin content hash (sha256-<64 hex>; how to compute and embed one: 'ukp guide client')" },
     { flags: "--format <mode>", help: "output mode: 'json' emits a structured failure envelope (body still goes to stdout); default is human output" },
   ],
   helpSuffix: [
@@ -266,7 +266,7 @@ function parseReadWithFormat(args: readonly string[]): { request: ReadRequest; f
   if (parsed.options.pin !== undefined && !isValidPin(parsed.options.pin)) {
     // Q7-narrowed SRI form only: no multi-algorithm negotiation, no upper-case
     // hex tolerance — the pin is machine-written, not hand-typed.
-    throw new KitUsageError("--pin must use sha256-<64 lowercase hex> (the ukp-pin form emitted next to ukp:// references)");
+    throw new KitUsageError("--pin must use sha256-<64 lowercase hex> (the ukp-pin form embedded next to ukp:// references — 'ukp guide client' shows how to compute one)");
   }
   if (parsed.options.format !== undefined && parsed.options.format !== "json") {
     throw new KitUsageError("--format only supports 'json'");

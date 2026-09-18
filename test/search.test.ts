@@ -336,6 +336,36 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("(no matches)");
+      // An empty result is indistinguishable from an unconfigured provider to
+      // a first-run caller — the setup hint fires on the parsed zero hits
+      // (the fixture's JSON `[]` stdout is non-empty, so stdout size is the
+      // wrong signal).
+      expect(result.stderr).toContain("ukp guide service qmd");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("json envelope carries the setup hint for parsed zero hits", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-search-empty-json-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "no-match-service", "empty");
+    registerAt(registryPath, "empty", service);
+    try {
+      const result = executeHumanSearch(parseSearchArgs([
+        "fixture-cad-search-token",
+        "-c",
+        "empty",
+        "--json",
+      ]), {
+        currentDirectory: root,
+        registryPath,
+        qmdCommand: [nodeExecutable, fixtureExecutable],
+      });
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(result.stdout);
+      expect(envelope.endpoints[0].status).toBe("no_matches");
+      expect(envelope.warnings.join("\n")).toContain("ukp guide service qmd");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

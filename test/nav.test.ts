@@ -698,7 +698,7 @@ describe("nav command surface", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`endpoint: kb (root: ., depth: ${NAV_DEFAULT_DEPTH})`);
       expect(result.stdout).toContain("README.md | Root kb");
-      expect(result.stdout).toContain("[truncated: 3] docs");
+      expect(result.stdout).toContain("docs/ (+3 .md)");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -371,6 +371,25 @@ function renderTraversalProvenance(traversal: TraversalProvenance | undefined): 
   return lines;
 }
 
+/** Zero hits by parsed content, not stdout size: qmd's JSON mode prints a
+ * non-empty `[]` for zero results. `null` marks non-array / unparseable
+ * provider-native output, which keeps the fallback render path `succeeded`. */
+function parseJsonArrayHitCount(providerOutput: string): number | null {
+  try {
+    const value: unknown = JSON.parse(providerOutput);
+    return Array.isArray(value) ? value.length : null;
+  } catch {
+    return null;
+  }
+}
+
+/** An empty provider result is indistinguishable from an unconfigured provider
+ * to a first-run caller — both classification sites surface the setup path
+ * (search's own contract stays: no matches is a result, not a failure, exit 0). */
+function noMatchesSetupHint(endpointName: string): string {
+  return `endpoint '${endpointName}' returned no matches; if the QMD provider has not been set up for this Service yet, see 'ukp guide service qmd'`;
+}
+
 function runHumanMode(
   parsed: ParsedSearch,
   plan: readonly PlannedEndpoint[],
@@ -458,12 +477,10 @@ function runHumanMode(
       outcome.providerErrorDetail = providerError;
       continue;
     }
-    outcome.status = providerOutput ? "succeeded" : "no_matches";
+    const hitCount = parseJsonArrayHitCount(providerOutput);
+    outcome.status = hitCount === 0 || !providerOutput ? "no_matches" : "succeeded";
     if (outcome.status === "no_matches") {
-      // An empty provider result is indistinguishable from an unconfigured
-      // provider to a first-run caller — surface the setup path as guidance
-      // (search's own contract stays: no matches is a result, not a failure).
-      warnings.push(`endpoint '${endpoint.name}' returned no matches; if the QMD provider has not been set up for this Service yet, see 'ukp guide service qmd'`);
+      warnings.push(noMatchesSetupHint(endpoint.name));
     }
   }
   return {
@@ -1132,6 +1149,7 @@ function runJsonMode(
 
       succeeded = true;
       outcome.status = status;
+      if (status === "no_matches") warnings.push(noMatchesSetupHint(endpoint.name));
       let hasReferenceSidecar = false;
       try {
         writeQmdReferenceSidecar(endpoint.name, endpoint.folder!, artifact, referencesArtifact);

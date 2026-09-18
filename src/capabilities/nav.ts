@@ -57,7 +57,7 @@ export function resolveNavVisibility(capability: ManifestCapability): NavVisibil
 }
 
 /** Safety cap on collected route entries; the recursive truncation count
- * still walks everything so `[truncated: N]` totals stay exact. */
+ * still walks everything so the `(+N .md)` totals stay exact. */
 export const NAV_MAX_ENTRIES = 2000;
 
 /** Budget on per-entry description reads (ADR 0018): the expensive
@@ -614,7 +614,9 @@ export function renderNavHuman(envelope: NavEnvelope): string {
   }
   for (const entry of envelope.entries) {
     if (entry.kind === "folder") {
-      const line = `[truncated: ${entry.omittedMarkdownCount}] ${entry.path}`;
+      // Self-explanatory unexpanded form: an unexpanded folder plus the exact
+      // recursive .md count inside (never "truncated" — nothing was cut).
+      const line = `${entry.path}/ (+${entry.omittedMarkdownCount} .md)`;
       lines.push(entry.description ? `${line} | ${entry.description}` : line);
     } else if (entry.descriptionOmitted === "budget") {
       lines.push(`${entry.path} | (description omitted: budget reached)`);

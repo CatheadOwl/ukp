@@ -2,6 +2,34 @@
 
 All notable public changes to UKP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `ukp search` no longer renders a bare `(no matches)` that is
+  indistinguishable from an unconfigured provider: zero-hit results surface
+  a setup hint (`ukp guide service qmd`) in the human warnings and in the
+  `--json` envelope, and the human surface classifies parsed zero hits as
+  `no_matches` the same way the JSON envelope already did (exit code stays
+  0 — no matches is a result, not a failure).
+- README names the agent JSON flag correctly: `--json` (`ukp read` keeps
+  its `--format json`).
+- `ukp guide client` now teaches the `ukp-pin` convention — how to compute
+  and embed the same-line content-hash comment next to a `ukp://` reference
+  — and states the non-git rename-recovery boundary; `ukp read`'s `--pin`
+  help and pin usage error point there.
+- `ukp guide client` notes where runtime artifacts live
+  (`%LOCALAPPDATA%\ukp\artifacts` on Windows, `~/.cache/ukp/artifacts`
+  elsewhere).
+
+### Changed
+
+- `ukp nav` renders unexpanded folders as `path/ (+N .md)` (self-explanatory
+  count) instead of `[truncated: N] path`.
+- `ukp serve` help drops internal review numbering from its Wire/Auth lines.
+- The npm tarball no longer ships `bun.lock` / `tsconfig.json`
+  (development-repo files with no consumer-runtime role).
+
 ## [0.1.1] - 2026-09-17
 
 ### Changed
