@@ -81,6 +81,16 @@ it does not rewrite provider config for you.
 
 ## Install
 
+Requirements:
+
+- Bun `1.3.14` or newer — npm installs the `ukp` command, but the CLI runs
+  on Bun.
+- QMD on `PATH` only for the QMD-backed capabilities (`search/qmd`,
+  `read/qmd`, `update/qmd`). QMD is an external tool maintained as a
+  separate project; see its own release channel for installation. UKP
+  installs and runs without it — those capabilities report as unavailable
+  until `qmd` is available.
+
 ```bash
 npm install -g @catheadowl/ukp
 ukp --version
@@ -88,15 +98,6 @@ ukp guide service
 ```
 
 One-off execution: `npx @catheadowl/ukp --version` (or `pnpm dlx` / `bunx`).
-
-Requirements:
-
-- Bun `1.3.14` or newer — the CLI runs on Bun.
-- QMD on `PATH` only for the QMD-backed capabilities (`search/qmd`,
-  `read/qmd`, `update/qmd`). QMD is an external tool maintained as a
-  separate project; see its own release channel for installation. UKP
-  installs and runs without it — those capabilities report as unavailable
-  until `qmd` is available.
 
 ## First Run
 
@@ -109,11 +110,12 @@ For a human or agent starting from a folder:
 4. `ukp register` adds the folder to the Host Registry (`~/.ukp/registry.toml`).
 5. `ukp inspect --endpoint <name>` shows the current binding, manifest, and
    provider availability.
-6. `ukp search "<query>" --endpoint <name>` finds matches.
-7. `ukp read --endpoint <name> <reference>` reads a result.
+6. `ukp nav`, `ukp rg`, and `ukp read` give the provider-free baseline.
+7. `ukp search "<query>" --endpoint <name>` finds indexed matches after
+   provider setup.
 
-No QMD installed? Skip step 6 — `nav`, `read`, `rg`, and `propose` work on any
-endpoint without it.
+No QMD installed? Stop at step 6 — `nav`, `read`, `rg`, and `propose` work on
+any endpoint without it.
 
 An agent can carry out the same flow on your behalf.
 
@@ -144,7 +146,7 @@ Registry commands:
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings. `ukp register --url <url>` registers a remote endpoint — the name comes from its discovery document (asserted, not chosen), the identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it (`--select` narrows; re-running refreshes idempotently). |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings. `ukp register --url <url>` registers a remote endpoint — the name comes from its discovery document (asserted, not chosen); `--endpoint <name>` is an expected-name assertion, not an alias. Identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it (`--endpoint` imports one; `--select` narrows; re-running refreshes idempotently). |
 | `ukp list` | Lists registered endpoints with their declared capabilities. Door drift shows as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture. |
 
 Operations commands:
@@ -164,6 +166,7 @@ Help commands:
 | `ukp guide service` | Provider-agnostic Service setup path. |
 | `ukp guide service qmd` | Provider-owned setup for the QMD provider. |
 | `ukp guide client` | How a workspace uses registered Services by default. |
+| `ukp guide remote` | How to serve and consume endpoints across machines. |
 | `ukp guide propose` | The propose quickstart. |
 
 ## Remote in 60 seconds
@@ -180,7 +183,7 @@ ukp read --endpoint <name> notes/x.md                   # just works, like local
 
 # Native TLS on a bare IP — self-signed, pinned automatically at registration:
 UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 --tls
-ukp register --url https://<ip>:8570 --token <token>
+ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
 ```
 
 Remote endpoints take the same commands as local ones — search, read, nav,

@@ -147,6 +147,12 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
   const normalized = normalizeFileNativeFlatKeys(withoutLegacyGet, (message) => {
     throw new ManifestError(message);
   });
+  if (isRecord(normalized) && !Object.hasOwn(normalized, "capabilities")) {
+    throw new ManifestError(
+      "Service Manifest schema is invalid: missing required [capabilities] table; "
+      + "use an empty [capabilities] table for the provider-free read/nav/rg baseline",
+    );
+  }
   const result = manifestSchema.safeParse(normalized);
   if (!result.success) {
     throw new ManifestError(`Service Manifest schema is invalid: ${result.error.message}`);

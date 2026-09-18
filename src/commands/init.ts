@@ -54,17 +54,17 @@ export const INIT_SERVICE_SPEC: UkpCommandSpec = {
   ],
   strictArguments: true,
   helpSuffix: [
-    "Creates .ukp/service.toml with the current minimal search provider:",
-    "  [capabilities.search]",
-    "  provider = \"qmd\"",
+    "Creates .ukp/service.toml with the provider-free Service baseline:",
+    "  [capabilities]",
     "Optional:",
+    "  ukp guide service qmd   add QMD-backed indexed search/update setup",
     "  --dependency <name>   declare another endpoint as a contextual dependency entry",
     "  each --dependency emits [[dependencies]] with endpoint + kind = \"context\"",
     "",
     "Next:",
-    "  ukp guide service qmd",
     "  ukp diagnose",
     "  ukp register",
+    "  ukp nav / ukp read / ukp rg",
     "",
   ].join("\n"),
 };
@@ -134,11 +134,7 @@ function renderServiceManifest(options: { name?: string; description?: string; d
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(options.description === undefined ? {} : { description: options.description }),
     ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
-    capabilities: {
-      search: {
-        provider: "qmd",
-      },
-    },
+    capabilities: {},
   });
   return encoded.endsWith("\n") ? encoded : `${encoded}\n`;
 }
@@ -191,8 +187,9 @@ function executeInitServiceCommand(args: readonly string[], context: InitCommand
         `name_source: ${result.nameSource}`,
         `manifest: ${result.manifestPath}`,
         `location: ${result.folder}`,
-        "capability: search",
-        "provider: qmd",
+        "declared_capabilities: -",
+        "derived_capabilities: read, nav",
+        "provider_free: rg (if rg is installed)",
         // Folder-existence probe only (no provider state read): an existing
         // provider index means collections may already be registered — route
         // to the provider-scoped topic instead of naming provider commands
@@ -200,9 +197,9 @@ function executeInitServiceCommand(args: readonly string[], context: InitCommand
         ...(existsSync(join(result.folder, ".qmd"))
           ? ["note: existing provider index detected (.qmd/); align collection naming before adding new ones (see 'ukp guide service qmd')"]
           : []),
-        "next: ukp guide service qmd",
         "next: ukp diagnose",
         "next: ukp register",
+        "optional: ukp guide service qmd",
       ].join("\n"),
       stderr: "",
     };
