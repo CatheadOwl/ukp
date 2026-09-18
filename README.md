@@ -70,7 +70,8 @@ predictable scope, and a single command surface. Use UKP when:
   a host door — when you want it reachable from other machines.
 - Want a read-only endpoint? Declare zero capabilities — an empty
   `[capabilities]` table still registers one (derived `read`/`nav` only).
-- Give agents JSON output (`--format json`), reference sidecars, and
+- Give agents JSON output (`--json`; `ukp read` uses `--format json`),
+  reference sidecars, and
   `ukp://` handoff keys when they need machine-readable results.
 
 UKP owns endpoint names, Registry bindings, Client scope, capability

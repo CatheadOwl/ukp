@@ -525,7 +525,7 @@ describe("remote nav (ukp_remote W6)", () => {
     const rootNav = await asResult(executeNavCommand(["--endpoint", "serve-fixture"], context));
     expect(rootNav.exitCode).toBe(0);
     expect(rootNav.stdout).toContain("endpoint: serve-fixture (root: ., depth: 0)");
-    expect(rootNav.stdout).toContain("[truncated: 1] documents");
+    expect(rootNav.stdout).toContain("documents/ (+1 .md)");
     expect(rootNav.stderr).not.toContain("not yet remote");
 
     const deep = await asResult(executeNavCommand(["--endpoint", "serve-fixture", "--depth", "1"], context));
