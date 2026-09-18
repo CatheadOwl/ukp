@@ -271,6 +271,25 @@ describe("ukp register --url", () => {
     expect(binding?.instance_uid).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  test("--endpoint is an expected-name assertion for remote registration", async () => {
+    const { info } = startRemote();
+    const mismatch = await asResult(executeRegisterCommand(["--url", info.url, "--endpoint", "wrong-name"], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(mismatch.exitCode).toBe(1);
+    expect(mismatch.stderr).toContain("expected endpoint 'wrong-name', but discovery document declares 'serve-fixture'");
+    expect(readRegistry(registryPath).length).toBe(0);
+
+    const asserted = await asResult(executeRegisterCommand(["--url", info.url, "--endpoint", "serve-fixture"], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(asserted.exitCode).toBe(0);
+    expect(asserted.stdout).toContain("registered (remote): serve-fixture");
+    expect(readRegistry(registryPath).find((b) => b.name === "serve-fixture")?.url).toBe(info.url);
+  });
+
   test("refuses plain http on a non-loopback host and reports unreachable services", async () => {
     const refused = await asResult(executeRegisterCommand(["--url", "http://192.168.1.9:8570"], {
       currentDirectory: root,

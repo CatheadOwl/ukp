@@ -57,6 +57,7 @@ export const REGISTER_SPEC: UkpCommandSpec = {
   strictArguments: true,
   options: [
     { flags: "--url <url>", help: "register a remote ukp-serve endpoint (https, ssh://host[:port][/endpoint], or loopback http); a host door url (its document declares scope:\"host\") imports every endpoint behind the door — binding urls gain the endpoint-name path (ssh://ali/notes)" },
+    { flags: "--endpoint <name>", help: "assert the endpoint name being registered (remote name still comes from discovery; with a host door this imports only that endpoint)" },
     { flags: "--select <names>", help: "with a host door url: import only the named endpoints (comma-separated); a name not on the door is a usage error" },
     { flags: "--token <token>", help: "store the bearer token in the binding (plaintext, 0600 registry file); with a host door it is copied into every imported binding; UKP_ENDPOINT_<NAME>_TOKEN overrides it at call time" },
   ],
@@ -71,7 +72,8 @@ export const REGISTER_SPEC: UkpCommandSpec = {
     "  The Host Registry binds the Service Manifest's effective name to this",
     "  folder's location; 'ukp list' shows the resulting bindings.",
     "  With --url, the name and instance identity come from the remote",
-    "  discovery document (/.well-known/ukp.json) and are pinned TOFU-style;",
+    "  discovery document (/.well-known/ukp.json) and are pinned TOFU-style.",
+    "  Use --endpoint <name> as an expected-name assertion, not as an alias;",
     "  bearer-token services read UKP_ENDPOINT_<NAME>_TOKEN at call time.",
     "",
     "Host doors (ADR-REM-004):",
@@ -146,14 +148,21 @@ export function executeRegisterCommand(
   }
 
   try {
-    const parsed = parseKitArgs<{ url?: string; token?: string; select?: string }>(REGISTER_SPEC, args);
+    const parsed = parseKitArgs<{ url?: string; token?: string; select?: string; endpoint?: string }>(REGISTER_SPEC, args);
+    const expectedName = parsed.options.endpoint;
+    if (expectedName !== undefined && !ENDPOINT_NAME.test(expectedName)) {
+      throw new KitUsageError("--endpoint requires a valid endpoint name");
+    }
     if (parsed.options.url !== undefined) {
-      return executeRegisterRemote(parsed.options.url, parsed.options.token, parsed.options.select, context);
+      return executeRegisterRemote(parsed.options.url, parsed.options.token, parsed.options.select, expectedName, context);
     }
     if (parsed.options.select !== undefined) {
       throw new KitUsageError("--select requires --url <door url>");
     }
     const report = diagnoseService(context.currentDirectory, context.resolveProvider);
+    if (expectedName !== undefined && expectedName !== report.service.effectiveName) {
+      throw new Error(`expected endpoint '${expectedName}', but this Service effective name is '${report.service.effectiveName}'`);
+    }
     registerAt(context.registryPath, report.service.effectiveName, report.service.folder);
     const lines = [
       `registered: ${report.service.effectiveName}`,
@@ -261,6 +270,7 @@ async function executeRegisterRemote(
   url: string,
   token: string | undefined,
   select: string | undefined,
+  expectedName: string | undefined,
   context: InventoryCommandContext,
 ): Promise<InventoryCommandResult> {
   const selected = select === undefined
@@ -268,6 +278,9 @@ async function executeRegisterRemote(
     : select.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
   if (selected !== undefined && selected.length === 0) {
     throw new KitUsageError("--select requires at least one endpoint name");
+  }
+  if (selected !== undefined && expectedName !== undefined) {
+    throw new KitUsageError("--endpoint and --select cannot be used together");
   }
 
   let pool: RemoteTransportPool | undefined;
@@ -296,11 +309,22 @@ async function executeRegisterRemote(
       const rosterNames = roster.map((endpoint) => endpoint.name).join(", ");
       let targets;
       if (parts.endpointName !== undefined) {
+        if (expectedName !== undefined && expectedName !== parts.endpointName) {
+          throw new KitUsageError(
+            `remote url selects endpoint '${parts.endpointName}', but --endpoint asserts '${expectedName}'`,
+          );
+        }
         // A path segment addresses ONE endpoint through the door (H-rehearsal):
         // membership is checked against the live roster, unknown names say so.
         const found = roster.find((endpoint) => endpoint.name === parts.endpointName);
         if (found === undefined) {
           throw new Error(`no such endpoint '${parts.endpointName}' on door ${parts.origin} (available: ${rosterNames})`);
+        }
+        targets = [found];
+      } else if (expectedName !== undefined) {
+        const found = roster.find((endpoint) => endpoint.name === expectedName);
+        if (found === undefined) {
+          throw new Error(`no such endpoint '${expectedName}' on door ${parts.origin} (available: ${rosterNames})`);
         }
         targets = [found];
       } else if (selected !== undefined) {
@@ -347,6 +371,9 @@ async function executeRegisterRemote(
     const name = wellKnown.discovery.doc.name;
     if (!ENDPOINT_NAME.test(name)) {
       throw new Error(`discovery document declares an invalid endpoint name '${name}'`);
+    }
+    if (expectedName !== undefined && expectedName !== name) {
+      throw new Error(`expected endpoint '${expectedName}', but discovery document declares '${name}'`);
     }
     if (wellKnown.discovery.doc.instance_uid === undefined || typeof wellKnown.discovery.doc.instance_uid !== "string") {
       throw new Error("discovery document carries no instance_uid; the service must run a ukp-remote v1 server");

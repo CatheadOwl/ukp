@@ -39,7 +39,7 @@ remote, no flags added:
 ```bash
 UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 --tls
 # consumer machine (self-signed is TOFU-pinned at registration):
-ukp register --url https://<ip>:8570 --token <token>
+ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
 ukp read --endpoint <name> notes/x.md                # just works, like local
 ```
 
@@ -80,7 +80,9 @@ take. When the door grows, `ukp list` says so on stderr (`1 unimported
 endpoint(s): …`) — importing it stays your call. The consumer variant of
 the same door is public: `ukp serve --host 0.0.0.0 --tls-cert …` with
 `UKP_SERVE_TOKEN`, imported with `ukp register --url https://<ip>:8570
---token <t>` (token and pinned certificate copied into each binding).
+--token <t>` for the whole door, or `ukp register --url https://<ip>:8570
+--endpoint <name> --token <t>` for one asserted endpoint (token and pinned
+certificate copied into each binding).
 
 ## Behind Caddy (public domain)
 
