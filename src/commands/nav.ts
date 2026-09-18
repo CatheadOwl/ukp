@@ -125,7 +125,7 @@ export function executeNavCommand(
     if (error instanceof HelpRequestError) {
       return { exitCode: 0, stdout: renderNavHelp(), stderr: "" };
     }
-    if (error instanceof KitUsageError) {
+    if (error instanceof KitUsageError || error instanceof NavUsageError) {
       return { exitCode: 2, stdout: "", stderr: renderNavUsageError(error.message) };
     }
     throw error;

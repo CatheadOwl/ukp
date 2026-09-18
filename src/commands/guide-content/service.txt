@@ -1,6 +1,6 @@
 UKP Service quickstart
 
-Goal: make a folder a named Knowledge Service, register it, inspect the route, search it, and read an endpoint-scoped reference.
+Goal: make a folder a named Knowledge Service, register it, inspect the route, and use the provider-free read/nav/rg baseline. Add QMD only when you want indexed search/update.
 Run the setup commands from the Service folder root.
 
 Fast path:
@@ -8,32 +8,34 @@ Fast path:
    ukp init service --name your-endpoint-name
    Optional: add --description "Short boundary note"
 
-2. Make content searchable through the provider
-   ukp guide service qmd
-
-3. Validate and register the Service
+2. Validate and register the Service
    ukp diagnose
    ukp register
    ukp list
 
-4. Inspect, search, then read
+3. Inspect, navigate, grep, then read
    ukp inspect --endpoint your-endpoint-name
+   ukp nav --endpoint your-endpoint-name --depth 2
+   ukp rg "keyword" --endpoint your-endpoint-name --limit 3
+   ukp read --endpoint your-endpoint-name docs/example.md
+
+4. Optional: add indexed search through the provider
+   ukp guide service qmd
    ukp search "keyword" --endpoint your-endpoint-name --limit 3
-   ukp read --endpoint your-endpoint-name <reference>
 
 Key boundary:
 - init/register makes the folder addressable as a Service.
-- provider setup makes the Service's content searchable.
-- Both are needed for an end-to-end search path.
+- read and nav are derived defaults of every local Service; rg is provider-free when the rg binary is installed.
+- QMD provider setup makes indexed search/update available. It is not required for the baseline Service path.
 
 Model:
 - A UKP Service is a knowledge endpoint that declares capabilities.
 - Four separate journeys:
-  - provider path: init service + register make a folder an addressable Service;
-  - content-searchable: provider setup decides what content is indexed (provider-owned; see 'ukp guide service qmd');
+  - provider-free Service path: init service + diagnose + register make a folder addressable, then nav/read/rg use endpoint files directly;
+  - indexed-search path: provider setup decides what content is indexed (provider-owned; see 'ukp guide service qmd');
   - declared dependencies: a Service Manifest can declare [[dependencies]] entries with endpoint + kind; this is declarative only;
   - client path: a workspace .ukp/client.toml default scope lets you use Services by default instead of naming one each call.
-- Registered as a Service does not mean its content is searchable; both steps are needed.
+- Registered as a Service does not mean indexed search is configured; use rg for the baseline lexical path or add provider setup for ukp search.
 - QMD is the current default search/update provider, not the definition of a Service.
 - Provider setup is provider-owned: the provider owns collection, index, ranking, and config.
 
@@ -46,15 +48,10 @@ Details:
    ukp init service --name your-endpoint-name
    Optional: add --description "Short boundary note"
    Name must be a lowercase endpoint slug, for example: cad-notes
-   This writes .ukp/service.toml with the current minimal provider declaration:
-   [capabilities.search]
-   provider = "qmd"
+   This writes .ukp/service.toml with the provider-free baseline:
+   [capabilities]
 
-3. Make content searchable through the provider (provider-owned)
-   Provider setup is not a UKP step. For the default QMD provider:
-   ukp guide service qmd
-   That topic points exact flags and arguments to the relevant QMD subcommand help.
-
+3. Optional: declare dependencies
    If this Service depends on other externally consumed knowledge endpoints,
    declare them in the Manifest with repeated --dependency <name> entries;
    each entry becomes [[dependencies]] with kind = "context" and can be edited later.
@@ -64,31 +61,39 @@ Details:
    ukp register
    ukp list
    At this point the folder is a registered Service: addressable and callable.
-   Its content is searchable only because step 3 configured the provider.
+   Its file-native baseline is available through read/nav, and rg works when rg is installed.
 
 5. Inspect the effective route
    ukp inspect --endpoint your-endpoint-name
    Use inspect when you need to explain scope, Registry binding, Manifest capability, or provider availability.
 
-6. Search
+6. Explore without a provider
+   ukp nav --endpoint your-endpoint-name --depth 2
+   ukp rg "keyword" --endpoint your-endpoint-name --limit 3
+   rg results carry ukp:// references that can be read directly.
+
+7. Add indexed search when you need provider-backed search/update
+   Provider setup is not a UKP baseline step. For the default QMD provider:
+   ukp guide service qmd
+   That topic points exact flags and arguments to the relevant QMD subcommand help.
    ukp search "keyword" --endpoint your-endpoint-name --limit 3
    ukp search "keyword" --endpoint your-endpoint-name --limit 3 --json
    ukp search "keyword" --endpoint your-endpoint-name --recursive
    In a workspace with .ukp/client.toml default_endpoints, you can omit --endpoint for search.
 
-7. Read an endpoint-scoped reference
+8. Read an endpoint-scoped reference
    Every registered local Service has the derived read/file baseline; no Manifest get entry is needed.
    ukp read --endpoint your-endpoint-name docs/example.md
    ukp read --endpoint your-endpoint-name docs/example.md --lines 10:20
-   Search results carry copyable handoff lines you can paste straight into read:
+   rg and search results carry copyable handoff lines you can paste straight into read:
    - a ukp://<endpoint>/<path> URI is the durable, endpoint-scoped reference;
    - a bare docid is the provider's short-lived document id (QMD handoff key).
    On a QMD-backed Service (including observe mode), provider content is read with
    'ukp read --endpoint <name> <docid handoff key or qmd:// reference>'; do not
    manually convert qmd:// provider locations into Service-folder paths.
 
-8. Update provider-owned state
-   This is optional for the first search path. Add this capability to .ukp/service.toml when provider maintenance should be exposed:
+9. Update provider-owned state
+   This is optional and only applies after a provider-backed maintenance capability is declared. Add this capability to .ukp/service.toml when provider maintenance should be exposed:
    [capabilities.update]
    provider = "qmd"
    ukp update --endpoint your-endpoint-name
@@ -100,13 +105,13 @@ Advanced:
 - ukp init service --dependency <name> emits a context dependency; edit the Manifest later for authority, implementation, evidence, or a reason.
 - Dependencies do not change ordinary search/read. Only explicit search --recursive traverses direct authority/context dependencies.
 - Workspace defaults belong to the client path; run 'ukp guide client' from the consuming workspace.
-- update is a provider-owned maintenance route, not part of the first search smoke.
+- QMD-backed search/update is a provider-owned enhancement, not part of the provider-free baseline smoke.
 
 Remember:
 - Endpoint name identifies the Service.
 - Host Registry stores endpoint name -> Service folder path.
 - Provider collection decides what content is indexed; folder-external authoritative knowledge should be modeled as its own endpoint when UKP ownership matters.
-- Register makes the folder addressable; it does not make content searchable (provider indexing does).
+- Register makes the folder addressable; it does not configure indexed search (provider indexing does).
 - Register does not edit .ukp/client.toml or provider configuration.
 - Declarative dependencies live in the Service Manifest as [[dependencies]] entries; they do not change ordinary search/read, while explicit search --recursive traverses direct authority/context dependencies.
 - Future providers should add provider adapters instead of turning provider internals into UKP rules.

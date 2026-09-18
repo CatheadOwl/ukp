@@ -6,6 +6,10 @@ All notable public changes to UKP will be documented in this file.
 
 ### Fixed
 
+- `ukp register --url` now accepts `--endpoint <name>` as an expected-name
+  assertion. The remote name still comes from discovery, but registration can
+  now fail loudly when the command and the served endpoint disagree; on a host
+  door, `--endpoint` imports exactly that one endpoint.
 - `ukp search` empty results now surface a setup hint (`ukp guide service
   qmd`) in both human and `--json` output — a bare `(no matches)` was
   indistinguishable from a provider that was never set up, the most common
@@ -15,12 +19,20 @@ All notable public changes to UKP will be documented in this file.
 
 ### Changed
 
+- `ukp init service` now creates the provider-free baseline Manifest
+  (`[capabilities]`) instead of predeclaring QMD search. The first Service
+  smoke is `diagnose -> register -> nav/read/rg`; `ukp guide service qmd`
+  is the optional indexed search/update setup path.
 - `ukp guide client` teaches the `ukp-pin` convention — how to compute and
   embed the same-line content-hash comment next to a `ukp://` reference —
   plus the non-git rename-recovery boundary and where runtime artifacts
   live; `ukp read`'s `--pin` messages point there.
 - `ukp nav` renders unexpanded folders as `path/ (+N .md)` instead of
   `[truncated: N] path`.
+- Added `ukp guide remote`, covering host-door setup, SSH and LAN HTTPS
+  consumption, expected-name assertions during registration, and the current
+  operational boundary that UKP does not yet install or autostart the remote
+  door process.
 
 ## [0.1.1] - 2026-09-17
 

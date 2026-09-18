@@ -30,7 +30,7 @@ Fast path for a simple knowledge folder:
 4. Update the index (qmd update, qmd status)
 5. Verify the provider before returning to UKP (qmd search / qmd get)
    If a search returns matches, the provider is ready; return to
-   'ukp guide service' step 4.
+   'ukp guide service' step 7.
    A read smoke ('qmd get <reference> --no-line-numbers') is required for
    observe mode (external or nested collection root): it confirms the provider
    can resolve the provider references that ukp read will delegate to it

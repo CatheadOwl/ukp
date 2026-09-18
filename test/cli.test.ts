@@ -311,7 +311,11 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("ukp diagnose");
     expect(guide).toContain("ukp register");
     expect(guide).toContain("ukp inspect --endpoint your-endpoint-name");
+    expect(guide).toContain("ukp nav --endpoint your-endpoint-name --depth 2");
+    expect(guide).toContain("ukp rg \"keyword\" --endpoint your-endpoint-name --limit 3");
     expect(guide).toContain("ukp read --endpoint your-endpoint-name docs/example.md");
+    expect(guide).toContain("provider-free read/nav/rg baseline");
+    expect(guide).toContain("QMD provider setup makes indexed search/update available");
     expect(guide).toContain("derived read/file baseline");
     // Round-3 candidate (docid/ukp:// jargon → guide face): step 7 defines
     // the two reference forms search results carry.
@@ -323,15 +327,21 @@ describe("CLI bootstrap", () => {
     expect(guide.indexOf("Fast path:")).toBeLessThan(guide.indexOf("Model:"));
     expect(guide.indexOf("Key boundary:")).toBeLessThan(guide.indexOf("Model:"));
     expect(guide.indexOf("ukp init service --name your-endpoint-name"))
-      .toBeLessThan(guide.indexOf("ukp guide service qmd"));
-    expect(guide.indexOf("ukp guide service qmd"))
       .toBeLessThan(guide.indexOf("ukp diagnose"));
     expect(guide.indexOf("ukp diagnose")).toBeLessThan(guide.indexOf("ukp register"));
     expect(guide.indexOf("ukp register")).toBeLessThan(guide.indexOf("ukp inspect --endpoint your-endpoint-name"));
     expect(guide.indexOf("ukp inspect --endpoint your-endpoint-name"))
+      .toBeLessThan(guide.indexOf("ukp nav --endpoint your-endpoint-name --depth 2"));
+    expect(guide.indexOf("ukp nav --endpoint your-endpoint-name --depth 2"))
+      .toBeLessThan(guide.indexOf("ukp rg \"keyword\" --endpoint your-endpoint-name --limit 3"));
+    expect(guide.indexOf("ukp rg \"keyword\" --endpoint your-endpoint-name --limit 3"))
+      .toBeLessThan(guide.indexOf("ukp read --endpoint your-endpoint-name docs/example.md"));
+    expect(guide.indexOf("ukp read --endpoint your-endpoint-name docs/example.md"))
+      .toBeLessThan(guide.indexOf("ukp guide service qmd"));
+    expect(guide.indexOf("ukp guide service qmd"))
       .toBeLessThan(guide.indexOf("ukp search \"keyword\" --endpoint your-endpoint-name --limit 3"));
     expect(guide.indexOf("ukp search \"keyword\" --endpoint your-endpoint-name --limit 3"))
-      .toBeLessThan(guide.indexOf("ukp read --endpoint your-endpoint-name <reference>"));
+      .toBeLessThan(guide.indexOf("[capabilities.update]"));
     expect(guide).not.toContain("[capabilities.get]");
     expect(guide).not.toContain("qmd init");
     expect(guide).not.toContain("qmd collection");
@@ -434,8 +444,8 @@ describe("CLI bootstrap", () => {
     expect(runCli(["register", "--help"], (message) => registerHelp.push(message))).toBe(0);
     expect(registerHelp.join("\n")).toContain("effective name");
     // Guide topics are described in guide's own help (single-sourced with root).
-    expect(renderGuideHelp()).toContain("first Service setup, inspect, search, read, and update path");
-    expect(renderHelp()).toContain("first Service setup, inspect, search, read, and update path");
+    expect(renderGuideHelp()).toContain("first Service setup with provider-free nav/read/rg baseline");
+    expect(renderHelp()).toContain("first Service setup with provider-free nav/read/rg baseline");
     // Version help carries a description line.
     expect(renderVersionHelp()).toContain("Show version information.");
     // Unregister legacy positional steers to the canonical flag form.
@@ -496,8 +506,8 @@ describe("CLI bootstrap", () => {
     expect(serviceHelp).toContain("--name <name>");
     expect(serviceHelp).toContain("--description <text>");
     expect(serviceHelp).toContain("--dependency <name>");
-    expect(serviceHelp).toContain("[capabilities.search]");
-    expect(serviceHelp).toContain("provider = \"qmd\"");
+    expect(serviceHelp).toContain("[capabilities]");
+    expect(serviceHelp).toContain("provider-free Service baseline");
     expect(serviceHelp).toContain("ukp guide service");
     expect(serviceHelp).toContain("ukp guide service qmd");
     expect(serviceHelp).not.toContain("qmd init");
@@ -517,13 +527,15 @@ describe("CLI bootstrap", () => {
       const manifestPath = join(service, ".ukp", "service.toml");
       const manifest = readFileSync(manifestPath, "utf8");
       expect(manifest).not.toContain("name =");
-      expect(manifest).toContain("[capabilities.search]");
-      expect(manifest).toContain("provider = \"qmd\"");
+      expect(manifest).toBe("[capabilities]\n");
       expect(output.join("\n")).toContain("initialized Service: valid-service");
       expect(output.join("\n")).toContain("name_source: folder-name");
-      expect(output.join("\n")).toContain("next: ukp guide service qmd");
+      expect(output.join("\n")).toContain("declared_capabilities: -");
+      expect(output.join("\n")).toContain("derived_capabilities: read, nav");
+      expect(output.join("\n")).toContain("provider_free: rg");
       expect(output.join("\n")).toContain("next: ukp diagnose");
       expect(output.join("\n")).toContain("next: ukp register");
+      expect(output.join("\n")).toContain("optional: ukp guide service qmd");
       expect(output.join("\n")).not.toContain("qmd init");
       expect(output.join("\n")).not.toContain("existing provider index");
       expect(existsSync(registryPath)).toBe(false);

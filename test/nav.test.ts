@@ -686,6 +686,11 @@ describe("nav command surface", () => {
       const usage = executeNavCommand(["-g"], context);
       expect(usage.exitCode).toBe(2);
       expect(usage.stderr).toContain("Usage: ukp nav");
+      const dotPath = executeNavCommand(["--endpoint", "kb", "."], context);
+      expect(dotPath.exitCode).toBe(2);
+      expect(dotPath.stderr).toContain("path must not contain '.' or '..' path segments");
+      expect(dotPath.stderr).toContain("Usage: ukp nav");
+      expect(dotPath.stderr).not.toContain("NavUsageError");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -218,7 +218,9 @@ describe("Service Manifest and diagnose", () => {
     mkdirSync(join(folder, ".ukp"));
     writeFileSync(join(folder, ".ukp", "service.toml"), 'name = "no-capabilities"\n');
     try {
-      expect(() => loadManifest(folder)).toThrow("Service Manifest schema is invalid");
+      expect(() => loadManifest(folder)).toThrow(
+        "missing required [capabilities] table; use an empty [capabilities] table",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
