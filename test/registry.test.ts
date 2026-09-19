@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
-import { readRegistry, registerAt, serializeRegistry, unregisterAt, parseRegistry, RegistryError } from "../src/registry.ts";
+import { readRegistry, registerAt, registerRemoteBinding, serializeRegistry, unregisterAt, parseRegistry, RegistryError } from "../src/registry.ts";
 
 function tempRegistry() {
   const root = mkdtempSync(join(tmpdir(), "ukp-registry-"));
@@ -59,5 +59,73 @@ describe("Registry", () => {
     );
     expect(registerAt(registry, "cad", service)).toHaveLength(1);
     expect(existsSync(`${registry}.lock`)).toBe(false);
+  });
+});
+
+describe("remote binding naming residence (W11 / ADR-REM-007 / D-086)", () => {
+  test("declared_name round-trips on remote bindings; locals reject it", () => {
+    const remote = { name: "ali-notes", kind: "remote" as const, url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u-1" };
+    expect(parseRegistry(serializeRegistry([remote]))).toEqual([remote]);
+
+    const source = `
+[[endpoints]]
+name = "cad"
+path = "${resolve("/cad").replaceAll("\\", "\\\\")}"
+declared_name = "cad"
+`;
+    expect(() => parseRegistry(source)).toThrow("must not carry remote fields");
+  });
+
+  test("an invalid declared_name is rejected at parse time", () => {
+    const source = `
+[[endpoints]]
+name = "ali-notes"
+kind = "remote"
+url = "https://ali.example/notes"
+declared_name = "Not_A_Valid_Name"
+instance_uid = "u-1"
+`;
+    expect(() => parseRegistry(source)).toThrow("invalid declared name");
+  });
+
+  test("idempotency keys on url+declared name and refreshes under the EXISTING handle", () => {
+    const tracked = { name: "ali-notes", kind: "remote" as const, url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u-1" };
+    // Default gesture (handle = declared name): refresh keeps ali-notes.
+    const refreshed = registerRemoteBinding([tracked], {
+      name: "notes", kind: "remote", url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u-2",
+    });
+    expect(refreshed).toEqual([{ ...tracked, instance_uid: "u-2" }]);
+  });
+
+  test("an explicitly different handle for a tracked url is refused; the taken-name error names --name", () => {
+    const tracked = { name: "ali-notes", kind: "remote" as const, url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u-1" };
+    expect(() => registerRemoteBinding([tracked], {
+      name: "other-notes", kind: "remote", url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u-2",
+    })).toThrow("already registered as 'ali-notes'");
+
+    expect(() => registerRemoteBinding([tracked], {
+      name: "ali-notes", kind: "remote", url: "https://pi.example/notes", declared_name: "notes", instance_uid: "u-3",
+    })).toThrow("already bound");
+    try {
+      registerRemoteBinding([tracked], { name: "ali-notes", kind: "remote", url: "https://pi.example/notes", declared_name: "notes" });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as Error).message).toContain("register this endpoint under another handle with --name <handle>");
+    }
+  });
+
+  test("a declared-name drift at the same url refuses and points at re-registration", () => {
+    const tracked = { name: "ali-notes", kind: "remote" as const, url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u-1" };
+    expect(() => registerRemoteBinding([tracked], {
+      name: "ali-notes", kind: "remote", url: "https://ali.example/notes", declared_name: "journal", instance_uid: "u-2",
+    })).toThrow("now declares 'journal'");
+  });
+
+  test("a legacy binding (no declared_name) refreshes and backfills the declared name", () => {
+    const legacy = { name: "notes", kind: "remote" as const, url: "https://ali.example/notes", instance_uid: "u-1" };
+    const refreshed = registerRemoteBinding([legacy], {
+      name: "notes", kind: "remote", url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u-2",
+    });
+    expect(refreshed).toEqual([{ ...legacy, declared_name: "notes", instance_uid: "u-2" }]);
   });
 });

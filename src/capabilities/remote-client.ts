@@ -774,8 +774,22 @@ export interface RemoteSearchExecution {
    * human result units, replacing local providerOutput's role. */
   results: unknown[];
   /** Inline references (wire `references`, RQ-07): per-result handoff keys
-   * with server-declared `ukp_uri`. */
+   * with server-declared `ukp_uri`, re-anchored to the local handle below. */
   references: Array<{ ukp_uri?: string }> | undefined;
+}
+
+/** Re-anchor a server-declared `ukp://` authority to the local handle
+ * (ADR-REM-007 / D-086): the server emits its own declared name, but this
+ * registry keys the endpoint under the consumer-chosen handle — a hand-off
+ * key must resolve where it is handed off. No-op when the two agree or when
+ * the binding predates declared_name (handle == declared under RQ-14). The
+ * request direction needs no inverse rewrite: URI-addressed reads travel as
+ * endpoint-relative `ref`s, and authority resolution is client-side. */
+export function reanchorRemoteUkpUri(uri: string, binding: RegistryBinding): string {
+  const declared = binding.declared_name;
+  if (declared === undefined || declared === binding.name) return uri;
+  const prefix = `ukp://${declared}/`;
+  return uri.startsWith(prefix) ? `ukp://${binding.name}/${uri.slice(prefix.length)}` : uri;
 }
 
 /** POST /v1/search → endpoint outcome in the local SearchEndpointOutcome
@@ -810,7 +824,11 @@ export async function remoteSearch(
   }
   const referencesRecord = record.references as { results?: unknown } | undefined;
   const references = referencesRecord !== undefined && Array.isArray(referencesRecord.results)
-    ? referencesRecord.results as Array<{ ukp_uri?: string }>
+    ? (referencesRecord.results as Array<{ ukp_uri?: string }>).map((reference) =>
+        reference.ukp_uri !== undefined
+          ? { ...reference, ukp_uri: reanchorRemoteUkpUri(reference.ukp_uri, binding) }
+          : reference,
+      )
     : undefined;
   return {
     outcome: {
@@ -1004,7 +1022,9 @@ export async function remoteRg(
     };
   }
   const wireStatus = typeof entry.status === "string" && RG_WIRE_STATUSES.has(entry.status) ? entry.status : "failed";
-  const matches = remoteRgMatches(entry.matches);
+  const matches = remoteRgMatches(entry.matches)?.map((match) =>
+    match.ukp_uri !== undefined ? { ...match, ukp_uri: reanchorRemoteUkpUri(match.ukp_uri, binding) } : match,
+  );
   const counts = remoteRgCounts(entry.counts);
   const warnings = Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [];
   return {

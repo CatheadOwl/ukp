@@ -203,7 +203,10 @@ describe("ukp register --url <door> (W7 import)", () => {
     registerRemoteAt(registryPath, { name: "notes", url: "https://elsewhere.example/notes", instance_uid: "u-1" });
     const partial = await asResult(executeRegisterCommand(["--url", info.url], context));
     expect(partial.exitCode).toBe(0);
-    expect(partial.stdout).toContain("skipped:  notes  (already bound to https://elsewhere.example/notes)");
+    expect(partial.stdout).toContain(
+      "skipped:  notes  (name 'notes' already bound to https://elsewhere.example/notes; "
+        + "re-register this endpoint with --name <handle> to land it under another)",
+    );
     expect(partial.stdout).toContain("imported: archive");
     expect(readRegistry(registryPath).find((binding) => binding.name === "notes")?.url)
       .toBe("https://elsewhere.example/notes");
@@ -239,6 +242,126 @@ describe("ukp register --url <door> (W7 import)", () => {
     expect(result.stdout).toContain("registered (remote): notes");
     const binding = readRegistry(registryPath).find((candidate) => candidate.name === "notes");
     expect(binding?.url).toBe(single.info.url);
+  });
+});
+
+describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
+  test("--name lands a different handle; declared name becomes provenance everywhere", async () => {
+    const { info } = startDoor();
+    const result = await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "ali-notes"], context));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("imported: ali-notes  (declares notes;");
+    const bindings = readRegistry(registryPath);
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]!.name).toBe("ali-notes");
+    expect(bindings[0]!.declared_name).toBe("notes");
+    // N-5: the url path segment stays the door-declared name — the door
+    // routes by it; only the local handle differs.
+    expect(bindings[0]!.url).toBe(`${info.url}/notes`);
+
+    const list = await asResult(executeListCommand([], context));
+    expect(list.exitCode).toBe(0);
+    expect(list.stdout).toContain(`ali-notes (declares notes)\t${info.url}/notes\tsearch`);
+    // Drift accounts by declared names: notes IS imported (as ali-notes);
+    // only archive counts as unimported.
+    expect(list.stderr).toContain(`door ${info.url}: 1 unimported endpoint(s): archive`);
+    expect(list.stderr).not.toContain("unimported endpoint(s): notes");
+
+    const search = await asResult(executeSearchCommand(["fixture-cad-search-token", "--endpoint", "ali-notes"], context));
+    expect(search.exitCode).toBe(0);
+    expect(search.stdout).toContain("read: ukp read ukp://ali-notes/documents/cad-notes.md#L1");
+
+    // The rg face re-anchors the same way: server-declared ukp_uri must
+    // resolve under the local handle.
+    const rg = await asResult(executeRgCommand(["CAD", "--endpoint", "ali-notes"], context));
+    expect(rg.exitCode).toBe(0);
+    expect(rg.stdout).toContain("uri: ukp://ali-notes/documents/cad-notes.md");
+  });
+
+  test("day-2 without --name refreshes the tracked instance under its existing handle", async () => {
+    const { info } = startDoor();
+    await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "ali-notes"], context));
+    const again = await asResult(executeRegisterCommand(["--url", `${info.url}/notes`], context));
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout).toContain("refreshed: ali-notes");
+    const bindings = readRegistry(registryPath);
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]!.name).toBe("ali-notes");
+    expect(bindings[0]!.declared_name).toBe("notes");
+  });
+
+  test("an explicitly different --name for a tracked instance is refused with the existing handle", async () => {
+    const { info } = startDoor();
+    await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "ali-notes"], context));
+    const refused = await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "other-notes"], context));
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stdout).toContain("already bound to 'ali-notes'; unregister it to change the handle");
+    expect(readRegistry(registryPath)).toHaveLength(1);
+  });
+
+  test("a taken name is the --name remedy path: skip line names it, --name then lands", async () => {
+    const { info } = startDoor();
+    registerAt(registryPath, "notes", createService("local-notes-svc", "notes"));
+    const skipped = await asResult(executeRegisterCommand(["--url", `${info.url}/notes`], context));
+    expect(skipped.exitCode).toBe(1);
+    expect(skipped.stdout).toContain("re-register this endpoint with --name <handle> to land it under another");
+
+    const landed = await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "ali-notes"], context));
+    expect(landed.exitCode).toBe(0);
+    expect(readRegistry(registryPath).map((binding) => binding.name).sort()).toEqual(["ali-notes", "notes"]);
+  });
+
+  test("--name is a usage error for multi-endpoint imports and for local registration", async () => {
+    const { info } = startDoor();
+    const multi = await asResult(executeRegisterCommand(["--url", info.url, "--name", "x"], context));
+    expect(multi.exitCode).toBe(2);
+    expect(multi.stderr).toContain("--name applies to a single endpoint, but this import targets 2");
+    expect(readRegistry(registryPath)).toHaveLength(0);
+
+    const localOutcome = executeRegisterCommand(["--name", "x"], context);
+    const local = localOutcome instanceof Promise ? await localOutcome : localOutcome;
+    expect(local.exitCode).toBe(2);
+    expect(local.stderr).toContain("--name chooses a remote registration handle and requires --url");
+  });
+
+  test("single-endpoint (non-door) registration: --name output, idempotent re-register, refusal", async () => {
+    registerAt(serverRegistryPath, "skills", createService("w11-skills-svc", "skills"));
+    const single = startUkpServer({
+      endpointName: "skills",
+      currentDirectory: root,
+      registryPath: serverRegistryPath,
+      qmdCommand,
+      port: 0,
+    });
+    started.push(single);
+    const named = await asResult(executeRegisterCommand(["--url", single.info.url, "--name", "ali-skills"], context));
+    expect(named.exitCode).toBe(0);
+    expect(named.stdout).toContain("registered (remote): ali-skills");
+    expect(named.stdout).toContain("declares: skills (remote-declared name, stored as provenance)");
+    expect(readRegistry(registryPath).map((binding) => [binding.name, binding.declared_name]))
+      .toEqual([["ali-skills", "skills"]]);
+
+    // Default-gesture day-2 refresh lands under the existing handle.
+    const again = await asResult(executeRegisterCommand(["--url", single.info.url], context));
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout).toContain("registered (remote): ali-skills");
+    expect(readRegistry(registryPath)).toHaveLength(1);
+
+    const refused = await asResult(executeRegisterCommand(["--url", single.info.url, "--name", "pi-skills"], context));
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("already registered as 'ali-skills'");
+  });
+
+  test("one service under two handles (different urls, same instance_uid) notes in list", async () => {
+    const { info } = startDoor();
+    await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "ali-notes"], context));
+    const uid = readRegistry(registryPath).find((binding) => binding.name === "ali-notes")!.instance_uid;
+    registerRemoteAt(registryPath, { name: "mirror-notes", url: "https://mirror.example/notes", instance_uid: uid });
+
+    const list = await asResult(executeListCommand([], context));
+    expect(list.exitCode).toBe(0);
+    expect(list.stderr).toContain("'ali-notes' and 'mirror-notes' pin the same instance_uid");
+    expect(list.stderr).toContain("one service under two handles");
   });
 });
 

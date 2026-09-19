@@ -29,6 +29,12 @@ const bindingSchema = z.object({
   /** Client credential stored in the binding (D-078: plaintext, 0600 file —
    * AWS credentials-file / netrc convention; env override wins at call time). */
   token: z.string().min(1).optional(),
+  /** Remote-declared endpoint name snapshotted at registration
+   * (ADR-REM-007 / D-086): provenance and expected-assertion target. The
+   * binding's `name` is the consumer-chosen handle (defaults to the declared
+   * name); service identity stays with instance_uid / TLS pins. The profile
+   * check lives in validateBindings, next to `name` itself. */
+  declared_name: z.string().min(1).optional(),
   /** TLS trust anchor pinned at registration (W5' / D-079, self-signed
    * servers only — public-CA chains are not pinned): `tls_cert` is the PEM
    * used as the fetch trust anchor, `tls_pin` is the RFC 7469 SPKI pin that
@@ -53,6 +59,8 @@ export interface RegistryBinding {
   kind?: "remote";
   url?: string;
   instance_uid?: string;
+  /** Remote-declared name snapshot (ADR-REM-007 / D-086); see bindingSchema. */
+  declared_name?: string;
   /** Remote-only stored credential (plaintext; env takes precedence). */
   token?: string;
   /** Remote-only TLS anchor (W5' / D-079); see bindingSchema. */
@@ -221,6 +229,9 @@ function validateBindings(endpoints: readonly RegistryBinding[]): RegistryBindin
       if (endpoint.url === undefined) {
         throw new RegistryError(`remote binding '${endpoint.name}' requires a url`);
       }
+      if (endpoint.declared_name !== undefined && !ENDPOINT_NAME.test(endpoint.declared_name)) {
+        throw new RegistryError(`remote binding '${endpoint.name}' carries an invalid declared name '${endpoint.declared_name}'`);
+      }
       if ((endpoint.tls_cert !== undefined) !== (endpoint.tls_pin !== undefined)) {
         throw new RegistryError(`remote binding '${endpoint.name}' must carry tls_cert and tls_pin together`);
       }
@@ -230,9 +241,10 @@ function validateBindings(endpoints: readonly RegistryBinding[]): RegistryBindin
     } else {
       if (
         endpoint.url !== undefined || endpoint.instance_uid !== undefined || endpoint.token !== undefined
+        || endpoint.declared_name !== undefined
         || endpoint.tls_cert !== undefined || endpoint.tls_pin !== undefined
       ) {
-        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid/token/tls)`);
+        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid/token/declared_name/tls)`);
       }
       if (endpoint.path === undefined || !isAbsolute(endpoint.path)) {
         throw new RegistryError(`registry path must be absolute: ${endpoint.path ?? "(missing)"}`);
@@ -281,6 +293,7 @@ function toSerializableBinding(binding: RegistryBinding): Record<string, string>
       name: binding.name,
       kind: "remote",
       url: binding.url!,
+      ...(binding.declared_name !== undefined ? { declared_name: binding.declared_name } : {}),
       ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
       ...(binding.token !== undefined ? { token: binding.token } : {}),
       ...(binding.tls_cert !== undefined ? { tls_cert: binding.tls_cert } : {}),
@@ -316,8 +329,12 @@ export function registerBinding(endpoints: readonly RegistryBinding[], binding: 
   return validateBindings([...endpoints, canonical]);
 }
 
-/** Remote registration (D-077): name comes from the discovery document
- * (RQ-14), instance_uid is the TOFU pin. Idempotent on same name+url. */
+/** Remote registration (D-077; naming residence ADR-REM-007 / D-086): the
+ * binding `name` is the consumer-chosen handle (defaults to the declared
+ * name), `declared_name` is the registration-time provenance snapshot.
+ * Idempotency keys on url+declared name → refresh under the EXISTING handle
+ * (N-2): one url, one handle; a second handle for the same instance goes
+ * through a different url and warns at list time, never here. */
 export function registerRemoteBinding(
   endpoints: readonly RegistryBinding[],
   binding: RegistryBinding,
@@ -326,25 +343,43 @@ export function registerRemoteBinding(
     name: binding.name,
     kind: "remote",
     url: binding.url!,
+    ...(binding.declared_name !== undefined ? { declared_name: binding.declared_name } : {}),
     ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
     ...(binding.token !== undefined ? { token: binding.token } : {}),
     ...(binding.tls_cert !== undefined ? { tls_cert: binding.tls_cert } : {}),
     ...(binding.tls_pin !== undefined ? { tls_pin: binding.tls_pin } : {}),
   };
-  const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
-  if (sameName) {
-    if (sameName.kind === "remote" && sameName.url === canonical.url) {
-      // Same name+url re-registration refreshes the TOFU pin (service
-      // replacement is an explicit re-register, ADR-REM-003).
-      return validateBindings([...endpoints.filter((e) => e.name !== canonical.name), canonical]);
-    }
-    throw new RegistryError(
-      `endpoint name '${canonical.name}' is already bound to ${sameName.kind === "remote" ? sameName.url : sameName.path}`,
-    );
-  }
   const sameUrl = endpoints.find((endpoint) => endpoint.kind === "remote" && endpoint.url === canonical.url);
   if (sameUrl) {
-    throw new RegistryError(`remote endpoint url is already bound to '${sameUrl.name}'`);
+    // Legacy bindings (pre-ADR-REM-007) carry no declared_name; their handle
+    // WAS the declared name under RQ-14, so the name stands in for it.
+    const existingDeclared = sameUrl.declared_name ?? sameUrl.name;
+    const incomingDeclared = canonical.declared_name ?? canonical.name;
+    if (existingDeclared !== incomingDeclared) {
+      throw new RegistryError(
+        `remote endpoint at ${canonical.url} now declares '${incomingDeclared}', but binding '${sameUrl.name}' was registered for '${existingDeclared}'; unregister '${sameUrl.name}' and re-register`,
+      );
+    }
+    if (canonical.name !== sameUrl.name && canonical.name !== incomingDeclared) {
+      // An explicitly different handle for an instance already tracked under
+      // this url: one url, one handle (rename = unregister + register).
+      throw new RegistryError(
+        `remote endpoint ${canonical.url} is already registered as '${sameUrl.name}'; unregister it first to change the handle`,
+      );
+    }
+    // Default gesture (handle = declared name) or matching handle: the
+    // idempotent refresh of the TOFU pin and credentials lands under the
+    // EXISTING handle (N-2 — service replacement stays an explicit
+    // unregister + re-register, ADR-REM-003).
+    const refreshed = canonical.name === sameUrl.name ? canonical : { ...canonical, name: sameUrl.name };
+    return validateBindings([...endpoints.filter((e) => e.name !== sameUrl.name), refreshed]);
+  }
+  const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
+  if (sameName) {
+    throw new RegistryError(
+      `endpoint name '${canonical.name}' is already bound to ${sameName.kind === "remote" ? sameName.url : sameName.path}; `
+        + `register this endpoint under another handle with --name <handle>`,
+    );
   }
   return validateBindings([...endpoints, canonical]);
 }
@@ -410,7 +445,15 @@ export function registerAt(registryPath: string, name: string, servicePath: stri
 
 export function registerRemoteAt(
   registryPath: string,
-  binding: { name: string; url: string; instance_uid?: string; token?: string; tls_cert?: string; tls_pin?: string },
+  binding: {
+    name: string;
+    url: string;
+    declared_name?: string;
+    instance_uid?: string;
+    token?: string;
+    tls_cert?: string;
+    tls_pin?: string;
+  },
 ): RegistryBinding[] {
   return mutateRegistry(registryPath, (current) => registerRemoteBinding(current, binding));
 }

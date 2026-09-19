@@ -57,7 +57,8 @@ export const REGISTER_SPEC: UkpCommandSpec = {
   strictArguments: true,
   options: [
     { flags: "--url <url>", help: "register a remote ukp-serve endpoint (https, ssh://host[:port][/endpoint], or loopback http); a host door url (its document declares scope:\"host\") imports every endpoint behind the door — binding urls gain the endpoint-name path (ssh://ali/notes)" },
-    { flags: "--endpoint <name>", help: "assert the endpoint name being registered (remote name still comes from discovery; with a host door this imports only that endpoint)" },
+    { flags: "--endpoint <name>", help: "assert the remote-declared name of the endpoint being registered (expected-name assertion; with a host door this imports only that endpoint)" },
+    { flags: "--name <handle>", help: "remote only: register under this local handle — the registry key and ukp:// authority — instead of the declared name; use it when the declared name is already taken" },
     { flags: "--select <names>", help: "with a host door url: import only the named endpoints (comma-separated); a name not on the door is a usage error" },
     { flags: "--token <token>", help: "store the bearer token in the binding (plaintext, 0600 registry file); with a host door it is copied into every imported binding; UKP_ENDPOINT_<NAME>_TOKEN overrides it at call time" },
   ],
@@ -71,18 +72,23 @@ export const REGISTER_SPEC: UkpCommandSpec = {
     "Binding:",
     "  The Host Registry binds the Service Manifest's effective name to this",
     "  folder's location; 'ukp list' shows the resulting bindings.",
-    "  With --url, the name and instance identity come from the remote",
-    "  discovery document (/.well-known/ukp.json) and are pinned TOFU-style.",
-    "  Use --endpoint <name> as an expected-name assertion, not as an alias;",
-    "  bearer-token services read UKP_ENDPOINT_<NAME>_TOKEN at call time.",
+    "  With --url, the declared name and instance identity come from the",
+    "  remote discovery document (/.well-known/ukp.json) and are pinned",
+    "  TOFU-style as provenance; your registry binds them under a local",
+    "  handle — the declared name by default, or --name <handle> when that",
+    "  name is already taken. Use --endpoint <name> as an expected-name",
+    "  assertion on the declared name; bearer-token services read",
+    "  UKP_ENDPOINT_<NAME>_TOKEN (keyed by the handle) at call time.",
     "",
     "Host doors (ADR-REM-004):",
     "  'ukp register --url ssh://ali' fetches the door's discovery document",
     "  and imports every endpoint behind it (a door url may also name one",
     "  endpoint: ssh://ali/notes). Import is explicit and idempotent:",
     "  re-running refreshes TOFU pins and tokens. Name conflicts are skipped",
-    "  with a visible reason (never silently renamed); --select narrows the",
-    "  import; door growth shows in 'ukp list' as drift notes until imported.",
+    "  with a visible reason (never silently renamed) — re-register that one",
+    "  endpoint with --name to land it under another handle; --select narrows",
+    "  the import; door growth shows in 'ukp list' as drift notes until",
+    "  imported.",
     "",
   ].join("\n"),
 };
@@ -148,13 +154,22 @@ export function executeRegisterCommand(
   }
 
   try {
-    const parsed = parseKitArgs<{ url?: string; token?: string; select?: string; endpoint?: string }>(REGISTER_SPEC, args);
+    const parsed = parseKitArgs<{ url?: string; token?: string; select?: string; endpoint?: string; name?: string }>(REGISTER_SPEC, args);
     const expectedName = parsed.options.endpoint;
     if (expectedName !== undefined && !ENDPOINT_NAME.test(expectedName)) {
       throw new KitUsageError("--endpoint requires a valid endpoint name");
     }
+    const handleName = parsed.options.name;
+    if (handleName !== undefined && !ENDPOINT_NAME.test(handleName)) {
+      throw new KitUsageError("--name requires a valid endpoint name");
+    }
+    if (handleName !== undefined && parsed.options.url === undefined) {
+      // N-1 (ADR-REM-007): a local name lives in the Service Manifest the
+      // folder owner controls; the registry naming slot is remote-only.
+      throw new KitUsageError("--name chooses a remote registration handle and requires --url");
+    }
     if (parsed.options.url !== undefined) {
-      return executeRegisterRemote(parsed.options.url, parsed.options.token, parsed.options.select, expectedName, context);
+      return executeRegisterRemote(parsed.options.url, parsed.options.token, parsed.options.select, expectedName, handleName, context);
     }
     if (parsed.options.select !== undefined) {
       throw new KitUsageError("--select requires --url <door url>");
@@ -206,37 +221,69 @@ function declaredCapabilitySummary(capabilities: Record<string, unknown>): strin
   return extras.length > 0 ? extras.join(",") : "-";
 }
 
-/** Import the door roster into the registry (ADR-REM-004 / O-4): default is
- * every endpoint, `--select` narrows, name/url conflicts are skipped with a
- * visible reason (RQ-14: never silently renamed), and same name+url is the
- * idempotent refresh (TOFU pin + token, the W4 semantics in batch). ≥1
- * import/refresh exits 0; all-skipped exits 1. */
+/** Import the door roster into the registry (ADR-REM-004 / O-4; naming
+ * residence ADR-REM-007 / D-086): default is every endpoint, `--select`
+ * narrows, conflicts are skipped with a visible reason plus the
+ * single-endpoint `--name` remedy (never silently renamed), and same
+ * url+declared name is the idempotent refresh under the existing handle
+ * (TOFU pin + token, the W4 semantics in batch). ≥1 import/refresh exits 0;
+ * all-skipped exits 1. */
 function importDoorEndpoints(
   origin: string,
   door: { endpoints: ReadonlyArray<{ name: string; instance_uid: string; capabilities: Record<string, unknown> }> },
   targets: ReadonlyArray<{ name: string; instance_uid: string; capabilities: Record<string, unknown> }>,
   credentials: { token?: string; tls_cert?: string; tls_pin?: string },
   context: InventoryCommandContext,
+  handleOverride?: string,
 ): InventoryCommandResult {
   const existing = readRegistry(context.registryPath);
   const lines = [`door ${origin}: ${door.endpoints.length} endpoint(s)`];
   let landed = 0;
   for (const target of targets) {
+    // N-5 (ADR-REM-007): the url path segment stays the door-declared name —
+    // the door routes by it; only the local handle may differ.
     const url = doorEndpointUrl(origin, target.name);
-    const sameName = existing.find((endpoint) => endpoint.name === target.name);
-    if (sameName !== undefined && !(sameName.kind === "remote" && sameName.url === url)) {
-      lines.push(`skipped:  ${target.name}  (already bound to ${sameName.kind === "remote" ? sameName.url : sameName.path})`);
-      continue;
-    }
-    const sameUrl = existing.find(
-      (endpoint) => endpoint.kind === "remote" && endpoint.url === url && endpoint.name !== target.name,
-    );
-    if (sameUrl !== undefined) {
-      lines.push(`skipped:  ${target.name}  (url ${url} already bound to '${sameUrl.name}')`);
+    const handle = handleOverride ?? target.name;
+      const sameUrl = existing.find((endpoint) => endpoint.kind === "remote" && endpoint.url === url);
+      if (sameUrl !== undefined) {
+        // Legacy bindings carry no declared_name; their handle stood in for it.
+        const existingDeclared = sameUrl.declared_name ?? sameUrl.name;
+        if (existingDeclared !== target.name) {
+          lines.push(`skipped:  ${target.name}  (url ${url} is bound to '${sameUrl.name}' declaring '${existingDeclared}')`);
+          continue;
+        }
+        // Default gesture (no --name) or a matching handle refreshes the
+        // instance under its EXISTING handle (N-2); only an explicitly
+        // different --name is refused.
+        if (sameUrl.name !== handle && handle !== target.name) {
+          lines.push(`skipped:  ${target.name}  (url ${url} already bound to '${sameUrl.name}'; unregister it to change the handle)`);
+          continue;
+        }
+        registerRemoteAt(context.registryPath, {
+          name: sameUrl.name,
+          declared_name: target.name,
+          url,
+          instance_uid: target.instance_uid,
+          ...(credentials.token !== undefined ? { token: credentials.token } : {}),
+          ...(credentials.tls_cert !== undefined && credentials.tls_pin !== undefined
+            ? { tls_cert: credentials.tls_cert, tls_pin: credentials.tls_pin }
+            : {}),
+        });
+        landed += 1;
+        lines.push(`refreshed: ${sameUrl.name}  (TOFU pin/credentials refreshed)`);
+        continue;
+      }
+    const sameName = existing.find((endpoint) => endpoint.name === handle);
+    if (sameName !== undefined) {
+      lines.push(
+        `skipped:  ${target.name}  (name '${handle}' already bound to ${sameName.kind === "remote" ? sameName.url : sameName.path}; `
+          + `re-register this endpoint with --name <handle> to land it under another)`,
+      );
       continue;
     }
     registerRemoteAt(context.registryPath, {
-      name: target.name,
+      name: handle,
+      declared_name: target.name,
       url,
       instance_uid: target.instance_uid,
       ...(credentials.token !== undefined ? { token: credentials.token } : {}),
@@ -246,9 +293,9 @@ function importDoorEndpoints(
     });
     landed += 1;
     lines.push(
-      sameName !== undefined
-        ? `refreshed: ${target.name}  (TOFU pin/credentials refreshed)`
-        : `imported: ${target.name}  (${declaredCapabilitySummary(target.capabilities)})`,
+      handle !== target.name
+        ? `imported: ${handle}  (declares ${target.name}; ${declaredCapabilitySummary(target.capabilities)})`
+        : `imported: ${handle}  (${declaredCapabilitySummary(target.capabilities)})`,
     );
   }
   return {
@@ -259,18 +306,21 @@ function importDoorEndpoints(
 }
 
 /** Remote registration (D-077/D-078 / spec endpoint-registration; host doors
- * since W7 / ADR-REM-004): the well-known document at the url's origin
- * self-describes — an endpoint document (no `scope`) registers one endpoint
- * (today's behavior, name from the document per RQ-14, TOFU pin, --token in
- * the binding); a door document (`scope:"host"`) runs the import flow above.
- * ssh:// urls tunnel transparently; https urls probe TLS first (W5' / D-079):
- * a public-CA chain validates normally, a self-signed certificate is
- * TOFU-pinned into the binding(s) and verified on every later call. */
+ * since W7 / ADR-REM-004; naming residence ADR-REM-007): the well-known
+ * document at the url's origin self-describes — an endpoint document (no
+ * `scope`) registers one endpoint (declared name from the document as
+ * provenance, local handle = declared name or --name, TOFU pin, --token in
+ * the binding); a door document (`scope:"host"`) runs the import flow above
+ * (--name only when exactly one target results). ssh:// urls tunnel
+ * transparently; https urls probe TLS first (W5' / D-079): a public-CA chain
+ * validates normally, a self-signed certificate is TOFU-pinned into the
+ * binding(s) and verified on every later call. */
 async function executeRegisterRemote(
   url: string,
   token: string | undefined,
   select: string | undefined,
   expectedName: string | undefined,
+  handleName: string | undefined,
   context: InventoryCommandContext,
 ): Promise<InventoryCommandResult> {
   const selected = select === undefined
@@ -338,6 +388,11 @@ async function executeRegisterRemote(
       } else {
         targets = [...roster];
       }
+      if (handleName !== undefined && targets.length !== 1) {
+        throw new KitUsageError(
+          `--name applies to a single endpoint, but this import targets ${targets.length}; narrow with --select/--endpoint or drop --name`,
+        );
+      }
       const result = importDoorEndpoints(
         parts.origin,
         { endpoints: roster },
@@ -349,6 +404,7 @@ async function executeRegisterRemote(
             : {}),
         },
         context,
+        handleName,
       );
       const nameHint = wellKnown.door.bearerRequired && token === undefined
         ? [`note: this door requires a bearer token; pass --token or set UKP_ENDPOINT_<NAME>_TOKEN per endpoint`]
@@ -368,18 +424,34 @@ async function executeRegisterRemote(
     if (selected !== undefined) {
       throw new KitUsageError(`--select requires a host door url: ${parts.origin} serves a single endpoint`);
     }
-    const name = wellKnown.discovery.doc.name;
-    if (!ENDPOINT_NAME.test(name)) {
-      throw new Error(`discovery document declares an invalid endpoint name '${name}'`);
+    const declaredName = wellKnown.discovery.doc.name;
+    if (!ENDPOINT_NAME.test(declaredName)) {
+      throw new Error(`discovery document declares an invalid endpoint name '${declaredName}'`);
     }
-    if (expectedName !== undefined && expectedName !== name) {
-      throw new Error(`expected endpoint '${expectedName}', but discovery document declares '${name}'`);
+    if (expectedName !== undefined && expectedName !== declaredName) {
+      throw new Error(`expected endpoint '${expectedName}', but discovery document declares '${declaredName}'`);
     }
     if (wellKnown.discovery.doc.instance_uid === undefined || typeof wellKnown.discovery.doc.instance_uid !== "string") {
       throw new Error("discovery document carries no instance_uid; the service must run a ukp-remote v1 server");
     }
+    // ADR-REM-007 / D-086: the handle is the consumer-chosen local name
+    // (defaults to the declared name); the declared name is stored as
+    // provenance and stays the target of the expected-name assertion above.
+    // N-2: a default-gesture re-registration of an already-tracked instance
+    // (same url, same declared name) refreshes it under its EXISTING handle —
+    // only an explicitly different --name is refused (by the registry).
+    const requestedHandle = handleName ?? declaredName;
+    const tracked = readRegistry(context.registryPath).find(
+      (endpoint) => endpoint.kind === "remote" && endpoint.url === url,
+    );
+    const handle = tracked !== undefined
+      && (tracked.declared_name ?? tracked.name) === declaredName
+      && requestedHandle === declaredName
+      ? tracked.name
+      : requestedHandle;
     registerRemoteAt(context.registryPath, {
-      name,
+      name: handle,
+      declared_name: declaredName,
       url,
       instance_uid: wellKnown.discovery.doc.instance_uid,
       ...(token !== undefined ? { token } : {}),
@@ -387,9 +459,10 @@ async function executeRegisterRemote(
         ? { tls_cert: tlsProbe.certPem, tls_pin: tlsProbe.spkiPin }
         : {}),
     });
-    const envToken = remoteTokenFor(name);
+    const envToken = remoteTokenFor(handle);
     const lines = [
-      `registered (remote): ${name}`,
+      `registered (remote): ${handle}`,
+      ...(handle !== declaredName ? [`declares: ${declaredName} (remote-declared name, stored as provenance)`] : []),
       `url: ${url}`,
       `instance_uid: ${wellKnown.discovery.doc.instance_uid}`,
       ...(pinSelfSigned && tlsProbe !== undefined
@@ -397,9 +470,9 @@ async function executeRegisterRemote(
         : []),
       ...(wellKnown.discovery.doc.description !== undefined ? [`description: ${wellKnown.discovery.doc.description}`] : []),
       ...(token !== undefined
-        ? [`auth: token stored in registry binding (plaintext; env UKP_ENDPOINT_${name.toUpperCase().replace(/-/g, "_")}_TOKEN overrides)`]
+        ? [`auth: token stored in registry binding (plaintext; env UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN overrides)`]
         : wellKnown.discovery.bearerRequired && envToken === undefined
-          ? [`note: this endpoint requires a bearer token; pass --token or set UKP_ENDPOINT_${name.toUpperCase().replace(/-/g, "_")}_TOKEN`]
+          ? [`note: this endpoint requires a bearer token; pass --token or set UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN`]
           : []),
     ];
     return { exitCode: 0, stdout: lines.join("\n"), stderr: "" };
@@ -451,7 +524,7 @@ export function executeListCommand(
           rendered.push(await renderRemoteListRow(endpoint, pool));
         }
         const drift = await collectDoorDriftNotes(endpoints, pool);
-        return renderListOutput(rendered, drift);
+        return renderListOutput(rendered, [...collectSameInstanceNotes(endpoints), ...drift]);
       } finally {
         pool.close();
       }
@@ -487,12 +560,16 @@ function renderListOutput(
  * endpoints degrade to `(unavailable)` + one stderr warning — the same
  * inventory semantics as an unreadable local manifest. Door-form bindings
  * (`ssh://ali/notes`) fetch their per-endpoint document through the shared
- * pool's tunnel. */
+ * pool's tunnel. A handle that differs from the declared name (ADR-REM-007)
+ * carries the declaration inline for audit. */
 async function renderRemoteListRow(
   endpoint: RegistryBinding,
   pool: RemoteTransportPool,
 ): Promise<{ line: string; warning?: string }> {
   const url = endpoint.url!;
+  const declaredNote = endpoint.declared_name !== undefined && endpoint.declared_name !== endpoint.name
+    ? ` (declares ${endpoint.declared_name})`
+    : "";
   try {
     const transport = await pool.acquire(endpoint);
     const discovery = await fetchDiscoveryDocument(endpoint, transport, resolveRemoteToken(endpoint));
@@ -501,14 +578,38 @@ async function renderRemoteListRow(
       .map(([name]) => name)
       .sort();
     const warnings = discovery.warnings.length > 0 ? { warning: discovery.warnings.join("; ") } : {};
-    return { line: `${endpoint.name}\t${url}\t${extras.length > 0 ? extras.join(",") : "-"}`, ...warnings };
+    return { line: `${endpoint.name}${declaredNote}\t${url}\t${extras.length > 0 ? extras.join(",") : "-"}`, ...warnings };
   } catch (error) {
     const headline = (error instanceof Error ? error.message : String(error)).split("\n")[0];
     return {
-      line: `${endpoint.name}\t${url}\t(unavailable)`,
+      line: `${endpoint.name}${declaredNote}\t${url}\t(unavailable)`,
       warning: `endpoint '${endpoint.name}' capabilities unavailable: ${headline}`,
     };
   }
+}
+
+/** Same-instance double-handle note (ADR-REM-007 / N-2): two handles may
+ * legitimately point at one service through different urls (e.g. an ssh door
+ * and an https door of the same host); the shared instance_uid makes it
+ * visible. A note, not an error — each handle is a valid addressing surface,
+ * but ukp:// references under the two handles are not interchangeable. */
+function collectSameInstanceNotes(endpoints: readonly RegistryBinding[]): string[] {
+  const byUid = new Map<string, string[]>();
+  for (const endpoint of endpoints) {
+    if (!isRemoteBinding(endpoint) || endpoint.instance_uid === undefined) continue;
+    const handles = byUid.get(endpoint.instance_uid) ?? [];
+    handles.push(endpoint.name);
+    byUid.set(endpoint.instance_uid, handles);
+  }
+  const notes: string[] = [];
+  for (const [uid, handles] of byUid) {
+    if (handles.length > 1) {
+      notes.push(
+        `note: ${[...handles].sort().map((handle) => `'${handle}'`).join(" and ")} pin the same instance_uid ${uid} — one service under two handles`,
+      );
+    }
+  }
+  return notes;
 }
 
 /** Door drift notes (ADR-REM-004 / O-4): group door-form bindings by their
@@ -532,7 +633,9 @@ async function collectDoorDriftNotes(
       origins.set(parts.origin, group);
     }
     group.members.push(endpoint);
-    group.imported.add(endpoint.name);
+    // The roster speaks declared names; a handle that differs from the
+    // declared name (ADR-REM-007) must not read as "not imported".
+    group.imported.add(endpoint.declared_name ?? endpoint.name);
   }
   const notes: string[] = [];
   for (const [origin, group] of [...origins.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
