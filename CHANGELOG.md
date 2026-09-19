@@ -11,7 +11,10 @@ All notable public changes to UKP will be documented in this file.
   where the public IP is on no NIC and the automatic SAN coverage can never
   see it. A persisted certificate missing a requested entry is re-signed
   over the same key: the pin is unchanged and pinned clients re-anchor
-  transparently; coverage only grows, so dropping entries never re-signs.
+  transparently. Coverage only grows — the re-sign unions the
+  certificate's existing SAN with automatic coverage and the new entries,
+  so changing the flag list keeps earlier entries and dropping never
+  re-signs.
   Next to `--tls-cert/--tls-key` it is a usage error (an operator
   certificate carries its own SAN).
 - `ukp serve --systemd-socket` (Linux): serve on a systemd

@@ -494,6 +494,9 @@ describe("serve TLS (W5' / D-079)", () => {
       "--tls-san", "Door.Example",
     ]);
     expect(parsed.tlsSan).toEqual(["IP:203.0.113.7", "IP:fd00::1", "DNS:door.example"]);
+    // case variants of one entry collapse at the parse boundary
+    expect(parseServeArgs(["--endpoint", "cad", "--tls-san", "Door.Example", "--tls-san", "door.example"]).tlsSan)
+      .toEqual(["DNS:door.example"]);
     // absent flag = absent field: parse output stays byte-identical to the
     // pre-flag shape (TODO acceptance: no --tls-san behaves exactly as today)
     expect(parseServeArgs(["--endpoint", "cad"]).tlsSan).toBeUndefined();
@@ -535,7 +538,7 @@ describe("serve TLS (W5' / D-079)", () => {
     });
     expect(first.info.tls?.source).toBe("generated");
     const certPem = readFileSync(join(tlsDir, "cert.pem"), "utf8");
-    expect(certSanEntriesOf(certPem).has("ip:203.0.113.7")).toBe(true);
+    expect(certSanEntriesOf(certPem).has("IP:203.0.113.7")).toBe(true);
     // The widened SAN serves anchored fetches — what a registered client does.
     const response = await fetch(`${first.info.url}${DISCOVERY_PATH}`, { tls: { ca: certPem } });
     expect(response.status).toBe(200);
@@ -550,19 +553,75 @@ describe("serve TLS (W5' / D-079)", () => {
     });
     expect(second.info.tls?.source).toBe("re-signed");
     expect(second.info.tls?.pin).toBe(first.info.tls?.pin);
-    expect(certSanEntriesOf(readFileSync(join(tlsDir, "cert.pem"), "utf8")).has("dns:door.example")).toBe(true);
+    expect(certSanEntriesOf(readFileSync(join(tlsDir, "cert.pem"), "utf8")).has("DNS:door.example")).toBe(true);
     second.server.stop(true);
 
-    // A request already covered (or narrower) reuses the persisted pair
-    // untouched — coverage only ever grows, drops never re-sign.
+    // Replacing the extra set is still coverage GROWTH: the re-sign unions
+    // what the certificate already carried, so previously added entries
+    // survive an operator changing the flag list (review P1).
     const third = start({
       endpointName: "tls-san-ep",
       registryPath: tlsSanRegistry,
-      tls: { mode: "self-signed", sanEntries: ["IP:203.0.113.7"] },
+      tls: { mode: "self-signed", sanEntries: ["IP:198.51.100.9"] },
     });
-    expect(third.info.tls?.source).toBe("persisted");
+    expect(third.info.tls?.source).toBe("re-signed");
     expect(third.info.tls?.pin).toBe(first.info.tls?.pin);
+    const carried = certSanEntriesOf(readFileSync(join(tlsDir, "cert.pem"), "utf8"));
+    expect(carried.has("IP:198.51.100.9")).toBe(true);
+    expect(carried.has("IP:203.0.113.7")).toBe(true);
+    expect(carried.has("DNS:door.example")).toBe(true);
     third.server.stop(true);
+
+    // A request already covered (or narrower) reuses the persisted pair
+    // untouched — coverage only ever grows, drops never re-sign.
+    const fourth = start({ endpointName: "tls-san-ep", registryPath: tlsSanRegistry, tls: { mode: "self-signed", sanEntries: ["IP:203.0.113.7"] } });
+    expect(fourth.info.tls?.source).toBe("persisted");
+    expect(fourth.info.tls?.pin).toBe(first.info.tls?.pin);
+    fourth.server.stop(true);
+  });
+
+  test.skipIf(!opensslAvailable)("--tls-san with an IPv6 entry is idempotent across openssl's re-rendering (review P2)", async () => {
+    const { certSanEntriesOf } = await import("../src/capabilities/tls-identity.ts");
+    // openssl re-renders a compressed IPv6 literal expanded on some
+    // platforms — the coverage check compares canonical (expanded) keys, so
+    // the same flag must NOT re-sign on every restart.
+    const tlsSanRegistry = join(root, "tls-san-v6-registry.toml");
+    const folder = createService("tls-san-v6-svc", "tls-san-v6-ep");
+    registerAt(tlsSanRegistry, "tls-san-v6-ep", folder);
+    const first = start({
+      endpointName: "tls-san-v6-ep",
+      registryPath: tlsSanRegistry,
+      tls: { mode: "self-signed", sanEntries: ["IP:fd00::1"] },
+    });
+    expect(first.info.tls?.source).toBe("generated");
+    // the canonical (expanded) key is what coverage tracking sees
+    expect(certSanEntriesOf(readFileSync(join(folder, ".ukp", "tls", "cert.pem"), "utf8")).has("IP:fd00:0:0:0:0:0:0:1"))
+      .toBe(true);
+    first.server.stop(true);
+    const second = start({
+      endpointName: "tls-san-v6-ep",
+      registryPath: tlsSanRegistry,
+      tls: { mode: "self-signed", sanEntries: ["IP:fd00::1"] },
+    });
+    expect(second.info.tls?.source).toBe("persisted");
+    second.server.stop(true);
+  });
+
+  test("a corrupt persisted certificate with extras fails the TLS material contract, not a raw PEM error (review P3)", () => {
+    const tlsSanRegistry = join(root, "tls-san-corrupt-registry.toml");
+    const folder = createService("tls-san-corrupt-svc", "tls-san-corrupt-ep");
+    registerAt(tlsSanRegistry, "tls-san-corrupt-ep", folder);
+    const tlsDir = join(folder, ".ukp", "tls");
+    mkdirSync(tlsDir, { recursive: true });
+    writeFileSync(join(tlsDir, "cert.pem"), "not a certificate", "utf8");
+    writeFileSync(join(tlsDir, "key.pem"), "not a key", "utf8");
+    expect(() =>
+      start({
+        endpointName: "tls-san-corrupt-ep",
+        registryPath: tlsSanRegistry,
+        tls: { mode: "self-signed", sanEntries: ["IP:203.0.113.7"] },
+      }),
+    ).toThrow("TLS material is unusable");
   });
 });
 

@@ -661,43 +661,50 @@ function startServeListener(
 }
 
 /** TLS material resolution (W5' / D-079), shared by both serve modes: a
- * self-signed identity is generated/persisted under `identityDir` (the
- * Service folder's `.ukp/tls/` in endpoint mode, the registry directory in
- * door mode — a door has no single Service folder), explicit certificates
+ * self-signed identity is generated/re-signed/persisted under `identityDir`
+ * (the Service folder's `.ukp/tls/` in endpoint mode, the registry directory
+ * in door mode — a door has no single Service folder), explicit certificates
  * are read from the operator's paths. Bun.serve takes PEM contents
- * (path-string handling is platform-dependent). */
+ * (path-string handling is platform-dependent). Every failure — unreadable
+ * operator files, an unusable persisted identity, openssl unable to sign —
+ * surfaces as one ServeSetupError naming the certificate path. */
 function resolveTlsMaterial(
   config: ServeConfig,
   identityDir: string,
 ): { cert: string; key: string; pin: string; san: string; source: "generated" | "re-signed" | "persisted" | "operator" } | undefined {
   if (config.tls === undefined) return undefined;
   const tls = config.tls;
-  const paths = tls.mode === "self-signed"
-    ? (() => {
-        const identity = ensureSelfSignedTlsFiles(
-          identityDir,
-          tls.mode === "self-signed"
-            ? {
-                ...(tls.opensslCommand !== undefined ? { opensslCommand: tls.opensslCommand } : {}),
-                ...(tls.sanEntries !== undefined ? { extraSanEntries: tls.sanEntries } : {}),
-              }
-            : {},
-        );
-        return { certPath: identity.certPath, keyPath: identity.keyPath, source: identity.source };
-      })()
-    : { certPath: tls.certPath, keyPath: tls.keyPath, source: "operator" as const };
+  let certPath: string | undefined;
   try {
-    const cert = readFileSync(paths.certPath, "utf8");
+    let keyPath: string;
+    let source: "generated" | "re-signed" | "persisted" | "operator";
+    if (tls.mode === "self-signed") {
+      const identity = ensureSelfSignedTlsFiles(
+        identityDir,
+        {
+          ...(tls.opensslCommand !== undefined ? { opensslCommand: tls.opensslCommand } : {}),
+          ...(tls.sanEntries !== undefined ? { extraSanEntries: tls.sanEntries } : {}),
+        },
+      );
+      certPath = identity.certPath;
+      keyPath = identity.keyPath;
+      source = identity.source;
+    } else {
+      certPath = tls.certPath;
+      keyPath = tls.keyPath;
+      source = "operator";
+    }
+    const cert = readFileSync(certPath, "utf8");
     return {
       cert,
-      key: readFileSync(paths.keyPath, "utf8"),
+      key: readFileSync(keyPath, "utf8"),
       pin: spkiPinOf(cert),
       san: certSanOf(cert),
-      source: paths.source,
+      source,
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new ServeSetupError(`TLS material is unusable (${paths.certPath}): ${reason}`);
+    throw new ServeSetupError(`TLS material is unusable (${certPath ?? join(identityDir, "cert.pem")}): ${reason}`);
   }
 }
 
