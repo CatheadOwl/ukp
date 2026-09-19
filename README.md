@@ -185,6 +185,9 @@ ukp read --endpoint <name> notes/x.md                  # just works, like local
 # Native TLS on a bare IP — self-signed, pinned automatically at registration:
 UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 --tls
 ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
+# NAT/EIP cloud host (public IP on no NIC)? Name it explicitly — the persisted
+# cert re-signs over the same key, so the pin (and every registration) survives:
+#   ukp serve … --tls --tls-san <public-ip>
 ```
 
 Remote endpoints take the same commands as local ones — search, read, nav,

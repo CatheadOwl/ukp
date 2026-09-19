@@ -84,10 +84,14 @@ export interface ServeConfig {
    * identity under the Service folder (`.ukp/tls/`) — in door mode under the
    * registry's directory, since a door has no single Service folder;
    * `certificates` serves operator-provided PEM files (Let's Encrypt IP
-   * certs, mkcert, private CA). `opensslCommand` is a test injection point
-   * for the self-signing. */
+   * certs, mkcert, private CA). `sanEntries` (the `--tls-san` flag, already
+   * normalized `IP:x`/`DNS:y`) merges extra coverage into the self-signed
+   * SAN — a NAT/EIP public address no NIC carries; a persisted certificate
+   * lacking a requested entry is re-signed over the same key (pin unchanged,
+   * clients re-anchor). `opensslCommand` is a test injection point for the
+   * self-signing. */
   tls?:
-    | { mode: "self-signed"; opensslCommand?: readonly string[] }
+    | { mode: "self-signed"; opensslCommand?: readonly string[]; sanEntries?: readonly string[] }
     | { mode: "certificates"; certPath: string; keyPath: string };
   /** W9 / ADR-REM-006: self-reap after this many seconds without requests.
    * The orphan backstop for on-demand-woken doors — a no-TTY remote command
@@ -146,11 +150,13 @@ export interface ServeInfo {
   port: number;
   authRequired: boolean;
   /** TLS identity summary (W5' / D-079) when serving over HTTPS; the pin is
-   * what remote clients TOFU-pin at registration. */
+   * what remote clients TOFU-pin at registration. `source` "re-signed" marks
+   * the one start that grew SAN coverage over the existing key (--tls-san
+   * added an entry the persisted certificate lacked) — pin unchanged. */
   tls?: {
     pin: string;
     san: string;
-    source: "generated" | "persisted" | "operator";
+    source: "generated" | "re-signed" | "persisted" | "operator";
   };
   /** Present when --max-idle armed the self-reap timer (W9). */
   maxIdleSeconds?: number;
@@ -663,20 +669,21 @@ function startServeListener(
 function resolveTlsMaterial(
   config: ServeConfig,
   identityDir: string,
-): { cert: string; key: string; pin: string; san: string; source: "generated" | "persisted" | "operator" } | undefined {
+): { cert: string; key: string; pin: string; san: string; source: "generated" | "re-signed" | "persisted" | "operator" } | undefined {
   if (config.tls === undefined) return undefined;
   const tls = config.tls;
   const paths = tls.mode === "self-signed"
     ? (() => {
         const identity = ensureSelfSignedTlsFiles(
           identityDir,
-          tls.mode === "self-signed" && tls.opensslCommand !== undefined ? { opensslCommand: tls.opensslCommand } : {},
+          tls.mode === "self-signed"
+            ? {
+                ...(tls.opensslCommand !== undefined ? { opensslCommand: tls.opensslCommand } : {}),
+                ...(tls.sanEntries !== undefined ? { extraSanEntries: tls.sanEntries } : {}),
+              }
+            : {},
         );
-        return {
-          certPath: identity.certPath,
-          keyPath: identity.keyPath,
-          source: identity.created ? ("generated" as const) : ("persisted" as const),
-        };
+        return { certPath: identity.certPath, keyPath: identity.keyPath, source: identity.source };
       })()
     : { certPath: tls.certPath, keyPath: tls.keyPath, source: "operator" as const };
   try {

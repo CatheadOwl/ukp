@@ -485,6 +485,85 @@ describe("serve TLS (W5' / D-079)", () => {
     expect(half.exitCode).toBe(2);
     expect(half.stderr).toContain("--tls-cert and --tls-key are used together");
   });
+
+  test("--tls-san parses repeatable, classifies IP/DNS, and rejects junk", () => {
+    const parsed = parseServeArgs([
+      "--endpoint", "cad",
+      "--tls-san", "203.0.113.7",
+      "--tls-san", "fd00::1",
+      "--tls-san", "Door.Example",
+    ]);
+    expect(parsed.tlsSan).toEqual(["IP:203.0.113.7", "IP:fd00::1", "DNS:door.example"]);
+    // absent flag = absent field: parse output stays byte-identical to the
+    // pre-flag shape (TODO acceptance: no --tls-san behaves exactly as today)
+    expect(parseServeArgs(["--endpoint", "cad"]).tlsSan).toBeUndefined();
+    expect(() => parseServeArgs(["--endpoint", "cad", "--tls-san", "bad_name!"])).toThrow(
+      "--tls-san entry 'bad_name!' is neither an IP address nor a DNS name",
+    );
+    expect(() => parseServeArgs(["--endpoint", "cad", "--tls-san", "   "])).toThrow(
+      "--tls-san entry must not be empty",
+    );
+  });
+
+  test("--tls-san without --tls is a usage error (explicit certificates carry their own SAN)", async () => {
+    const { executeServeCommand } = await import("../src/commands/serve.ts");
+    const context = { currentDirectory: root, registryPath, qmdCommand, tokens: ["t"] };
+    const bare = executeServeCommand(["--endpoint", "serve-fixture", "--tls-san", "203.0.113.7"], context);
+    expect(bare.exitCode).toBe(2);
+    expect(bare.stderr).toContain("--tls-san is only used with --tls");
+    const besideCerts = executeServeCommand(
+      ["--endpoint", "serve-fixture", "--tls-cert", "x.pem", "--tls-key", "y.pem", "--tls-san", "203.0.113.7"],
+      context,
+    );
+    expect(besideCerts.exitCode).toBe(2);
+    expect(besideCerts.stderr).toContain("--tls-san is only used with --tls");
+  });
+
+  test.skipIf(!opensslAvailable)("--tls-san merges into the self-signed SAN; growing it re-signs the persisted certificate over the same key", async () => {
+    const { certSanEntriesOf } = await import("../src/capabilities/tls-identity.ts");
+    // Own registry: registering into the shared one would leak into the door
+    // roster snapshot tests.
+    const tlsSanRegistry = join(root, "tls-san-registry.toml");
+    const folder = createService("tls-san-svc", "tls-san-ep");
+    registerAt(tlsSanRegistry, "tls-san-ep", folder);
+    const tlsDir = join(folder, ".ukp", "tls");
+
+    const first = start({
+      endpointName: "tls-san-ep",
+      registryPath: tlsSanRegistry,
+      tls: { mode: "self-signed", sanEntries: ["IP:203.0.113.7"] },
+    });
+    expect(first.info.tls?.source).toBe("generated");
+    const certPem = readFileSync(join(tlsDir, "cert.pem"), "utf8");
+    expect(certSanEntriesOf(certPem).has("ip:203.0.113.7")).toBe(true);
+    // The widened SAN serves anchored fetches — what a registered client does.
+    const response = await fetch(`${first.info.url}${DISCOVERY_PATH}`, { tls: { ca: certPem } });
+    expect(response.status).toBe(200);
+    first.server.stop(true);
+
+    // Growing coverage re-signs over the SAME key: the pin (SPKI) survives —
+    // the renewal semantics pinned clients already handle transparently.
+    const second = start({
+      endpointName: "tls-san-ep",
+      registryPath: tlsSanRegistry,
+      tls: { mode: "self-signed", sanEntries: ["IP:203.0.113.7", "DNS:door.example"] },
+    });
+    expect(second.info.tls?.source).toBe("re-signed");
+    expect(second.info.tls?.pin).toBe(first.info.tls?.pin);
+    expect(certSanEntriesOf(readFileSync(join(tlsDir, "cert.pem"), "utf8")).has("dns:door.example")).toBe(true);
+    second.server.stop(true);
+
+    // A request already covered (or narrower) reuses the persisted pair
+    // untouched — coverage only ever grows, drops never re-sign.
+    const third = start({
+      endpointName: "tls-san-ep",
+      registryPath: tlsSanRegistry,
+      tls: { mode: "self-signed", sanEntries: ["IP:203.0.113.7"] },
+    });
+    expect(third.info.tls?.source).toBe("persisted");
+    expect(third.info.tls?.pin).toBe(first.info.tls?.pin);
+    third.server.stop(true);
+  });
 });
 
 describe("serve host door mode (W7 / ADR-REM-004)", () => {
