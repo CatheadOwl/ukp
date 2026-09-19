@@ -35,18 +35,16 @@ ukp read --endpoint <name> notes/x.md                  # just works, like local
 Notes:
 - The `ssh://` url port selects nothing — the woken door listens on a
   client-chosen loopback port per invocation.
-- **Host prerequisite, ali-shaped recipe** (ukp on the non-interactive
-  PATH — `ssh host cmd` runs a bare default PATH, so user-local npm/bin
-  dirs are NOT on it): ship the package tree to the host, install deps,
-  and drop a shim into a system PATH dir:
-  ```bash
-  tar -czf ukp.tgz src package.json bun.lock tsconfig.json README.md LICENSE
-  scp ukp.tgz ali:/tmp/ && ssh ali 'mkdir -p ~/ukp-deploy && tar -xzf /tmp/ukp.tgz -C ~/ukp-deploy     && cd ~/ukp-deploy && <bun> install --frozen-lockfile     && printf "#!/bin/sh
-exec <bun> run /home/<user>/ukp-deploy/src/cli.ts \"\$@\"
-" > /tmp/ukp     && sudo install -m 755 /tmp/ukp /usr/local/bin/ukp'
-  # verify from anywhere, interactive or not:
-  ssh ali 'ukp --help | head -1'
-  ```
+- **Host prerequisite = a standard install.** `npm install -g
+  @catheadowl/ukp` (or `bun add -g`) on the host is all it takes — the wake
+  command prepends the standard install locations (`~/.bun/bin`,
+  `~/.npm-global/bin`, brew prefixes, then `$PATH`) before exec, so both
+  `ukp` and its bun shebang resolve even though `ssh host cmd` runs a bare
+  non-interactive PATH. Verified on ali with a user-prefix npm install
+  (ukp + bun both in `~/.npm-global/bin`, invisible to a bare shell):
+  wake register 5.2s, day-2 read 4.8s, no orphans. Only exception:
+  nvm-style versioned layouts have no fixed path shape — link once with
+  `sudo ln -s "$(command -v ukp)" /usr/local/bin/ukp`.
 - Consecutive invocations share an ssh multiplexing master for two minutes
   (handshake amortization); Windows' native ssh has no multiplexing and
   quietly pays the handshake per call.
