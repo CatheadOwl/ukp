@@ -293,9 +293,22 @@ function spawnMuxMaster(
 /** The pinned wake command (W9 / ADR-REM-006 §4 安全收窄): a fixed shape where
  * only the client-chosen integer port and idle window are interpolated — the
  * exact string an operator can allowlist with git-shell / authorized_keys
- * `command=`. Loopback-only, anonymous: SSH carries encryption and auth. */
+ * `command=`. Loopback-only, anonymous: SSH carries encryption and auth.
+ *
+ * The remote shell ssh runs commands in is NON-INTERACTIVE (bare system
+ * PATH), while every standard install mode lands in user-local,
+ * interactive-only dirs (bun's official script writes ~/.bashrc BEHIND its
+ * interactivity guard; `bun add -g` links into ~/.bun/bin; a user npm prefix
+ * like ~/.npm-global never leaves the user dir; brew lives outside the
+ * default ssh PATH). So the command prepends the standard install locations
+ * to PATH before exec — ukp AND its `#!/usr/bin/env bun` shebang both
+ * resolve for any usual install. nvm-style versioned layouts have no fixed
+ * path shape and need a system symlink (documented exception). */
+const WAKE_REMOTE_PATH_PREFIX =
+  "$HOME/.bun/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/home/linuxbrew/.linuxbrew/bin";
+
 function wakeDoorCommand(remotePort: number): string {
-  return `ukp serve --allow-anonymous --host 127.0.0.1 --port ${remotePort} --max-idle ${WAKE_DOOR_MAX_IDLE_SECONDS}`;
+  return `sh -c 'PATH="${WAKE_REMOTE_PATH_PREFIX}:$PATH" exec ukp serve --allow-anonymous --host 127.0.0.1 --port ${remotePort} --max-idle ${WAKE_DOOR_MAX_IDLE_SECONDS}'`;
 }
 
 /** HTTP-level readiness probe through the tunnel (W9): a TCP accept on the
