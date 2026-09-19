@@ -146,7 +146,7 @@ Registry commands:
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings. `ukp register --url <url>` registers a remote endpoint — the name comes from its discovery document (asserted, not chosen); `--endpoint <name>` is an expected-name assertion, not an alias. Identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it (`--endpoint` imports one; `--select` narrows; re-running refreshes idempotently). |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings. `ukp register --url <url>` registers a remote endpoint under a local handle — the declared name by default, or `--name <handle>` when that name is already taken (two hosts both declaring `notes` become your `notes` and `ali-notes`); `--endpoint <name>` stays an expected-name assertion on the declared name. Identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it (`--endpoint` imports one; `--select` narrows; re-running refreshes idempotently). |
 | `ukp list` | Lists registered endpoints with their declared capabilities. Door drift shows as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture. |
 
 Operations commands:
