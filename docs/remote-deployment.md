@@ -73,6 +73,57 @@ certificates? Let's Encrypt issues IP-address certificates (GA 2026-01) —
 run certbot with a renewal timer and point `--tls-cert/--tls-key` at the
 files; clients then need no pinning at all.
 
+## Socket activation (Linux — no resident process on the https path either)
+
+systemd can hold the listening port itself and spawn the door on first
+connection; the door then self-reaps after `--max-idle` seconds of no
+requests and systemd re-spawns it on the next one. Nothing resident
+between uses — the same zero-maintenance posture as the ssh wake, for the
+consumer-facing https door (Cockpit and Ubuntu's own sshd run this way).
+
+Two user-level units (matches a user-local install; adjust the PATH chain
+to your install — **systemd units source no profile**, so the standard
+locations must be prepended explicitly, cf. the install-mode table in the
+repo's daemon-ownership knowledge unit):
+
+```ini
+# ~/.config/systemd/user/ukp-door.socket
+[Unit]
+Description=ukp host door (socket-activated)
+
+[Socket]
+ListenStream=8570
+
+# ~/.config/systemd/user/ukp-door.service
+[Unit]
+Description=ukp host door
+
+[Service]
+Environment=PATH=%h/.npm-global/bin:%h/.bun/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=-%h/.config/ukp-door.env   # UKP_SERVE_TOKEN=… (chmod 600)
+ExecStart=ukp serve --systemd-socket --max-idle 60 --tls
+```
+
+```bash
+loginctl enable-linger "$USER"          # let the socket answer while you're
+                                        # not logged in
+systemctl --user daemon-reload
+systemctl --user enable --now ukp-door.socket
+# nothing is running yet — the first client connection spawns the door:
+ukp register --url https://<host>:8570 --token <token>   # cold start, TOFU-pins
+```
+
+Notes:
+- The port belongs to the SOCKET unit — serve runs `--systemd-socket`
+  (`--port` is rejected alongside) and requires `UKP_SERVE_TOKEN`: the
+  bind address is the unit's (possibly public), so tokenless serving is
+  not verifiable from inside the process.
+- TLS: `--tls` self-signs on first start (identity under `~/.ukp/tls/`);
+  clients pin at registration. LE/mkcert: `--tls-cert/--tls-key` as usual.
+- Do NOT put an HTTP health-check in front of the socket — it would wake
+  the door on every probe and defeat `--max-idle`.
+- `systemctl --user` over bare ssh needs `XDG_RUNTIME_DIR=/run/user/$(id -u)`.
+
 ## Host door (one host, many endpoints — one gesture, zero tokens)
 
 Trust's natural unit is the host, not the endpoint: if you can ssh to a

@@ -24,6 +24,9 @@ Owner path over SSH (zero ceremony — nothing to start on the host):
 LAN HTTPS path:
 1. On the host machine, run a tokened TLS door (keep it under your process manager)
    UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls
+   Linux hosts can go resident-free too: systemd socket activation holds the
+   port and spawns the door per use (ukp serve --systemd-socket, recipe in
+   the deployment handbook)
 
 2. On the consuming machine, import either the whole door or one endpoint
    ukp register --url https://<ip>:8570 --token <token>

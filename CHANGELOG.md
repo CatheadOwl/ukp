@@ -6,6 +6,11 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp serve --systemd-socket` (Linux): serve on a systemd
+  socket-activation listener instead of binding a port — the socket unit
+  holds the port, spawns the door on first connection, and the door
+  self-reaps after --max-idle; nothing resident between uses on the https
+  path either. Token required (the bind belongs to the unit).
 - `ukp serve --max-idle <seconds>`: self-exit after that long without
   requests (requests re-arm the timer; idle connections don't). The orphan
   backstop the on-demand-woken doors rely on, and the companion flag for
