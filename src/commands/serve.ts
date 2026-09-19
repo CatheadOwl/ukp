@@ -145,7 +145,7 @@ export function renderServeBanner(info: ServeInfo): string {
     return [
       `serving host door (ukp-remote v1)`,
       `  listening: ${info.url}`,
-      `  discovery: ${info.url}${DISCOVERY_PATH} (host door)`,
+      `  discovery: ${info.url.startsWith("http") ? `${info.url}${DISCOVERY_PATH}` : info.url} (host door)`,
       `  endpoints: ${info.door!.endpoints.length > 0 ? info.door!.endpoints.join(", ") : "(none — register endpoints on this host)"}`,
       `  write: ${info.door!.write.length > 0 ? info.door!.write.join(", ") + " (propose via PUT /e/<name>/v1/propose/<id>)" : "(no endpoint declares propose)"}`,
       `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback bind; ssh-forwarded clients authenticate by SSH key)"}`,
@@ -161,7 +161,7 @@ export function renderServeBanner(info: ServeInfo): string {
   return [
     `serving endpoint '${info.endpoint}' (ukp-remote v1)`,
     `  listening: ${info.url}`,
-    `  discovery: ${info.url}${DISCOVERY_PATH}`,
+    `  discovery: ${info.url.startsWith("http") ? `${info.url}${DISCOVERY_PATH}` : info.url}`,
     `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback only)"}`,
     ...(info.maxIdleSeconds !== undefined
       ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
@@ -214,6 +214,14 @@ export function executeServeCommand(
       throw new KitUsageError("--tls-cert and --tls-key are used together");
     }
     const tokens = context.tokens ?? parseServeTokens(process.env.UKP_SERVE_TOKEN);
+    // W10: socket activation must not admit tokenless serving — the bind
+    // address belongs to the socket unit (possibly public), so the loopback
+    // premise of --allow-anonymous is unverifiable here (RQ-18 review P1).
+    if (systemdSocket && tokens.length === 0) {
+      throw new Error(
+        "refusing to serve on --systemd-socket without a token: the listener's bind address belongs to the socket unit and may be public — tokenless loopback serving cannot be verified here; set UKP_SERVE_TOKEN",
+      );
+    }
     const decision = serveAuthDecision(host, tokens, allowAnonymous);
     if (!decision.ok) {
       const target = endpoint === undefined ? "host door" : `'${endpoint}'`;

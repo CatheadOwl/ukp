@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  for (const { server } of started) server.stop(true);
+  for (const handle of started) handle.stopAll();
   rmSync(root, { recursive: true, force: true });
   rmSync(fixture, { recursive: true, force: true });
 });
