@@ -21,6 +21,7 @@ import { executeSearchCommand } from "../src/commands/search.ts";
 import { executeReadCommand } from "../src/commands/read.ts";
 import { executeRgCommand } from "../src/commands/rg.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
+import { openRemoteTransport, fetchDiscoveryDocument } from "../src/capabilities/remote-client.ts";
 
 // ukp_remote W7 client-side tests: host door access (ADR-REM-004). The
 // "remote" is a real door-mode server on loopback http (admissible by the
@@ -316,24 +317,25 @@ describe("door drift notes (view dynamic, ledger static)", () => {
   });
 });
 
-describe("ssh transport pooling (W7 / O-5)", () => {
-  test("one tunnel per origin per invocation: register=1, list(2 rows + door check)=1", async () => {
+describe("ssh transport pooling (W7 / O-5) on the wake path (W9)", () => {
+  test("wake spawns the door; one tunnel per origin per invocation: register=1, list(2 rows + door check)=1", async () => {
     // Own server-side registry: other tests in this file grow the shared one.
     const poolingServerRegistry = join(root, "pooling-server-registry.toml");
     registerAt(poolingServerRegistry, "notes", createService("pooling-notes-svc", "notes"));
     registerAt(poolingServerRegistry, "archive", createService("pooling-archive-svc", "archive"));
-    const door = startUkpServer({
-      currentDirectory: root,
-      registryPath: poolingServerRegistry,
-      qmdCommand,
-      port: 0,
-    });
-    started.push(door);
-
+    // No pre-started door: the wake command must spawn it (fake-ssh executes
+    // the pinned "ukp serve" by running a real door from this registry — the
+    // --registry test seam; fake-ssh itself runs under bun so it can import
+    // src/server.ts).
     const logPath = join(root, "fake-ssh.log");
     rmSync(logPath, { force: true });
-    const sshCommand = [nodeExecutable, join(import.meta.dir, "helpers", "fake-ssh.mjs"), "--log", logPath];
-    const origin = `ssh://fake-door:${door.info.port}`;
+    const sshCommand = [
+      process.execPath,
+      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      "--log", logPath,
+      "--registry", poolingServerRegistry,
+    ];
+    const origin = "ssh://fake-door";
 
     const registered = await asResult(executeRegisterCommand(["--url", origin], { ...context, sshCommand }));
     expect(registered.exitCode).toBe(0);
@@ -342,9 +344,60 @@ describe("ssh transport pooling (W7 / O-5)", () => {
     const listed = await asResult(executeListCommand([], { ...context, sshCommand }));
     expect(listed.exitCode).toBe(0);
     expect(listed.stdout).toContain(`notes\t${origin}/notes\tsearch`);
-    // The invocation seam, proven: two invocations, two tunnels — the three
-    // same-origin fetches inside list (2 rows + 1 door check) shared one.
+    // The invocation seam, proven: two invocations, two wake tunnels — the
+    // three same-origin fetches inside list (2 rows + 1 door check) shared one.
     const log = readFileSync(logPath, "utf8").trim().split("\n");
     expect(log.length).toBe(2);
+    // Pin the operator-facing allowlist contract (ADR-REM-006 §4): the wake
+    // command's exact shape, byte-for-byte modulo the client-chosen port.
+    for (const line of log) {
+      expect(line).toMatch(
+        / wake=ukp serve --allow-anonymous --host 127\.0\.0\.1 --port \d+ --max-idle 600$/,
+      );
+    }
+  });
+});
+
+describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
+  test("no pre-started door: wake brings it up and discovery answers through the forward", async () => {
+    const wakeRegistry = join(root, "wake-server-registry.toml");
+    registerAt(wakeRegistry, "notes", createService("wake-notes-svc", "notes"));
+    const sshCommand = [
+      process.execPath,
+      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      "--registry", wakeRegistry,
+    ];
+    const binding = {
+      name: "notes",
+      kind: "remote" as const,
+      url: "ssh://wake-host/notes",
+    };
+    const transport = await openRemoteTransport(binding, { sshCommand });
+    try {
+      const fetched = await fetchDiscoveryDocument(binding, transport);
+      expect(fetched.doc.name).toBe("notes");
+      expect(fetched.doc.protocol).toBe("ukp-remote");
+    } finally {
+      transport.close();
+    }
+  });
+
+  test("missing ukp on the remote PATH: stderr is surfaced with the remedy hint", async () => {
+    const failing = join(root, "fake-ssh-missing.mjs");
+    writeFileSync(
+      failing,
+      `console.error("bash: line 1: ukp: command not found");\nprocess.exit(127);\n`,
+      "utf8",
+    );
+    const binding = { name: "notes", kind: "remote" as const, url: "ssh://wake-host" };
+    let message = "";
+    try {
+      await openRemoteTransport(binding, { sshCommand: [process.execPath, failing] });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("cannot find 'ukp'");
+    expect(message).toContain("ukp on the remote PATH");
+    expect(message).toContain("command not found");
   });
 });

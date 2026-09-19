@@ -55,6 +55,8 @@ export interface SearchContext {
   currentDirectory: string;
   registryPath: string;
   qmdCommand?: readonly string[];
+  /** Test injection point for the ssh binary the wake transport spawns. */
+  sshCommand?: readonly string[];
   artifactRoot?: string;
   artifactRunId?: string;
   now?: Date;

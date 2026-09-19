@@ -43,6 +43,8 @@ export interface RgContext {
   currentDirectory: string;
   registryPath: string;
   rgCommand?: readonly string[];
+  /** Test injection point for the ssh binary the wake transport spawns. */
+  sshCommand?: readonly string[];
 }
 
 /** ADR 0021 aggregate classification — the adapter maps it onto exit codes;

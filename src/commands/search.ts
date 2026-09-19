@@ -223,7 +223,10 @@ async function executeMixedSearch(
   const remoteOutcomes = new Map<string, SearchEndpointOutcome>();
   // One transport pool for the whole invocation (W7 / O-5): same-origin door
   // bindings share a single ssh tunnel instead of one per row.
-  const pool = createTransportPool({ registryPath: context.registryPath });
+  const pool = createTransportPool({
+    registryPath: context.registryPath,
+    ...(context.sshCommand === undefined ? {} : { sshCommand: context.sshCommand }),
+  });
   try {
     for (const binding of remotes) {
       const token = resolveRemoteToken(binding);
