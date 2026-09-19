@@ -6,6 +6,14 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp register --url ... --name <handle>`: the registry is your namespace —
+  register a remote endpoint under a local handle when the declared name is
+  already taken. The declared name is kept as provenance (a `declares:` line
+  at registration, `name (declares X)` in `ukp list`), `--endpoint` stays an
+  expected-name assertion on the declared name, and re-registering without
+  `--name` refreshes the instance under its existing handle. Door-import name
+  conflicts now point at the `--name` remedy, and server-declared `ukp://`
+  references re-anchor to the handle so hand-off keys resolve locally.
 - `ukp serve --tls-san <ip|dns>` (repeatable, next to `--tls`): merge an
   extra SAN entry into the self-signed identity — the cloud NAT/EIP case,
   where the public IP is on no NIC and the automatic SAN coverage can never
