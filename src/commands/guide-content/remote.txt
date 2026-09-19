@@ -3,25 +3,26 @@ UKP Remote quickstart
 Goal: expose registered Services from one machine and consume them from another with the same endpoint commands: search, read, nav, rg, and propose when declared.
 
 Current model:
-- Remote access uses a running ukp serve process on the host machine.
+- The ssh:// path needs nothing running on the host: each invocation wakes a loopback door over the SSH connection (it serves the host Registry fresh and self-reaps when idle). Host prerequisites: the host is ssh reachable and ukp is on the remote PATH.
+- The https path (LAN, public IP, or behind a reverse proxy) uses a resident door: run ukp serve under your process manager. Arbitrary consumers have no SSH credentials, so the listener itself is the trust boundary (TLS + bearer token).
 - Prefer host door mode: run ukp serve without --endpoint to expose every local endpoint behind one port.
 - The door reads the host Registry fresh on each request, so newly registered local endpoints appear without restarting the door.
 - Endpoint names still come from the host Service Manifest or discovery document. Client-side --endpoint during register is an expected-name assertion, not an alias.
 
-Owner path over SSH:
-1. On the host machine, keep a loopback host door running
-   ukp serve --allow-anonymous
+Owner path over SSH (zero ceremony — nothing to start on the host):
+1. Prerequisites (once): the host accepts your SSH key and ukp is on its PATH
+   ssh <host> ukp --help
 
-2. On the consuming machine, import the door
+2. On the consuming machine, import the door (the first call wakes it)
    ukp register --url ssh://<host>
 
-3. Use the imported endpoints by name
+3. Use the imported endpoints by name; later calls reuse the warmed connection
    ukp list
    ukp read --endpoint <name> notes/x.md
    ukp rg "keyword" --endpoint <name>
 
 LAN HTTPS path:
-1. On the host machine, run a tokened TLS door
+1. On the host machine, run a tokened TLS door (keep it under your process manager)
    UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls
 
 2. On the consuming machine, import either the whole door or one endpoint
@@ -44,10 +45,12 @@ Name and identity:
 - A host door can import everything, --select a comma-separated subset, or --endpoint exactly one endpoint.
 - Self-signed HTTPS certificates are pinned on first registration; compare the pinned fingerprint with the serve banner on untrusted networks.
 - Non-loopback plain http is refused. Use https, ssh://, or loopback http for local testing.
+- An ssh:// url port selects nothing: the woken door listens on a client-chosen loopback port.
 
 Operational note:
-- For a real host, keep ukp serve under your normal process manager, for example systemd, Task Scheduler, or a terminal multiplexer.
-- The current CLI does not install or autostart a remote door for you.
+- ssh:// hosts: nothing to manage — ukp wakes and reaps doors itself. To lock down what SSH may run, restrict the login shell (git-shell style); a forced authorized_keys command= does not compose with wake (the client chooses the door port per invocation).
+- https hosts: keep ukp serve under your normal process manager, for example systemd, Task Scheduler, or a terminal multiplexer. The CLI does not install or autostart the door.
+- serve accepts --max-idle <seconds> to self-exit after that long without requests (the same backstop the woken doors use).
 
 Remember:
 - Local registration makes a folder addressable on the host.

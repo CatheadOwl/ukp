@@ -367,19 +367,23 @@ describe("CLI bootstrap", () => {
     expect(guide).not.toContain("<searchable-folder>");
   });
 
-  test("guide remote covers host door setup, expected-name assertions, and transports", () => {
+  test("guide remote covers on-demand wake, expected-name assertions, and transports", () => {
     const output: string[] = [];
     expect(renderRemoteGuide()).toContain("UKP Remote quickstart");
     expect(renderGuideHelp()).toContain("remote");
     expect(renderHelp()).toContain("ukp guide remote");
     expect(runCli(["guide", "remote"], (message) => output.push(message))).toBe(0);
     const guide = output.join("\n");
-    expect(guide).toContain("ukp serve --allow-anonymous");
+    // ssh path: the wake model — nothing to start, host prerequisites stated.
+    expect(guide).toContain("wakes a loopback door over the SSH connection");
+    expect(guide).toContain("ssh reachable and ukp is on the remote PATH");
     expect(guide).toContain("ukp register --url ssh://<host>");
+    // https path: resident door under the operator's process manager.
     expect(guide).toContain("UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls");
     expect(guide).toContain("ukp register --url https://<ip>:8570 --endpoint <name> --token <token>");
     expect(guide).toContain("expected-name assertion, not an alias");
-    expect(guide).toContain("The current CLI does not install or autostart a remote door for you.");
+    expect(guide).toContain("An ssh:// url port selects nothing");
+    expect(guide).toContain("--max-idle <seconds>");
   });
 
   test("guide shows help when -h/--help follows a topic or subtopic", () => {

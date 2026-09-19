@@ -177,9 +177,10 @@ serving needs an explicit `--allow-anonymous` and is refused off loopback).
 The two fastest paths, from the consumer machine:
 
 ```bash
-# SSH between two personal machines — an ephemeral tunnel per invocation:
-ukp register --url ssh://<host>:8570 --token <token>   # once; TOFU + token stored
-ukp read --endpoint <name> notes/x.md                   # just works, like local
+# SSH between two personal machines — the door is woken on demand, nothing
+# to start on the host (prerequisites: ssh reachable + ukp on its PATH):
+ukp register --url ssh://<host>                        # once; TOFU stored
+ukp read --endpoint <name> notes/x.md                  # just works, like local
 
 # Native TLS on a bare IP — self-signed, pinned automatically at registration:
 UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 --tls
