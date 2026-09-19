@@ -50,7 +50,7 @@ if (match === undefined) process.exit(1);
 // Wake support: find the trailing "ukp serve …" command and honor it. When
 // present, the log line records the RAW wake string so tests can pin the
 // operator-facing allowlist contract byte-for-byte (modulo the port).
-const wake = argv.find((arg) => arg.startsWith("ukp serve "));
+const wake = argv.find((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve "));
 if (logFile !== undefined) {
   appendFileSync(logFile, `${process.pid} ${forward}${wake !== undefined ? ` wake=${wake}` : ""}\n`, "utf8");
 }

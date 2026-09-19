@@ -351,8 +351,10 @@ describe("ssh transport pooling (W7 / O-5) on the wake path (W9)", () => {
     // Pin the operator-facing allowlist contract (ADR-REM-006 §4): the wake
     // command's exact shape, byte-for-byte modulo the client-chosen port.
     for (const line of log) {
+      // The full pinned allowlist contract, byte-for-byte: standard-install
+      // PATH prefix + the door command (client-chosen port interpolated).
       expect(line).toMatch(
-        / wake=ukp serve --allow-anonymous --host 127\.0\.0\.1 --port \d+ --max-idle 60$/,
+        / wake=sh -c 'PATH="\$HOME\/\.bun\/bin:\$HOME\/\.npm-global\/bin:\/opt\/homebrew\/bin:\/home\/linuxbrew\/.linuxbrew\/bin:\$PATH" exec ukp serve --allow-anonymous --host 127\.0\.0\.1 --port \d+ --max-idle 60'$/,
       );
     }
   });
@@ -435,10 +437,10 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     expect(master).toContain("ControlMaster=auto");
     expect(master).toContain("ControlPersist=120");
     expect(master).toContain("ControlPath=~/.ssh/ukp-cm-%r@%h-%p");
-    expect(master!.some((arg) => arg.startsWith("ukp serve "))).toBe(false);
+    expect(master!.some((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve "))).toBe(false);
     // The wake client: attach-only — ControlMaster=no + the shared
     // ControlPath, plus -tt (session-bound door) and the pinned door command.
-    const wakeClient = dumps.find((argv) => argv.some((arg) => arg.startsWith("ukp serve ")));
+    const wakeClient = dumps.find((argv) => argv.some((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve ")));
     expect(wakeClient).toBeDefined();
     expect(wakeClient).toContain("-tt");
     expect(wakeClient).toContain("ControlMaster=no");
@@ -472,7 +474,7 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     expect(dumps.length).toBe(1);
     expect(dumps[0]).not.toContain("-N");
     expect(dumps[0]).not.toContain("ControlMaster");
-    expect(dumps[0].some((arg) => arg.startsWith("ukp serve "))).toBe(true);
+    expect(dumps[0].some((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve "))).toBe(true);
   });
 
   afterEach(() => {
