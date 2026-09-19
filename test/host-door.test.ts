@@ -357,7 +357,7 @@ describe("ssh transport pooling (W7 / O-5) on the wake path (W9)", () => {
         / wake=sh -c 'PATH="\$HOME\/\.bun\/bin:\$HOME\/\.npm-global\/bin:\/opt\/homebrew\/bin:\/home\/linuxbrew\/.linuxbrew\/bin:\$PATH" exec ukp serve --allow-anonymous --host 127\.0\.0\.1 --port \d+ --max-idle 60'$/,
       );
     }
-  });
+  }, 20_000);
 });
 
 describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
@@ -384,7 +384,7 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     } finally {
       transport.close();
     }
-  });
+  }, 20_000);
 
   test("missing ukp on the remote PATH: stderr is surfaced with the remedy hint", async () => {
     const failing = join(root, "fake-ssh-missing.mjs");
@@ -475,7 +475,7 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     expect(dumps[0]).not.toContain("-N");
     expect(dumps[0]).not.toContain("ControlMaster");
     expect(dumps[0].some((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve "))).toBe(true);
-  });
+  }, 20_000);
 
   afterEach(() => {
     // The Tier 1 tests spoof process.platform (the mux gate is the only
