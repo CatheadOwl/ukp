@@ -221,8 +221,15 @@ function randomRemotePort(): number {
  * support ("unix listener too long") — Tier 0 there, per-call handshake. */
 const WAKE_MUX_PERSIST_SECONDS = 120;
 const WAKE_MUX_CONTROL_PATH = "~/.ssh/ukp-cm-%r@%h-%p";
+/** A successful candidate daemonizes (its foreground exits within seconds of
+ * the handshake); one still alive after this window is by definition the
+ * degraded direct `-N` connection — reaped here. */
+const WAKE_MASTER_GRACE_MS = 10_000;
 
-function muxOptions(): readonly string[] {
+/** The candidate's options: it OWNS master creation (ControlMaster=auto +
+ * ControlPersist — with them a becoming-master daemonizes immediately and
+ * self-exits after the persist window). */
+function muxCandidateOptions(): readonly string[] {
   if (process.platform === "win32") return [];
   return [
     "-o", "ControlMaster=auto",
@@ -231,12 +238,31 @@ function muxOptions(): readonly string[] {
   ];
 }
 
+/** The wake client's options: attach-only (ControlMaster=no + ControlPath).
+ * OpenSSH attempts the control socket whenever ControlPath is set, so the
+ * client rides an existing master without any handshake; with no master (or
+ * a stale socket) it just connects directly. Crucially the client NEVER
+ * creates masters: a client-side auto racing the candidate resolves via
+ * temp-bind+link() where the loser disables mux and continues as a FOREGROUND
+ * connection — for the candidate that means an idle `-N` leaking forever
+ * (openssh mux.c muxserver_listen). */
+function muxClientOptions(): readonly string[] {
+  if (process.platform === "win32") return [];
+  return [
+    "-o", "ControlMaster=no",
+    "-o", `ControlPath=${WAKE_MUX_CONTROL_PATH}`,
+  ];
+}
+
 /** The detached mux master (Tier 1): no session, no forwards — with
  * ControlPersist it backgrounds itself and holds just the authenticated
  * connection for the persist window. If a master already exists (socket
- * alive), this exits immediately and harmlessly. Its fate is deliberately
- * ignored: ControlPersist owns its lifetime. Never spawned on win32: without
- * ControlMaster support the bare `-N` connection would idle forever. */
+ * alive), this exits immediately and harmlessly. Only FAILED candidates are
+ * reaped, after the grace window: a daemonized master's foreground has
+ * already exited, while a candidate that lost the creation race or hit a
+ * stale socket lives on as a plain direct `-N` connection that would idle
+ * forever — one per invocation until the socket is cleaned by hand. Never
+ * spawned on win32: native OpenSSH has no ControlMaster support. */
 function spawnMuxMaster(
   sshCommand: readonly string[] | undefined,
   target: string,
@@ -246,11 +272,15 @@ function spawnMuxMaster(
     ...(sshCommand ?? ["ssh"]),
     "-N",
     "-o", "BatchMode=yes",
-    ...muxOptions(),
+    ...muxCandidateOptions(),
     target,
   ];
   try {
-    Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    const grace = setTimeout(() => {
+      if (proc.exitCode === null) proc.kill();
+    }, WAKE_MASTER_GRACE_MS);
+    (grace as { unref?: () => void }).unref?.();
   } catch {
     // best-effort: without a master the wake client just handshakes itself
   }
@@ -333,6 +363,11 @@ async function openSshTunnel(
   // holds the socket); the wake client below rides it when possible and
   // degrades to a full handshake when not (first call of a burst, win32).
   spawnMuxMaster(options.sshCommand, target);
+  // Fatal mux conditions on the wake client (ControlPath expansion too long,
+  // unwritable socket dir) are fatal per attempt — once seen, drop the mux
+  // options for the remaining attempts so the endpoint degrades to Tier 0
+  // instead of hard-failing what worked without mux.
+  let muxDisabled = false;
   const attempts = 3;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const localPort = await freePort();
@@ -341,7 +376,7 @@ async function openSshTunnel(
       ...(options.sshCommand ?? ["ssh"]),
       "-o", "ExitOnForwardFailure=yes",
       "-o", "BatchMode=yes",
-      ...muxOptions(),
+      ...(muxDisabled ? [] : muxClientOptions()),
       "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
       target,
       wakeDoorCommand(remotePort),
@@ -357,6 +392,9 @@ async function openSshTunnel(
     // fast crash as a slow timeout.
     const diagnostics = (await stderrTail).trim();
     const exited = proc.exitCode !== null;
+    if (/ControlPath too long|muxserver_listen|unix_listener/i.test(diagnostics)) {
+      muxDisabled = true;
+    }
     // POSIX login shells print "…: ukp: command not found" (exit 127); Windows
     // OpenSSH under cmd prints "'ukp' is not recognized…" (exit 9009).
     if (exited && /not found|not recognized|exit status 127|status 9009/i.test(diagnostics)) {

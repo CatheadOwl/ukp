@@ -1,4 +1,4 @@
-import { describe, expect, test, afterAll, beforeEach } from "bun:test";
+import { describe, expect, test, afterAll, afterEach, beforeEach } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -359,6 +359,8 @@ describe("ssh transport pooling (W7 / O-5) on the wake path (W9)", () => {
 });
 
 describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
+  const originalPlatform = process.platform;
+
   test("no pre-started door: wake brings it up and discovery answers through the forward", async () => {
     const wakeRegistry = join(root, "wake-server-registry.toml");
     registerAt(wakeRegistry, "notes", createService("wake-notes-svc", "notes"));
@@ -401,79 +403,81 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     expect(message).toContain("command not found");
   });
 
-  test("Tier 1: a detached -N mux master precedes the wake client, which carries the mux trio", async () => {
+  test("Tier 1: a detached -N mux master precedes the wake client, which attaches only", async () => {
     // The whole flow runs against fakes, so the platform gate (win32 native
     // ssh has no ControlMaster) is spoofed to exercise the Tier-1 path on
-    // every dev platform; CI's Linux leg runs it natively.
-    const originalPlatform = process.platform;
+    // every dev platform; afterEach restores unconditionally (timeout-safe).
     Object.defineProperty(process, "platform", { value: "linux" });
+    const wakeRegistry = join(root, "mux-server-registry.toml");
+    registerAt(wakeRegistry, "notes", createService("mux-notes-svc", "notes"));
+    const dumpPath = join(root, "mux-argv-dump.jsonl");
+    rmSync(dumpPath, { force: true });
+    const sshCommand = [
+      process.execPath,
+      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      "--registry", wakeRegistry,
+      "--dump", dumpPath,
+    ];
+    const binding = { name: "notes", kind: "remote" as const, url: "ssh://mux-host/notes" };
+    const transport = await openRemoteTransport(binding, { sshCommand });
     try {
-      const wakeRegistry = join(root, "mux-server-registry.toml");
-      registerAt(wakeRegistry, "notes", createService("mux-notes-svc", "notes"));
-      const dumpPath = join(root, "mux-argv-dump.jsonl");
-      rmSync(dumpPath, { force: true });
-      const sshCommand = [
-        process.execPath,
-        join(import.meta.dir, "helpers", "fake-ssh.mjs"),
-        "--registry", wakeRegistry,
-        "--dump", dumpPath,
-      ];
-      const binding = { name: "notes", kind: "remote" as const, url: "ssh://mux-host/notes" };
-      const transport = await openRemoteTransport(binding, { sshCommand });
-      try {
-        const fetched = await fetchDiscoveryDocument(binding, transport);
-        expect(fetched.doc.name).toBe("notes");
-      } finally {
-        transport.close();
-      }
-      const dumps = readFileSync(dumpPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
-      // First spawn = the detached master: -N, BatchMode, the mux trio, no wake command.
-      const master = dumps[0];
-      expect(master).toContain("-N");
-      expect(master).toContain("ControlMaster=auto");
-      expect(master).toContain("ControlPersist=120");
-      expect(master).toContain("ControlPath=~/.ssh/ukp-cm-%r@%h-%p");
-      expect(master.some((arg) => arg.startsWith("ukp serve "))).toBe(false);
-      // The wake client: same ControlPath (it rides the master), plus -L and the pinned door command.
-      const wakeClient = dumps.find((argv) => argv.some((arg) => arg.startsWith("ukp serve ")));
-      expect(wakeClient).toBeDefined();
-      expect(wakeClient).toContain("ControlPath=~/.ssh/ukp-cm-%r@%h-%p");
-      expect(wakeClient!.some((arg) => arg.startsWith("127.0.0.1:"))).toBe(true);
+      const fetched = await fetchDiscoveryDocument(binding, transport);
+      expect(fetched.doc.name).toBe("notes");
     } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform });
+      transport.close();
     }
+    const dumps = readFileSync(dumpPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    // The detached master: -N, BatchMode, the candidate mux trio, no wake
+    // command. Found by shape, not by log order — candidate and client are
+    // separate processes racing on the same journal file.
+    const master = dumps.find((argv) => argv.includes("-N"));
+    expect(master).toBeDefined();
+    expect(master).toContain("ControlMaster=auto");
+    expect(master).toContain("ControlPersist=120");
+    expect(master).toContain("ControlPath=~/.ssh/ukp-cm-%r@%h-%p");
+    expect(master!.some((arg) => arg.startsWith("ukp serve "))).toBe(false);
+    // The wake client: attach-only — ControlMaster=no + the shared
+    // ControlPath, plus -L and the pinned door command.
+    const wakeClient = dumps.find((argv) => argv.some((arg) => arg.startsWith("ukp serve ")));
+    expect(wakeClient).toBeDefined();
+    expect(wakeClient).toContain("ControlMaster=no");
+    expect(wakeClient).not.toContain("ControlMaster=auto");
+    expect(wakeClient).toContain("ControlPath=~/.ssh/ukp-cm-%r@%h-%p");
+    expect(wakeClient!.some((arg) => arg.startsWith("127.0.0.1:"))).toBe(true);
   });
 
   test("Tier 1 on win32: no master spawn, no mux options in the wake client", async () => {
-    const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32" });
+    const wakeRegistry = join(root, "mux-win-registry.toml");
+    registerAt(wakeRegistry, "notes", createService("mux-win-svc", "notes"));
+    const dumpPath = join(root, "mux-win-dump.jsonl");
+    rmSync(dumpPath, { force: true });
+    const sshCommand = [
+      process.execPath,
+      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      "--registry", wakeRegistry,
+      "--dump", dumpPath,
+    ];
+    const binding = { name: "notes", kind: "remote" as const, url: "ssh://mux-win-host/notes" };
+    const transport = await openRemoteTransport(binding, { sshCommand });
     try {
-      const wakeRegistry = join(root, "mux-win-registry.toml");
-      registerAt(wakeRegistry, "notes", createService("mux-win-svc", "notes"));
-      const dumpPath = join(root, "mux-win-dump.jsonl");
-      rmSync(dumpPath, { force: true });
-      const sshCommand = [
-        process.execPath,
-        join(import.meta.dir, "helpers", "fake-ssh.mjs"),
-        "--registry", wakeRegistry,
-        "--dump", dumpPath,
-      ];
-      const binding = { name: "notes", kind: "remote" as const, url: "ssh://mux-win-host/notes" };
-      const transport = await openRemoteTransport(binding, { sshCommand });
-      try {
-        const fetched = await fetchDiscoveryDocument(binding, transport);
-        expect(fetched.doc.name).toBe("notes");
-      } finally {
-        transport.close();
-      }
-      const dumps = readFileSync(dumpPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
-      // Exactly one spawn (the wake client) — no bare `-N` master, no mux trio.
-      expect(dumps.length).toBe(1);
-      expect(dumps[0]).not.toContain("-N");
-      expect(dumps[0]).not.toContain("ControlMaster=auto");
-      expect(dumps[0].some((arg) => arg.startsWith("ukp serve "))).toBe(true);
+      const fetched = await fetchDiscoveryDocument(binding, transport);
+      expect(fetched.doc.name).toBe("notes");
     } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform });
+      transport.close();
     }
+    const dumps = readFileSync(dumpPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    // Exactly one spawn (the wake client) — no bare `-N` master, no mux trio.
+    expect(dumps.length).toBe(1);
+    expect(dumps[0]).not.toContain("-N");
+    expect(dumps[0]).not.toContain("ControlMaster");
+    expect(dumps[0].some((arg) => arg.startsWith("ukp serve "))).toBe(true);
+  });
+
+  afterEach(() => {
+    // The Tier 1 tests spoof process.platform (the mux gate is the only
+    // platform dependence and the flow runs entirely against fakes); restore
+    // here, not in per-test finally — a test timeout must not leak the spoof.
+    Object.defineProperty(process, "platform", { value: originalPlatform });
   });
 });
