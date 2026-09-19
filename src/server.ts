@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, fstatSync, constants as fsConstants } from "node:fs";
+import { createServer as netCreateServer, connect as netConnect, type Server as NetServer } from "node:net";
 import { ENDPOINT_NAME, loadManifest, type LoadedManifest } from "./config/manifest.ts";
 import { localPathOf, readRegistry } from "./registry.ts";
 import { FILE_NATIVE_CAPABILITIES, resolveFileNativeCapability } from "./config/file-native.ts";
@@ -93,6 +94,10 @@ export interface ServeConfig {
    * can escape SIGHUP on an abrupt disconnect, so the door bounds its own
    * lifetime instead of trusting the session to reap it. */
   maxIdleSeconds?: number;
+  /** W10 / ADR-REM-006: serve on the systemd socket-activation listener
+   * (LISTEN_FDS fd 3) instead of binding a port — the port belongs to the
+   * socket unit; the process only exists while in use. Linux-only. */
+  systemdSocket?: boolean;
 }
 
 export interface DiscoveryDocument {
@@ -163,7 +168,7 @@ export interface ServeInfo {
 function armIdleExit(
   handler: (request: Request) => Response | Promise<Response>,
   maxIdleSeconds: number,
-): { fetch: (request: Request) => Response | Promise<Response>; bind: (server: ReturnType<typeof Bun.serve>) => void } {
+): { fetch: (request: Request) => Response | Promise<Response>; bind: (stop: () => void) => void } {
   const control = { stop: (): void => {} };
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
@@ -187,8 +192,8 @@ function armIdleExit(
       Promise.resolve(response).then(rearm, () => {});
       return response;
     },
-    bind(server: ReturnType<typeof Bun.serve>) {
-      control.stop = () => server.stop(true);
+    bind(stop: () => void) {
+      control.stop = stop;
     },
   };
 }
@@ -498,6 +503,119 @@ function parseRgParams(
 export interface StartedServe {
   server: ReturnType<typeof Bun.serve>;
   info: ServeInfo;
+  /** Composite stop: in socket-activation mode this also closes the fd3
+   * acceptor (Bun.serve's own stop alone would leave the process alive
+   * holding the systemd-passed listener). Safe to call from the SIGINT/
+   * SIGTERM/SIGHUP handlers and the idle-exit path alike. */
+  stopAll: () => void;
+}
+
+/** W10 / ADR-REM-006: parse the systemd LISTEN_FDS convention — exactly one
+ * listening fd expected (fd 3), PID-guarded, and the variables are CONSUMED
+ * (unset) so any child process does not double-count inherited activation
+ * fds (the podman fd-counting pitfall, knowledge §5.2). */
+const S_ISSOCK = fsConstants.S_IFSOCK;
+
+export function parseListenFds(env: NodeJS.ProcessEnv): { fd: number } | { error: string } {
+  if ((env.LISTEN_FDS ?? "") === "" || (env.LISTEN_PID ?? "") === "") {
+    return {
+      error:
+        "--systemd-socket requires systemd socket activation: LISTEN_FDS/LISTEN_PID are not set (run under a .socket unit or systemd-socket-activate)",
+    };
+  }
+  if (Number(env.LISTEN_PID) !== process.pid) {
+    return { error: `LISTEN_PID ${env.LISTEN_PID} does not match this process (${process.pid}) — inherited activation variables belong to another process` };
+  }
+  const count = Number(env.LISTEN_FDS);
+  if (!Number.isSafeInteger(count) || count < 1) {
+    return { error: `LISTEN_FDS=${String(env.LISTEN_FDS)} is not a positive integer` };
+  }
+  if (count !== 1) {
+    return { error: `expected exactly one listening fd (LISTEN_FDS=1), got ${count} — run one socket unit per serve instance` };
+  }
+  delete env.LISTEN_FDS;
+  delete env.LISTEN_PID;
+  return { fd: 3 };
+}
+
+/** W10 / ADR-REM-006: the in-process bridge. Bun.serve cannot adopt a raw
+ * listening fd (no public API; ali probe 2026-09-19), but node:net can
+ * (`createServer().listen({fd: 3})` verified under bun). Each connection the
+ * systemd-held listener accepts is piped to the real Bun.serve listener on
+ * an ephemeral loopback port — the fake-ssh proxy pattern, in-process. */
+export function createSocketBridge(acceptor: NetServer, targetPort: number): void {
+  acceptor.on("connection", (socket) => {
+    const upstream = netConnect({ host: "127.0.0.1", port: targetPort });
+    socket.pipe(upstream);
+    upstream.pipe(socket);
+    socket.on("error", () => upstream.destroy());
+    upstream.on("error", () => socket.destroy());
+  });
+}
+
+/** One serve listener, both modes (W10): plain binding by default; under
+ * `systemdSocket` the systemd-passed fd 3 is adopted via node:net and
+ * bridged to the real Bun.serve listener on an ephemeral loopback port. */
+function startServeListener(
+  handler: (request: Request) => Response | Promise<Response>,
+  options: {
+    host: string;
+    port?: number;
+    tlsMaterial?: { cert: string; key: string };
+    maxIdleSeconds?: number;
+    systemdSocket?: boolean;
+  },
+): { server: ReturnType<typeof Bun.serve>; stopAll: () => void; publicUrl: string; port: number } {
+  const idle = options.maxIdleSeconds !== undefined ? armIdleExit(handler, options.maxIdleSeconds) : undefined;
+  const fetch = idle?.fetch ?? handler;
+  const tls = options.tlsMaterial !== undefined ? { tls: { cert: options.tlsMaterial.cert, key: options.tlsMaterial.key } } : {};
+  const scheme = options.tlsMaterial !== undefined ? "https" : "http";
+
+  if (options.systemdSocket !== true) {
+    const server = Bun.serve({ hostname: options.host, port: options.port ?? 8570, ...tls, fetch });
+    idle?.bind(() => server.stop(true));
+    const port = server.port ?? (options.port ?? 8570);
+    return { server, stopAll: () => server.stop(true), publicUrl: `${scheme}://${options.host}:${port}`, port };
+  }
+
+  if (process.platform !== "linux") {
+    throw new ServeSetupError("--systemd-socket is Linux-only (systemd socket activation)");
+  }
+  const parsed = parseListenFds(process.env);
+  if ("error" in parsed) throw new ServeSetupError(parsed.error);
+  // Validate the fd synchronously: systemd passes a bound LISTENING socket;
+  // anything else (EBADF, wrong type) must fail setup, not crash later.
+  let isSocket = false;
+  try {
+    const stats = fstatSync(parsed.fd);
+    isSocket = (stats.mode & S_ISSOCK) === S_ISSOCK;
+  } catch {
+    isSocket = false;
+  }
+  if (!isSocket) {
+    throw new ServeSetupError(`fd ${parsed.fd} is not an open socket — socket activation must pass a bound listening socket`);
+  }
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, ...tls, fetch });
+  const acceptor = netCreateServer();
+  createSocketBridge(acceptor, server.port ?? 0);
+  acceptor.on("error", (error) => {
+    console.error(`ukp serve: fd3 acceptor failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
+  acceptor.listen({ fd: parsed.fd });
+  idle?.bind(() => {
+    acceptor.close();
+    server.stop(true);
+  });
+  return {
+    server,
+    stopAll: () => {
+      acceptor.close();
+      server.stop(true);
+    },
+    publicUrl: `systemd:fd${parsed.fd} (bridge ${scheme}://127.0.0.1:${server.port})`,
+    port: server.port ?? 0,
+  };
 }
 
 /** TLS material resolution (W5' / D-079), shared by both serve modes: a
@@ -699,14 +817,14 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
     return doorNotFound(undefined, config.registryPath);
   };
 
-  const idle = config.maxIdleSeconds !== undefined ? armIdleExit(handler, config.maxIdleSeconds) : undefined;
-  const server = Bun.serve({
-    hostname: host,
-    port: config.port ?? 8570,
-    ...(tlsMaterial !== undefined ? { tls: { cert: tlsMaterial.cert, key: tlsMaterial.key } } : {}),
-    fetch: idle?.fetch ?? handler,
+  const listener = startServeListener(handler, {
+    host,
+    ...(config.port !== undefined ? { port: config.port } : {}),
+    ...(tlsMaterial !== undefined ? { tlsMaterial } : {}),
+    ...(config.maxIdleSeconds !== undefined ? { maxIdleSeconds: config.maxIdleSeconds } : {}),
+    ...(config.systemdSocket === true ? { systemdSocket: true } : {}),
   });
-  idle?.bind(server);
+  const { server } = listener;
 
   const info: ServeInfo = {
     mode: "door",
@@ -714,16 +832,16 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
       endpoints: listDoorEndpoints(config.registryPath).map((endpoint) => endpoint.name),
       write: listWriteEndpoints(config.registryPath),
     },
-    url: `${tlsMaterial !== undefined ? "https" : "http"}://${host}:${server.port ?? (config.port ?? 8570)}`,
+    url: listener.publicUrl,
     host,
-    port: server.port ?? (config.port ?? 8570),
+    port: listener.port,
     authRequired: (config.tokens?.length ?? 0) > 0,
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
       : {}),
     ...(config.maxIdleSeconds !== undefined ? { maxIdleSeconds: config.maxIdleSeconds } : {}),
   };
-  return { server, info };
+  return { server, info, stopAll: listener.stopAll };
 }
 
 export function startUkpServer(config: ServeConfig): StartedServe {
@@ -833,30 +951,30 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     );
   };
 
-  const idle = config.maxIdleSeconds !== undefined ? armIdleExit(handler, config.maxIdleSeconds) : undefined;
-  const server = Bun.serve({
-    hostname: host,
-    port: config.port ?? 8570,
-    ...(tlsMaterial !== undefined ? { tls: { cert: tlsMaterial.cert, key: tlsMaterial.key } } : {}),
-    fetch: idle?.fetch ?? handler,
+  const listener = startServeListener(handler, {
+    host,
+    ...(config.port !== undefined ? { port: config.port } : {}),
+    ...(tlsMaterial !== undefined ? { tlsMaterial } : {}),
+    ...(config.maxIdleSeconds !== undefined ? { maxIdleSeconds: config.maxIdleSeconds } : {}),
+    ...(config.systemdSocket === true ? { systemdSocket: true } : {}),
   });
-  idle?.bind(server);
+  const { server } = listener;
 
   const info: ServeInfo = {
     mode: "endpoint",
     endpoint: binding.name,
     folder: serviceFolder,
     instanceUid: readInstanceUid(serviceFolder),
-    url: `${tlsMaterial !== undefined ? "https" : "http"}://${host}:${server.port ?? (config.port ?? 8570)}`,
+    url: listener.publicUrl,
     host,
-    port: server.port ?? (config.port ?? 8570),
+    port: listener.port,
     authRequired: (config.tokens?.length ?? 0) > 0,
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
       : {}),
     ...(config.maxIdleSeconds !== undefined ? { maxIdleSeconds: config.maxIdleSeconds } : {}),
   };
-  return { server, info };
+  return { server, info, stopAll: listener.stopAll };
 }
 
 async function handleSearch(
