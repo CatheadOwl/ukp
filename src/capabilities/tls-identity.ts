@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { hostname, networkInterfaces } from "node:os";
 import { X509Certificate, createHash } from "node:crypto";
 import { isIP } from "node:net";
+import { acquireLock, releaseLock } from "../fslock.ts";
 
 /** TLS transport identity (ukp_remote W5' / D-079): the self-signed + TOFU
  * pinning path for serving over bare IPs without a public CA. Shared by the
@@ -55,17 +56,58 @@ export function normalizeTlsSanEntry(value: string): string {
   throw new Error(`--tls-san entry '${value}' is neither an IP address nor a DNS name`);
 }
 
-/** The SAN entries a certificate actually carries, as case-folded
- * `IP:x`/`DNS:y` keys (X509Certificate renders "IP Address:x", and openssl
- * may case an IPv6 literal differently than the requester did — SAN IP/DNS
- * matching is case-insensitive, so coverage comparison folds case too). */
+/** Fully expanded lowercase IPv6 form (group-wise parseInt also strips
+ * leading zeros); `fd00::1` and `fd00:0:0:0:0:0:0:1` are the same SAN, and
+ * openssl re-renders a compressed literal expanded on some platforms, so
+ * spellings must not leak into comparisons. Input is isIP-validated. */
+function expandIpv6(address: string): string {
+  const groupsOf = (part: string): string[] => {
+    if (part.length === 0) return [];
+    const groups: string[] = [];
+    for (const piece of part.split(":")) {
+      if (piece.includes(".")) {
+        // embedded IPv4 tail (::ffff:1.2.3.4) = two 16-bit groups
+        const [a = 0, b = 0, c = 0, d = 0] = piece.split(".").map(Number);
+        groups.push(((a << 8) | b).toString(16), ((c << 8) | d).toString(16));
+      } else {
+        groups.push(parseInt(piece, 16).toString(16));
+      }
+    }
+    return groups;
+  };
+  const halves = address.split("::");
+  if (halves.length === 1) return groupsOf(halves[0] ?? "").join(":");
+  if (halves.length !== 2) return address.toLowerCase();
+  const head = groupsOf(halves[0] ?? "");
+  const tail = groupsOf(halves[1] ?? "");
+  return [...head, ...Array.from({ length: 8 - head.length - tail.length }, () => "0"), ...tail].join(":");
+}
+
+/** Canonical comparison key for one `IP:x`/`DNS:y` SAN entry: uppercase
+ * type prefix, lowercase value, IPv6 expanded — the same shape openssl's
+ * addext wants, because re-signs emit inherited entries (canonical keys)
+ * back into the extension. Coverage decisions and deduplication compare
+ * keys, never spellings. */
+function sanKey(entry: string): string {
+  const separator = entry.indexOf(":");
+  if (separator < 1) return entry.toUpperCase();
+  const type = entry.slice(0, separator).toUpperCase();
+  const value = entry.slice(separator + 1);
+  if (type === "IP") return `IP:${isIP(value) === 6 ? expandIpv6(value) : value.toLowerCase()}`;
+  return `${type}:${value.toLowerCase()}`;
+}
+
+/** The SAN entries a certificate actually carries, as canonical keys
+ * (`IP:x` with IPv6 expanded / `DNS:y`, case-folded — X509Certificate
+ * renders "IP Address:x", and openssl may spell an IPv6 literal differently
+ * than the requester did). */
 export function certSanEntriesOf(cert: string | Buffer): Set<string> {
   const raw = new X509Certificate(cert).subjectAltName ?? "";
   const entries = new Set<string>();
   for (const part of raw.split(",")) {
     const entry = part.trim();
-    if (entry.startsWith("IP Address:")) entries.add(`IP:${entry.slice("IP Address:".length)}`.toLowerCase());
-    else if (entry.startsWith("DNS:")) entries.add(entry.toLowerCase());
+    if (entry.startsWith("IP Address:")) entries.add(sanKey(`IP:${entry.slice("IP Address:".length)}`));
+    else if (entry.startsWith("DNS:")) entries.add(sanKey(entry));
   }
   return entries;
 }
@@ -89,7 +131,11 @@ export interface SelfSignedIdentity {
  * `IP:x`/`DNS:y`) merges into the SAN coverage; when a persisted certificate
  * lacks requested entries it is re-signed over the SAME key — the SPKI pin
  * survives, which is exactly the renewal semantics pinned clients already
- * handle. Coverage only ever grows: dropping a flag entry never re-signs.
+ * handle. Coverage only ever grows: the re-sign unions everything the
+ * certificate already carried with automatic coverage and the new entries,
+ * and dropping a flag entry never re-signs. The read-decide-write section
+ * holds the write-discipline sibling lock (`.lock` in the tls dir) so two
+ * concurrent serve starts cannot interleave openssl writes.
  * `opensslCommand` is a test injection point. */
 export function ensureSelfSignedTlsFiles(
   tlsDir: string,
@@ -98,52 +144,76 @@ export function ensureSelfSignedTlsFiles(
   const certPath = join(tlsDir, "cert.pem");
   const keyPath = join(tlsDir, "key.pem");
   const extra = options.extraSanEntries ?? [];
-  if (existsSync(certPath) && existsSync(keyPath)) {
-    const covered = certSanEntriesOf(readFileSync(certPath, "utf8"));
-    const requestedButMissing = extra.filter((entry) => !covered.has(entry.toLowerCase()));
-    if (requestedButMissing.length === 0) return { certPath, keyPath, source: "persisted" };
+  mkdirSync(tlsDir, { recursive: true, mode: 0o700 });
+  const lockPath = join(tlsDir, ".lock");
+  const descriptor = acquireLock(lockPath);
+  try {
+    if (existsSync(certPath) && existsSync(keyPath)) {
+      let carried: string[];
+      try {
+        carried = [...certSanEntriesOf(readFileSync(certPath, "utf8"))];
+      } catch (error) {
+        throw new Error(
+          `the persisted self-signed certificate is unreadable (${certPath}): ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      const requestedButMissing = extra.filter((entry) => !carried.includes(sanKey(entry)));
+      if (requestedButMissing.length === 0) return { certPath, keyPath, source: "persisted" };
+      const san = mergedSanEntries(extra, carried);
+      runOpenssl(
+        [
+          ...(options.opensslCommand ?? ["openssl"]),
+          "req", "-x509",
+          "-key", keyPath,
+          "-out", certPath,
+          "-days", "3650",
+          "-subj", "/CN=ukp serve self-signed",
+          "-addext", `subjectAltName=${san.join(",")}`,
+        ],
+        [certPath],
+      );
+      return { certPath, keyPath, source: "re-signed" };
+    }
     const san = mergedSanEntries(extra);
     runOpenssl(
       [
         ...(options.opensslCommand ?? ["openssl"]),
-        "req", "-x509",
-        "-key", keyPath,
+        "req", "-x509", "-newkey", "rsa:2048",
+        "-keyout", keyPath,
         "-out", certPath,
         "-days", "3650",
+        "-nodes",
         "-subj", "/CN=ukp serve self-signed",
         "-addext", `subjectAltName=${san.join(",")}`,
       ],
-      [certPath],
+      [certPath, keyPath],
     );
-    return { certPath, keyPath, source: "re-signed" };
+    try {
+      chmodSync(keyPath, 0o600);
+    } catch {
+      // best-effort on platforms without POSIX modes
+    }
+    return { certPath, keyPath, source: "generated" };
+  } finally {
+    releaseLock(lockPath, descriptor);
   }
-  mkdirSync(tlsDir, { recursive: true, mode: 0o700 });
-  const san = mergedSanEntries(extra);
-  runOpenssl(
-    [
-      ...(options.opensslCommand ?? ["openssl"]),
-      "req", "-x509", "-newkey", "rsa:2048",
-      "-keyout", keyPath,
-      "-out", certPath,
-      "-days", "3650",
-      "-nodes",
-      "-subj", "/CN=ukp serve self-signed",
-      "-addext", `subjectAltName=${san.join(",")}`,
-    ],
-    [certPath, keyPath],
-  );
-  try {
-    chmodSync(keyPath, 0o600);
-  } catch {
-    // best-effort on platforms without POSIX modes
-  }
-  return { certPath, keyPath, source: "generated" };
 }
 
-/** Automatic coverage plus the requested extras, deduplicated — the SAN list
- * handed to openssl's subjectAltName extension. */
-function mergedSanEntries(extra: readonly string[]): string[] {
-  return [...new Set([...selfSignedSanEntries(), ...extra])];
+/** The SAN list handed to openssl's subjectAltName extension: automatic
+ * coverage, then the requested extras, then (on re-sign) entries the
+ * persisted certificate already carried — deduplicated by canonical key so
+ * one spelling of each entry survives. */
+function mergedSanEntries(extra: readonly string[], carried: readonly string[] = []): string[] {
+  const seen = new Set<string>();
+  const entries: string[] = [];
+  for (const entry of [...selfSignedSanEntries(), ...extra, ...carried]) {
+    const key = sanKey(entry);
+    if (!seen.has(key)) {
+      seen.add(key);
+      entries.push(entry);
+    }
+  }
+  return entries;
 }
 
 /** Run one openssl signing command; every declared output must appear. */

@@ -85,8 +85,9 @@ UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 \
 A persisted certificate missing a requested entry is re-signed over the
 SAME key — the pin (and thus every client registration) survives, the
 banner honestly reports `self-signed identity (re-signed)`, and coverage
-only grows: already-covered or narrower requests reuse the certificate
-untouched. Explicit `--tls-cert` certificates carry their own SAN, so
+only grows: the re-sign keeps everything the certificate already carried
+(so changing the flag list loses nothing), and already-covered or
+narrower requests reuse the certificate untouched. Explicit `--tls-cert` certificates carry their own SAN, so
 `--tls-san` next to them is a usage error, not a no-op.
 
 ## Socket activation (Linux — no resident process on the https path either)

@@ -139,7 +139,9 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
   let tlsSan: string[] = [];
   if (options.tlsSan !== undefined) {
     try {
-      tlsSan = options.tlsSan.map(normalizeTlsSanEntry);
+      // normalized then deduplicated — case variants of one entry collapse
+      // here, so ParsedServe carries the canonical set
+      tlsSan = [...new Set(options.tlsSan.map(normalizeTlsSanEntry))];
     } catch (error) {
       throw new KitUsageError(error instanceof Error ? error.message : String(error));
     }
