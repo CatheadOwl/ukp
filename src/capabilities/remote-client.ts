@@ -1,4 +1,4 @@
-import { connect as netConnect, isIP } from "node:net";
+import { isIP } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { X509Certificate } from "node:crypto";
 import {
@@ -84,24 +84,6 @@ function freePort(): Promise<number> {
     listener.stop(true);
     if (port > 0) resolve(port);
     else reject(new RemoteTransportError("unable to allocate a local tunnel port"));
-  });
-}
-
-function portAccepts(hostname: string, port: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve) => {
-    const attempt = () => {
-      const socket = netConnect({ host: hostname, port }, () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.on("error", () => {
-        socket.destroy();
-        if (Date.now() > deadline) resolve(false);
-        else setTimeout(attempt, 120);
-      });
-    };
-    attempt();
   });
 }
 
@@ -207,43 +189,150 @@ function directTransportHandle(
   };
 }
 
-/** One ephemeral ssh local forward (D-078): free local port → the remote
- * host's loopback on `port`; encryption + host auth come from the user's
- * SSH config/keys. Shared by the one-shot transport and the per-origin
- * pool; `sshCommand` is a test injection point for the ssh binary. */
+/** W9 / ADR-REM-006: the woken door self-reaps after this idle window — the
+ * backstop for the orphan case (a no-TTY remote command can escape SIGHUP on
+ * an abrupt disconnect), NOT a tuning knob. */
+const WAKE_DOOR_MAX_IDLE_SECONDS = 600;
+/** Probe budget for a woken door: ssh handshake + auth + remote bun startup. */
+const WAKE_READY_TIMEOUT_MS = 20_000;
+/** Remote door ports are client-chosen from this unprivileged band — the url
+ * port no longer selects anything under wake (the resident-door assumption is
+ * gone; per-binding door urls keep their identity role). The band sits BELOW
+ * the Linux (32768+) and Windows (49152+) ephemeral ranges, so OS-assigned
+ * short-lived listeners never collide with it; only an explicitly bound
+ * service in the band can (rare — absorbed by the bounded retry). */
+const WAKE_REMOTE_PORT_MIN = 20000;
+const WAKE_REMOTE_PORT_SPAN = 12768;
+
+function randomRemotePort(): number {
+  return WAKE_REMOTE_PORT_MIN + Math.floor(Math.random() * WAKE_REMOTE_PORT_SPAN);
+}
+
+/** The pinned wake command (W9 / ADR-REM-006 §4 安全收窄): a fixed shape where
+ * only the client-chosen integer port and idle window are interpolated — the
+ * exact string an operator can allowlist with git-shell / authorized_keys
+ * `command=`. Loopback-only, anonymous: SSH carries encryption and auth. */
+function wakeDoorCommand(remotePort: number): string {
+  return `ukp serve --allow-anonymous --host 127.0.0.1 --port ${remotePort} --max-idle ${WAKE_DOOR_MAX_IDLE_SECONDS}`;
+}
+
+/** HTTP-level readiness probe through the tunnel (W9): a TCP accept on the
+ * local forward proves nothing — ssh accepts locally and connects remotely
+ * lazily — so we poll the door's public discovery document until it answers
+ * AND declares the ukp-remote protocol (a foreign listener that happens to
+ * occupy the remote port and answer 200 must not read as "ready"). An ssh
+ * that already exited aborts the wait (no point polling a dead forward; the
+ * caller classifies from the captured stderr). */
+async function probeWakeReady(
+  base: string,
+  timeoutMs: number,
+  proc: ReturnType<typeof Bun.spawn>,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const response = await fetch(`${base}${DISCOVERY_PATH}`, { signal: AbortSignal.timeout(1000) });
+      if (response.ok) {
+        try {
+          const body: unknown = await response.json();
+          if (
+            typeof body === "object" && body !== null
+            && (body as Record<string, unknown>).protocol === PROTOCOL_NAME
+          ) {
+            return true;
+          }
+        } catch {
+          // not our door (non-JSON) — keep waiting; the real door may still
+          // be booting behind the forward
+        }
+      } else {
+        await response.body?.cancel().catch(() => {});
+      }
+    } catch {
+      // not ready yet — the door is still booting behind the forward
+    }
+    if (proc.exitCode !== null) return false;
+    if (Date.now() > deadline) return false;
+    await Bun.sleep(150);
+  }
+}
+
+/** Keep the tail of a spawn's stderr for failure diagnostics. Resolves when
+ * the stream ends (i.e. after the process is dead) — only await it once the
+ * proc has been killed or has exited. */
+function drainStderrTail(stream: ReadableStream<Uint8Array>, keep = 2000): Promise<string> {
+  return new Response(stream)
+    .text()
+    .then((text) => (text.length > keep ? `…${text.slice(-keep)}` : text))
+    .catch(() => "");
+}
+
+/** On-demand wake (W9 / ADR-REM-006, replaces the W4 `-N -L` resident-door
+ * assumption): one ssh process both opens the local forward AND runs the
+ * pinned `ukp serve` loopback door as its remote command — the door lives and
+ * dies with the session (SIGHUP on clean close; `--max-idle` bounds the
+ * abrupt-disconnect orphan). Encryption + host/user auth come from the user's
+ * SSH config/keys. `sshCommand` is a test injection point for the ssh binary.
+ * Bounded retries absorb a client-chosen remote port colliding with an
+ * in-use one (the door fails to bind and the command exits). */
 async function openSshTunnel(
-  parts: { user?: string; host: string; port: number },
+  parts: { user?: string; host: string },
   options: { sshCommand?: readonly string[] },
   endpointLabel: string,
 ): Promise<{ proc: ReturnType<typeof Bun.spawn>; base: string }> {
-  const localPort = await freePort();
   const target = parts.user !== undefined ? `${parts.user}@${parts.host}` : parts.host;
-  const argv = [
-    ...(options.sshCommand ?? ["ssh"]),
-    "-N",
-    "-o", "ExitOnForwardFailure=yes",
-    "-o", "BatchMode=yes",
-    "-L", `127.0.0.1:${localPort}:127.0.0.1:${parts.port}`,
-    target,
-  ];
-  const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
-  const ready = await portAccepts("127.0.0.1", localPort, 15_000);
-  if (!ready) {
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const localPort = await freePort();
+    const remotePort = randomRemotePort();
+    const argv = [
+      ...(options.sshCommand ?? ["ssh"]),
+      "-o", "ExitOnForwardFailure=yes",
+      "-o", "BatchMode=yes",
+      "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
+      target,
+      wakeDoorCommand(remotePort),
+    ];
+    const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "pipe", stdin: "ignore" });
+    const stderrTail = drainStderrTail(proc.stderr);
+    if (await probeWakeReady(`http://127.0.0.1:${localPort}`, WAKE_READY_TIMEOUT_MS, proc)) {
+      return { proc, base: `http://127.0.0.1:${localPort}` };
+    }
     proc.kill();
-    throw new RemoteTransportError(
-      `ssh tunnel to '${target}:${parts.port}' (endpoint '${endpointLabel}') did not become ready; check the host alias and key auth (BatchMode)`,
-    );
+    // Read `exited` only after the stderr stream ended (its end implies the
+    // process is dead) — reading before the probe's last tick could label a
+    // fast crash as a slow timeout.
+    const diagnostics = (await stderrTail).trim();
+    const exited = proc.exitCode !== null;
+    // POSIX login shells print "…: ukp: command not found" (exit 127); Windows
+    // OpenSSH under cmd prints "'ukp' is not recognized…" (exit 9009).
+    if (exited && /not found|not recognized|exit status 127|status 9009/i.test(diagnostics)) {
+      throw new RemoteTransportError(
+        `waking the ukp door on '${target}' (endpoint '${endpointLabel}') failed — the remote shell cannot find 'ukp': ${diagnostics}. Host prerequisite (W9): ssh reachable AND ukp on the remote PATH`,
+      );
+    }
+    if (attempt === attempts) {
+      throw new RemoteTransportError(
+        exited
+          ? `waking the ukp door on '${target}' (endpoint '${endpointLabel}') failed: ${diagnostics}`
+          : `the ukp door on '${target}' (endpoint '${endpointLabel}') did not become ready within ${WAKE_READY_TIMEOUT_MS / 1000}s; check the host alias and key auth (BatchMode)`,
+      );
+    }
   }
-  return { proc, base: `http://127.0.0.1:${localPort}` };
+  // Unreachable: the loop throws on its final attempt (attempts >= 1).
+  throw new RemoteTransportError(`waking the ukp door on '${target}' failed unexpectedly`);
 }
 
-/** Ensure a usable wire base for one invocation (D-078 transparent ssh):
- * http/https urls are used directly; `ssh://[user@]host[:port][/endpoint]`
- * opens an ephemeral local forward over SSH and returns the tunnel endpoint
- * (plus the `/e/<name>` prefix when the url selects a door endpoint). https
- * bindings with a pinned certificate carry their TLS anchor on the handle.
- * `sshCommand` is a test injection point for the ssh binary invocation;
- * `registryPath` lets the renewal re-anchor persist. */
+/** Ensure a usable wire base for one invocation (D-078 transparent ssh, W9
+ * on-demand wake): http/https urls are used directly; `ssh://[user@]host
+ * [:port][/endpoint]` spawns ONE ssh process that opens the local forward
+ * AND wakes the pinned loopback door as its remote command, then returns the
+ * tunnel endpoint (plus the `/e/<name>` prefix when the url selects a door
+ * endpoint). Under wake the url's `[:port]` selects nothing — the remote
+ * door port is client-chosen. https bindings with a pinned certificate carry
+ * their TLS anchor on the handle. `sshCommand` is a test injection point for
+ * the ssh binary invocation; `registryPath` lets the renewal re-anchor
+ * persist. */
 export async function openRemoteTransport(
   binding: RegistryBinding,
   options: { sshCommand?: readonly string[]; registryPath?: string } = {},
@@ -266,12 +355,15 @@ export async function openRemoteTransport(
   };
 }
 
-/** Per-invocation transport pool (W7 / O-5): same-origin ssh urls share ONE
- * tunnel for the pool's lifetime — a 3-endpoint door's `ukp list` is one
- * tunnel, not four (per-row + door fetch). Pure client-internal: handles it
- * hands out have a noop `close`; the caller closes the pool when the
- * invocation ends. Direct (https / loopback http) urls need no pooling and
- * get the same one-shot handles as `openRemoteTransport`. */
+/** Per-invocation transport pool (W7 / O-5, W9 wake): same-origin ssh urls
+ * share ONE woken ssh+door pair for the pool's lifetime — a 3-endpoint door's
+ * `ukp list` is one tunnel, not four (per-row + door fetch). The map stores
+ * the OPEN PROMISE, so overlapping acquires (a future fan-out) converge on
+ * one spawn instead of racing a second and orphaning the first door. Pure
+ * client-internal: handed-out handles have a noop `close`; the caller closes
+ * the pool when the invocation ends. Direct (https / loopback http) urls
+ * need no pooling and get the same one-shot handles as
+ * `openRemoteTransport`. */
 export interface RemoteTransportPool {
   acquire(binding: RegistryBinding): Promise<RemoteTransportHandle>;
   close(): void;
@@ -280,7 +372,7 @@ export interface RemoteTransportPool {
 export function createTransportPool(
   options: { sshCommand?: readonly string[]; registryPath?: string } = {},
 ): RemoteTransportPool {
-  const tunnels = new Map<string, { proc: ReturnType<typeof Bun.spawn>; base: string }>();
+  const tunnels = new Map<string, Promise<{ proc: ReturnType<typeof Bun.spawn>; base: string }>>();
   return {
     async acquire(binding) {
       if (binding.kind !== "remote" || binding.url === undefined) {
@@ -296,16 +388,22 @@ export function createTransportPool(
       }
       let tunnel = tunnels.get(parts.origin);
       if (tunnel === undefined) {
-        tunnel = await openSshTunnel(parts, options, binding.name);
+        // Drop the entry on failure so a retry inside the same invocation
+        // spawns fresh instead of re-throwing a stale rejected promise.
+        tunnel = openSshTunnel(parts, options, binding.name).catch((error: unknown) => {
+          tunnels.delete(parts.origin);
+          throw error;
+        });
         tunnels.set(parts.origin, tunnel);
       }
+      const acquired = await tunnel;
       return {
-        base: tunnel.base + wirePrefix(parts.endpointName),
+        base: acquired.base + wirePrefix(parts.endpointName),
         close: () => {},
       };
     },
     close() {
-      for (const { proc } of tunnels.values()) proc.kill();
+      for (const tunnel of tunnels.values()) void tunnel.then(({ proc }) => proc.kill(), () => {});
       tunnels.clear();
     },
   };
