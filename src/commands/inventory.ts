@@ -244,35 +244,37 @@ function importDoorEndpoints(
     // the door routes by it; only the local handle may differ.
     const url = doorEndpointUrl(origin, target.name);
     const handle = handleOverride ?? target.name;
-      const sameUrl = existing.find((endpoint) => endpoint.kind === "remote" && endpoint.url === url);
-      if (sameUrl !== undefined) {
-        // Legacy bindings carry no declared_name; their handle stood in for it.
-        const existingDeclared = sameUrl.declared_name ?? sameUrl.name;
-        if (existingDeclared !== target.name) {
-          lines.push(`skipped:  ${target.name}  (url ${url} is bound to '${sameUrl.name}' declaring '${existingDeclared}')`);
-          continue;
-        }
-        // Default gesture (no --name) or a matching handle refreshes the
-        // instance under its EXISTING handle (N-2); only an explicitly
-        // different --name is refused.
-        if (sameUrl.name !== handle && handle !== target.name) {
-          lines.push(`skipped:  ${target.name}  (url ${url} already bound to '${sameUrl.name}'; unregister it to change the handle)`);
-          continue;
-        }
-        registerRemoteAt(context.registryPath, {
-          name: sameUrl.name,
-          declared_name: target.name,
-          url,
-          instance_uid: target.instance_uid,
-          ...(credentials.token !== undefined ? { token: credentials.token } : {}),
-          ...(credentials.tls_cert !== undefined && credentials.tls_pin !== undefined
-            ? { tls_cert: credentials.tls_cert, tls_pin: credentials.tls_pin }
-            : {}),
-        });
-        landed += 1;
-        lines.push(`refreshed: ${sameUrl.name}  (TOFU pin/credentials refreshed)`);
+    // Mirror of registerRemoteBinding's same-url branch (registry.ts):
+    // skip-line wording lives here, refusal semantics there — keep in step.
+    const sameUrl = existing.find((endpoint) => endpoint.kind === "remote" && endpoint.url === url);
+    if (sameUrl !== undefined) {
+      // Legacy bindings carry no declared_name; their handle stood in for it.
+      const existingDeclared = sameUrl.declared_name ?? sameUrl.name;
+      if (existingDeclared !== target.name) {
+        lines.push(`skipped:  ${target.name}  (url ${url} is bound to '${sameUrl.name}' declaring '${existingDeclared}')`);
         continue;
       }
+      // A default gesture (no --name) refreshes the instance under its
+      // EXISTING handle (N-2); an explicit --name must match it — explicit
+      // means explicit, renaming goes through unregister.
+      if (sameUrl.name !== handle && (handleOverride !== undefined || handle !== target.name)) {
+        lines.push(`skipped:  ${target.name}  (url ${url} already bound to '${sameUrl.name}'; unregister it to change the handle)`);
+        continue;
+      }
+      registerRemoteAt(context.registryPath, {
+        name: sameUrl.name,
+        declared_name: target.name,
+        url,
+        instance_uid: target.instance_uid,
+        ...(credentials.token !== undefined ? { token: credentials.token } : {}),
+        ...(credentials.tls_cert !== undefined && credentials.tls_pin !== undefined
+          ? { tls_cert: credentials.tls_cert, tls_pin: credentials.tls_pin }
+          : {}),
+      });
+      landed += 1;
+      lines.push(`refreshed: ${sameUrl.name}  (TOFU pin/credentials refreshed)`);
+      continue;
+    }
     const sameName = existing.find((endpoint) => endpoint.name === handle);
     if (sameName !== undefined) {
       lines.push(
@@ -439,11 +441,18 @@ async function executeRegisterRemote(
     // provenance and stays the target of the expected-name assertion above.
     // N-2: a default-gesture re-registration of an already-tracked instance
     // (same url, same declared name) refreshes it under its EXISTING handle —
-    // only an explicitly different --name is refused (by the registry).
+    // an explicitly different --name is refused first (explicit means
+    // explicit; renaming goes through unregister).
     const requestedHandle = handleName ?? declaredName;
     const tracked = readRegistry(context.registryPath).find(
       (endpoint) => endpoint.kind === "remote" && endpoint.url === url,
     );
+    if (
+      tracked !== undefined && handleName !== undefined && handleName !== tracked.name
+      && (tracked.declared_name ?? tracked.name) === declaredName
+    ) {
+      throw new Error(`remote endpoint ${url} is already registered as '${tracked.name}'; unregister it first to change the handle`);
+    }
     const handle = tracked !== undefined
       && (tracked.declared_name ?? tracked.name) === declaredName
       && requestedHandle === declaredName

@@ -285,8 +285,9 @@ export function readRegistry(registryPath: string): RegistryBinding[] {
 }
 
 /** Canonical serialization (configuration-contracts canonical form): local rows
- * `{name, path}`, remote rows `{name, kind, url, instance_uid?}` — key order
- * is insertion order, so build plain ordered objects before stringify. */
+ * `{name, path}`, remote rows `{name, kind, url, declared_name?, instance_uid?}`
+ * (plus credentials/pins when present) — key order is insertion order, so
+ * build plain ordered objects before stringify. */
 function toSerializableBinding(binding: RegistryBinding): Record<string, string> {
   if (binding.kind === "remote") {
     return {
@@ -370,8 +371,17 @@ export function registerRemoteBinding(
     // Default gesture (handle = declared name) or matching handle: the
     // idempotent refresh of the TOFU pin and credentials lands under the
     // EXISTING handle (N-2 — service replacement stays an explicit
-    // unregister + re-register, ADR-REM-003).
-    const refreshed = canonical.name === sameUrl.name ? canonical : { ...canonical, name: sameUrl.name };
+    // unregister + re-register, ADR-REM-003). Direct-API callers that omit
+    // declared_name must not erase the stored snapshot (the CLI always
+    // passes it; the skip/refusal wording that mirrors this branch lives in
+    // importDoorEndpoints).
+    const refreshed: RegistryBinding = {
+      ...canonical,
+      ...(canonical.name !== sameUrl.name ? { name: sameUrl.name } : {}),
+      ...(canonical.declared_name === undefined && sameUrl.declared_name !== undefined
+        ? { declared_name: sameUrl.declared_name }
+        : {}),
+    };
     return validateBindings([...endpoints.filter((e) => e.name !== sameUrl.name), refreshed]);
   }
   const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
