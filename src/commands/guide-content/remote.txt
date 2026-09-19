@@ -24,6 +24,8 @@ Owner path over SSH (zero ceremony — nothing to start on the host):
 LAN HTTPS path:
 1. On the host machine, run a tokened TLS door (keep it under your process manager)
    UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls
+   NAT/EIP cloud host (public IP on no NIC)? Name the public IP explicitly:
+   UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls --tls-san <public-ip>
    Linux hosts can go resident-free too: systemd socket activation holds the
    port and spawns the door per use (ukp serve --systemd-socket, recipe in
    the deployment handbook)
@@ -47,6 +49,7 @@ Name and identity:
 - --endpoint <name> on register asserts the expected name; if discovery declares a different name, registration fails.
 - A host door can import everything, --select a comma-separated subset, or --endpoint exactly one endpoint.
 - Self-signed HTTPS certificates are pinned on first registration; compare the pinned fingerprint with the serve banner on untrusted networks.
+- --tls names the host's interface IPs only. A NAT/EIP host's public IP needs --tls-san <public-ip>; without it registration fails on certificate name mismatch. Adding it later re-signs the persisted cert over the same key, so existing pins survive.
 - Non-loopback plain http is refused. Use https, ssh://, or loopback http for local testing.
 - An ssh:// url port selects nothing: the woken door listens on a client-chosen loopback port.
 
