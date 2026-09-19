@@ -73,6 +73,22 @@ certificates? Let's Encrypt issues IP-address certificates (GA 2026-01) —
 run certbot with a renewal timer and point `--tls-cert/--tls-key` at the
 files; clients then need no pinning at all.
 
+**NAT/EIP cloud hosts** (public IP on no NIC — Alibaba/AWS-style 1:1 NAT):
+the automatic SAN coverage can never see the public address, so name it
+explicitly with `--tls-san` (repeatable; DNS names too):
+
+```bash
+UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 \
+  --tls --tls-san <public-ip>
+```
+
+A persisted certificate missing a requested entry is re-signed over the
+SAME key — the pin (and thus every client registration) survives, the
+banner honestly reports `self-signed identity (re-signed)`, and coverage
+only grows: already-covered or narrower requests reuse the certificate
+untouched. Explicit `--tls-cert` certificates carry their own SAN, so
+`--tls-san` next to them is a usage error, not a no-op.
+
 ## Socket activation (Linux — no resident process on the https path either)
 
 systemd can hold the listening port itself and spawn the door on first
@@ -129,10 +145,9 @@ Notes:
   ("Socket service already active") — `systemctl --user restart
   ukp-door.service` instead, or let the door idle out first.
 - **NAT/EIP hosts**: `--tls` self-signs with the machine's interface
-  addresses — a public EIP is not among them and registration fails
-  CERT_ALTNAME_INVALID. Use `--tls-cert/--tls-key` with the public IP in
-  the SAN (the ali workaround) until the `--tls-san` flag lands (line
-  TODO).
+  addresses — a public EIP is not among them, and registration would fail
+  CERT_ALTNAME_INVALID. Add `--tls-san <public-ip>` next to `--tls`
+  (see Native TLS above): the SAN grows, the key (and pin) does not.
 
 ## Host door (one host, many endpoints — one gesture, zero tokens)
 

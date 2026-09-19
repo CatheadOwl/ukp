@@ -7,6 +7,7 @@ import {
   type KitParsed,
   type UkpCommandSpec,
 } from "./kit.ts";
+import { normalizeTlsSanEntry } from "../capabilities/tls-identity.ts";
 import { DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
 
 export interface ServeCommandContext {
@@ -36,12 +37,13 @@ export const SERVE_SPEC: UkpCommandSpec = {
   group: "operations",
   description:
     "Expose a registered endpoint over HTTP using the ukp-remote wire, or — without --endpoint — serve every local endpoint as one host door routed by name.",
-  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket]",
+  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]… | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket]",
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve the whole registry as a host door (/e/<name>/ routing, all endpoints, one port)" },
     { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
     { flags: "--port <n>", help: "listen port (default 8570)" },
     { flags: "--tls", help: "serve HTTPS with a self-signed identity (auto-generated under .ukp/tls/, SAN covers this host's addresses; clients pin it at registration)" },
+    { flags: "--tls-san <ip|dns>", help: "extra SAN entry for the --tls self-signed identity (repeatable): a public/NAT IP or hostname no NIC of this host carries; a persisted certificate missing an entry is re-signed over the same key (pin unchanged, pinned clients re-anchor)", multi: true },
     { flags: "--tls-cert <pem>", help: "TLS certificate (chain) PEM path — Let's Encrypt, mkcert, or a private CA; pair with --tls-key" },
     { flags: "--tls-key <pem>", help: "TLS private key PEM path; pair with --tls-cert" },
     { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
@@ -87,6 +89,12 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "  2026-01 —, mkcert, a private CA). Plain HTTP remains loopback-only by",
     "  admission; public exposure needs TLS or the ssh:// transport.",
     "",
+    "  A cloud NAT/EIP host's public IP is on no NIC (--tls alone cannot",
+    "  cover it): add --tls-san <public-ip> next to --tls. Repeatable; DNS",
+    "  names accepted. The persisted certificate re-signs over the same key",
+    "  when a new entry appears — the pin is unchanged and pinned clients",
+    "  re-anchor transparently; dropping entries never re-signs.",
+    "",
   ].join("\n"),
 };
 
@@ -97,12 +105,17 @@ export interface ParsedServe {
   port: number;
   /** Present = the --max-idle self-reap timer is armed (W9). */
   maxIdleSeconds?: number;
-  /** Present = serve on the systemd-passed listener (W10, Linux-only). */
+  /** Present = the systemd-passed listener (W10, Linux-only). */
   systemdSocket?: boolean;
+  /** `--tls-san` values, normalized to `IP:x`/`DNS:y` SAN form (repeatable);
+   * valid only next to `--tls` — the execute layer enforces the pairing.
+   * Absent when the flag is not passed (parse output stays byte-identical
+   * to the pre-flag shape). */
+  tlsSan?: string[];
 }
 
 function toParsedServe(parsed: KitParsed): ParsedServe {
-  const options = parsed.options as { host?: string; port?: string; endpoint?: string; maxIdle?: string; systemdSocket?: boolean };
+  const options = parsed.options as { host?: string; port?: string; endpoint?: string; maxIdle?: string; systemdSocket?: boolean; tlsSan?: string[] };
   const endpoint = options.endpoint;
   if (endpoint !== undefined && endpoint.length === 0) {
     throw new KitUsageError("--endpoint <name> must not be empty (omit it to serve a host door)");
@@ -123,12 +136,21 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
       throw new KitUsageError("--max-idle must be a positive number of seconds (at most 86400)");
     }
   }
+  let tlsSan: string[] = [];
+  if (options.tlsSan !== undefined) {
+    try {
+      tlsSan = options.tlsSan.map(normalizeTlsSanEntry);
+    } catch (error) {
+      throw new KitUsageError(error instanceof Error ? error.message : String(error));
+    }
+  }
   return {
     ...(endpoint !== undefined ? { endpoint } : {}),
     host,
     port,
     ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
     ...(systemdSocket ? { systemdSocket } : {}),
+    ...(tlsSan.length > 0 ? { tlsSan } : {}),
   };
 }
 
@@ -202,16 +224,21 @@ export function executeServeCommand(
   context: ServeCommandContext,
 ): KitCommandResult {
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
-    const { endpoint, host, port, maxIdleSeconds, systemdSocket } = toParsedServe(parsed);
+    const { endpoint, host, port, maxIdleSeconds, systemdSocket, tlsSan = [] } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
     const options = parsed.options as { tls?: boolean; tlsCert?: string; tlsKey?: string };
     // TLS flag family (W5'): --tls and --tls-cert/--tls-key are mutually
-    // exclusive; the explicit pair must arrive complete.
+    // exclusive; the explicit pair must arrive complete. --tls-san only
+    // shapes the self-signed generation — an operator certificate carries
+    // its own SAN, so the flag next to one is a mistake, not a no-op.
     if (options.tls === true && (options.tlsCert !== undefined || options.tlsKey !== undefined)) {
       throw new KitUsageError("--tls and --tls-cert/--tls-key are mutually exclusive");
     }
     if (options.tls !== true && (options.tlsCert !== undefined) !== (options.tlsKey !== undefined)) {
       throw new KitUsageError("--tls-cert and --tls-key are used together");
+    }
+    if (tlsSan.length > 0 && options.tls !== true) {
+      throw new KitUsageError("--tls-san is only used with --tls (an explicit --tls-cert certificate carries its own SAN)");
     }
     const tokens = context.tokens ?? parseServeTokens(process.env.UKP_SERVE_TOKEN);
     // W10: socket activation must not admit tokenless serving — the bind
@@ -238,7 +265,7 @@ export function executeServeCommand(
       ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
       ...(systemdSocket !== undefined && systemdSocket ? { systemdSocket } : {}),
       ...(options.tls === true
-        ? { tls: { mode: "self-signed" as const } }
+        ? { tls: { mode: "self-signed" as const, ...(tlsSan.length > 0 ? { sanEntries: tlsSan } : {}) } }
         : options.tlsCert !== undefined && options.tlsKey !== undefined
           ? { tls: { mode: "certificates" as const, certPath: options.tlsCert, keyPath: options.tlsKey } }
           : {}),
