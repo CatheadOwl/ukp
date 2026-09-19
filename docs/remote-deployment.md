@@ -81,10 +81,12 @@ requests and systemd re-spawns it on the next one. Nothing resident
 between uses — the same zero-maintenance posture as the ssh wake, for the
 consumer-facing https door (Cockpit and Ubuntu's own sshd run this way).
 
-Two user-level units (matches a user-local install; adjust the PATH chain
-to your install — **systemd units source no profile**, so the standard
-locations must be prepended explicitly, cf. the install-mode table in the
-repo's daemon-ownership knowledge unit):
+Two user-level units (matches a user-local install). Two systemd facts
+learned the hard way on the ali E2E: **`Environment=` does not expand
+`%h`/`$HOME`** (specifiers work in `ExecStart=` paths but NOT inside
+`Environment=` — a literal `%h/...` PATH yields 203/EXEC), and **units
+source no profile** (cf. the install-mode table in the repo's
+daemon-ownership knowledge unit) — so write literal paths:
 
 ```ini
 # ~/.config/systemd/user/ukp-door.socket
@@ -99,9 +101,9 @@ ListenStream=8570
 Description=ukp host door
 
 [Service]
-Environment=PATH=%h/.npm-global/bin:%h/.bun/bin:/usr/local/bin:/usr/bin
-EnvironmentFile=-%h/.config/ukp-door.env   # UKP_SERVE_TOKEN=… (chmod 600)
-ExecStart=ukp serve --systemd-socket --max-idle 60 --tls
+Environment=PATH=/home/<user>/.npm-global/bin:/home/<user>/.bun/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=-/home/<user>/.config/ukp-door.env   # UKP_SERVE_TOKEN=… (chmod 600)
+ExecStart=/home/<user>/.npm-global/bin/ukp serve --systemd-socket --max-idle 60 --tls
 ```
 
 ```bash
@@ -123,6 +125,14 @@ Notes:
 - Do NOT put an HTTP health-check in front of the socket — it would wake
   the door on every probe and defeat `--max-idle`.
 - `systemctl --user` over bare ssh needs `XDG_RUNTIME_DIR=/run/user/$(id -u)`.
+- Restarting the SOCKET while a door is still running is refused
+  ("Socket service already active") — `systemctl --user restart
+  ukp-door.service` instead, or let the door idle out first.
+- **NAT/EIP hosts**: `--tls` self-signs with the machine's interface
+  addresses — a public EIP is not among them and registration fails
+  CERT_ALTNAME_INVALID. Use `--tls-cert/--tls-key` with the public IP in
+  the SAN (the ali workaround) until the `--tls-san` flag lands (line
+  TODO).
 
 ## Host door (one host, many endpoints — one gesture, zero tokens)
 
