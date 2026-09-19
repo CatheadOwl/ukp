@@ -232,6 +232,12 @@ export function executeServeCommand(
     };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
+    // SIGHUP = the session died (client killed the ssh that woke this door).
+    // Bun IGNORES SIGHUP by default (ali E2E: every woken door survived its
+    // session and idled to max-idle) — the explicit handler restores the
+    // session-bound lifecycle; --max-idle stays the backstop for abnormal
+    // disconnects where no signal ever arrives. Never fires on Windows.
+    process.once("SIGHUP", stop);
     // Exit code 0 flows out through runCli; the server listener keeps the
     // process alive until the signal handler stops it.
     return { exitCode: 0, stdout: renderServeBanner(info), stderr: "" };

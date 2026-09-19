@@ -352,7 +352,7 @@ describe("ssh transport pooling (W7 / O-5) on the wake path (W9)", () => {
     // command's exact shape, byte-for-byte modulo the client-chosen port.
     for (const line of log) {
       expect(line).toMatch(
-        / wake=ukp serve --allow-anonymous --host 127\.0\.0\.1 --port \d+ --max-idle 600$/,
+        / wake=ukp serve --allow-anonymous --host 127\.0\.0\.1 --port \d+ --max-idle 60$/,
       );
     }
   });
@@ -437,9 +437,10 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     expect(master).toContain("ControlPath=~/.ssh/ukp-cm-%r@%h-%p");
     expect(master!.some((arg) => arg.startsWith("ukp serve "))).toBe(false);
     // The wake client: attach-only — ControlMaster=no + the shared
-    // ControlPath, plus -L and the pinned door command.
+    // ControlPath, plus -tt (session-bound door) and the pinned door command.
     const wakeClient = dumps.find((argv) => argv.some((arg) => arg.startsWith("ukp serve ")));
     expect(wakeClient).toBeDefined();
+    expect(wakeClient).toContain("-tt");
     expect(wakeClient).toContain("ControlMaster=no");
     expect(wakeClient).not.toContain("ControlMaster=auto");
     expect(wakeClient).toContain("ControlPath=~/.ssh/ukp-cm-%r@%h-%p");

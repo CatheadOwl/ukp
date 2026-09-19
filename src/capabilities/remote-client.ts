@@ -189,10 +189,14 @@ function directTransportHandle(
   };
 }
 
-/** W9 / ADR-REM-006: the woken door self-reaps after this idle window — the
- * backstop for the orphan case (a no-TTY remote command can escape SIGHUP on
- * an abrupt disconnect), NOT a tuning knob. */
-const WAKE_DOOR_MAX_IDLE_SECONDS = 600;
+/** W9 / ADR-REM-006: the woken door self-reaps after this idle window. The
+ * ali E2E falsified the "clean disconnect reaps via SIGHUP" assumption for
+ * no-TTY sessions — without a controlling terminal a remote command NEVER
+ * receives SIGHUP, normal disconnect included — so `-tt` (below) is what
+ * makes the door session-bound, and this window is the pure backstop for
+ * paths where even the pty session lingers (network death awaiting TCP
+ * keepalive). NOT a tuning knob. */
+const WAKE_DOOR_MAX_IDLE_SECONDS = 60;
 /** Probe budget for a woken door: ssh handshake + auth + remote bun startup. */
 const WAKE_READY_TIMEOUT_MS = 20_000;
 /** Remote door ports are client-chosen from this unprivileged band — the url
@@ -335,14 +339,18 @@ async function probeWakeReady(
   }
 }
 
-/** Keep the tail of a spawn's stderr for failure diagnostics. Resolves when
- * the stream ends (i.e. after the process is dead) — only await it once the
- * proc has been killed or has exited. */
-function drainStderrTail(stream: ReadableStream<Uint8Array>, keep = 2000): Promise<string> {
-  return new Response(stream)
-    .text()
-    .then((text) => (text.length > keep ? `…${text.slice(-keep)}` : text))
-    .catch(() => "");
+/** Keep the tail of a spawn's output for failure diagnostics. The wake
+ * client runs under `-tt` (a pty merges the remote stderr into its stdout),
+ * so diagnostics can arrive on either stream — both are drained and
+ * concatenated. Resolves when the streams end (i.e. after the process is
+ * dead) — only await once the proc has been killed or has exited. */
+function drainStderrTail(streams: readonly ReadableStream<Uint8Array>[], keep = 2000): Promise<string> {
+  return Promise.all(
+    streams.map((stream) => new Response(stream).text().catch(() => "")),
+  ).then((texts) => {
+    const text = texts.join("").trim();
+    return text.length > keep ? `…${text.slice(-keep)}` : text;
+  });
 }
 
 /** On-demand wake (W9 / ADR-REM-006, replaces the W4 `-N -L` resident-door
@@ -374,6 +382,12 @@ async function openSshTunnel(
     const remotePort = randomRemotePort();
     const argv = [
       ...(options.sshCommand ?? ["ssh"]),
+      // Session-bound door (ali E2E): a no-TTY remote command NEVER receives
+      // SIGHUP on disconnect — normal disconnect included, the door only ever
+      // died to --max-idle. Forcing a pty gives the session a controlling
+      // terminal, so killing the client reaps the door in seconds (verified:
+      // kill -9 of the local ssh → door gone within 3s).
+      "-tt",
       "-o", "ExitOnForwardFailure=yes",
       "-o", "BatchMode=yes",
       ...(muxDisabled ? [] : muxClientOptions()),
@@ -381,8 +395,8 @@ async function openSshTunnel(
       target,
       wakeDoorCommand(remotePort),
     ];
-    const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "pipe", stdin: "ignore" });
-    const stderrTail = drainStderrTail(proc.stderr);
+    const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const stderrTail = drainStderrTail([proc.stdout, proc.stderr]);
     if (await probeWakeReady(`http://127.0.0.1:${localPort}`, WAKE_READY_TIMEOUT_MS, proc)) {
       return { proc, base: `http://127.0.0.1:${localPort}` };
     }
