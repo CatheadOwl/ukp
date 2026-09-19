@@ -74,7 +74,12 @@ All notable public changes to UKP will be documented in this file.
 - Added `ukp guide remote`, covering host-door setup, SSH and LAN HTTPS
   consumption, expected-name assertions during registration, and the current
   operational boundary that UKP does not yet install or autostart the remote
-  door process.
+  door process. The LAN HTTPS quickstart carries its own NAT/EIP remedy
+  (`--tls-san <public-ip>`, the certificate-name-mismatch failure it
+  prevents, and the same-key re-sign note) — the first guide cognition
+  replay (agent-eval case `remote-guide.consumption-model`, three blind
+  agents) showed the remedy was reachable only from the README, not the
+  guide.
 
 ## [0.1.1] - 2026-09-17
 
