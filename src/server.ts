@@ -88,6 +88,11 @@ export interface ServeConfig {
   tls?:
     | { mode: "self-signed"; opensslCommand?: readonly string[] }
     | { mode: "certificates"; certPath: string; keyPath: string };
+  /** W9 / ADR-REM-006: self-reap after this many seconds without requests.
+   * The orphan backstop for on-demand-woken doors — a no-TTY remote command
+   * can escape SIGHUP on an abrupt disconnect, so the door bounds its own
+   * lifetime instead of trusting the session to reap it. */
+  maxIdleSeconds?: number;
 }
 
 export interface DiscoveryDocument {
@@ -141,6 +146,50 @@ export interface ServeInfo {
     pin: string;
     san: string;
     source: "generated" | "persisted" | "operator";
+  };
+  /** Present when --max-idle armed the self-reap timer (W9). */
+  maxIdleSeconds?: number;
+}
+
+/** W9 / ADR-REM-006 (--max-idle): wrap a serve handler so the listener stops
+ * itself after `maxIdleSeconds` without requests. Requests re-arm the timer
+ * on entry and again once the response settles; the exit mirrors the SIGINT
+ * path (stderr line + server.stop(true)), after which the process exits with
+ * its already-set code. The timer is unref'd so a SIGINT/SIGTERM stop is
+ * immediate — the listener, not the timer, is what holds the serve process
+ * open. `stopped` fences the settle-rearm of a request that outlived the
+ * window (no second fire after the first stop). The bind indirection exists
+ * because Bun.serve hands back the server only after `fetch` is fixed. */
+function armIdleExit(
+  handler: (request: Request) => Response | Promise<Response>,
+  maxIdleSeconds: number,
+): { fetch: (request: Request) => Response | Promise<Response>; bind: (server: ReturnType<typeof Bun.serve>) => void } {
+  const control = { stop: (): void => {} };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const rearm = () => {
+    if (stopped) return;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      stopped = true;
+      console.error(`ukp serve: idle exit (--max-idle ${maxIdleSeconds}s without requests)`);
+      control.stop();
+    }, maxIdleSeconds * 1000);
+    // Best-effort unref: present in Bun and Node; a missing no-op keeps this
+    // portable without changing the firing behavior while serving.
+    (timer as { unref?: () => void }).unref?.();
+  };
+  rearm();
+  return {
+    fetch: (request: Request) => {
+      rearm();
+      const response = handler(request);
+      Promise.resolve(response).then(rearm, () => {});
+      return response;
+    },
+    bind(server: ReturnType<typeof Bun.serve>) {
+      control.stop = () => server.stop(true);
+    },
   };
 }
 
@@ -650,12 +699,14 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
     return doorNotFound(undefined, config.registryPath);
   };
 
+  const idle = config.maxIdleSeconds !== undefined ? armIdleExit(handler, config.maxIdleSeconds) : undefined;
   const server = Bun.serve({
     hostname: host,
     port: config.port ?? 8570,
     ...(tlsMaterial !== undefined ? { tls: { cert: tlsMaterial.cert, key: tlsMaterial.key } } : {}),
-    fetch: handler,
+    fetch: idle?.fetch ?? handler,
   });
+  idle?.bind(server);
 
   const info: ServeInfo = {
     mode: "door",
@@ -670,6 +721,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
       : {}),
+    ...(config.maxIdleSeconds !== undefined ? { maxIdleSeconds: config.maxIdleSeconds } : {}),
   };
   return { server, info };
 }
@@ -781,12 +833,14 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     );
   };
 
+  const idle = config.maxIdleSeconds !== undefined ? armIdleExit(handler, config.maxIdleSeconds) : undefined;
   const server = Bun.serve({
     hostname: host,
     port: config.port ?? 8570,
     ...(tlsMaterial !== undefined ? { tls: { cert: tlsMaterial.cert, key: tlsMaterial.key } } : {}),
-    fetch: handler,
+    fetch: idle?.fetch ?? handler,
   });
+  idle?.bind(server);
 
   const info: ServeInfo = {
     mode: "endpoint",
@@ -800,6 +854,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
       : {}),
+    ...(config.maxIdleSeconds !== undefined ? { maxIdleSeconds: config.maxIdleSeconds } : {}),
   };
   return { server, info };
 }

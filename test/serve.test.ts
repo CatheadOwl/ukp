@@ -1,5 +1,6 @@
 import { describe, expect, test, afterAll } from "bun:test";
 import { createHash } from "node:crypto";
+import { connect as netConnect } from "node:net";
 import {
   existsSync,
   mkdirSync,
@@ -721,3 +722,85 @@ describe("serve /v1/propose (W8 / ADR-REM-005)", () => {
     rmSync(bareRoot, { recursive: true, force: true });
   });
 });
+
+describe("serve --max-idle (W9 / ADR-REM-006)", () => {
+  test("flag parsing: positive seconds (fractional ok); zero/negative/non-numeric/oversized rejected", () => {
+    expect(parseServeArgs(["--max-idle", "300"]).maxIdleSeconds).toBe(300);
+    expect(parseServeArgs(["--max-idle", "0.25"]).maxIdleSeconds).toBe(0.25);
+    expect(parseServeArgs(["--endpoint", "cad"]).maxIdleSeconds).toBeUndefined();
+    expect(() => parseServeArgs(["--max-idle", "0"])).toThrow(
+      "--max-idle must be a positive number of seconds",
+    );
+    expect(() => parseServeArgs(["--max-idle", "-5"])).toThrow(
+      "--max-idle must be a positive number of seconds",
+    );
+    expect(() => parseServeArgs(["--max-idle", "soon"])).toThrow(
+      "--max-idle must be a positive number of seconds",
+    );
+    expect(() => parseServeArgs(["--max-idle", "90000"])).toThrow(
+      "--max-idle must be a positive number of seconds",
+    );
+  });
+
+  test("no requests for the window: the listener stops itself (self-reap)", async () => {
+    const door = startDoor({ maxIdleSeconds: 0.3 });
+    expect(door.info.maxIdleSeconds).toBe(0.3);
+    expect(renderServeBanner(door.info)).toContain(
+      "idle: exits after 0.3s without requests (--max-idle)",
+    );
+    const alive = await fetch(`${door.info.url}${DISCOVERY_PATH}`);
+    expect(alive.ok).toBe(true);
+    // Poll with bare TCP connects: an HTTP probe would itself re-arm the
+    // idle timer and the door could never idle out.
+    const refused = await eventuallyRefuses(door.info.host, door.info.port, 5000);
+    expect(refused).toBe(true);
+  });
+
+  test("a request within the window re-arms the timer", async () => {
+    const door = startDoor({ maxIdleSeconds: 2 });
+    // A request past the midpoint keeps the door alive past the original
+    // window — the re-arm is observable as a second successful fetch after
+    // the original deadline has passed.
+    await Bun.sleep(1200);
+    const first = await fetch(`${door.info.url}${DISCOVERY_PATH}`);
+    expect(first.ok).toBe(true);
+    await Bun.sleep(1100); // 2.3s after start — past the original window.
+    const second = await fetch(`${door.info.url}${DISCOVERY_PATH}`);
+    expect(second.ok).toBe(true);
+    // Then it idles out from the LAST request (TCP probes don't re-arm).
+    const refused = await eventuallyRefuses(door.info.host, door.info.port, 8000);
+    expect(refused).toBe(true);
+  });
+
+  test("single-endpoint mode arms the same timer and banner line", async () => {
+    const single = start({ endpointName: "serve-fixture", maxIdleSeconds: 0.3 });
+    expect(single.info.maxIdleSeconds).toBe(0.3);
+    expect(renderServeBanner(single.info)).toContain(
+      "idle: exits after 0.3s without requests (--max-idle)",
+    );
+    expect(await eventuallyRefuses(single.info.host, single.info.port, 5000)).toBe(true);
+  });
+});
+
+/** Poll with bare TCP connects (no HTTP request → no idle-timer re-arm) until
+ * the port refuses connections, bounded by `timeoutMs`. */
+function eventuallyRefuses(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const attempt = () => {
+      const socket = netConnect({ host, port }, () => {
+        socket.destroy();
+        retry();
+      });
+      socket.on("error", () => {
+        socket.destroy();
+        resolve(true);
+      });
+    };
+    const retry = () => {
+      if (Date.now() > deadline) resolve(false);
+      else setTimeout(attempt, 100);
+    };
+    attempt();
+  });
+}

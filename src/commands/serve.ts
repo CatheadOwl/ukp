@@ -36,7 +36,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
   group: "operations",
   description:
     "Expose a registered endpoint over HTTP using the ukp-remote wire, or — without --endpoint — serve every local endpoint as one host door routed by name.",
-  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>]",
+  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>]",
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve the whole registry as a host door (/e/<name>/ routing, all endpoints, one port)" },
     { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
@@ -45,6 +45,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
     { flags: "--tls-cert <pem>", help: "TLS certificate (chain) PEM path — Let's Encrypt, mkcert, or a private CA; pair with --tls-key" },
     { flags: "--tls-key <pem>", help: "TLS private key PEM path; pair with --tls-cert" },
     { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
+    { flags: "--max-idle <seconds>", help: "exit after <seconds> without requests (self-reap; the orphan backstop for on-demand-woken doors — fractional values accepted for tests)" },
   ],
   helpSuffix: [
     "",
@@ -93,10 +94,12 @@ export interface ParsedServe {
   endpoint?: string;
   host: string;
   port: number;
+  /** Present = the --max-idle self-reap timer is armed (W9). */
+  maxIdleSeconds?: number;
 }
 
 function toParsedServe(parsed: KitParsed): ParsedServe {
-  const options = parsed.options as { host?: string; port?: string; endpoint?: string };
+  const options = parsed.options as { host?: string; port?: string; endpoint?: string; maxIdle?: string };
   const endpoint = options.endpoint;
   if (endpoint !== undefined && endpoint.length === 0) {
     throw new KitUsageError("--endpoint <name> must not be empty (omit it to serve a host door)");
@@ -106,7 +109,19 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new KitUsageError("--port must be an integer between 1 and 65535");
   }
-  return { ...(endpoint !== undefined ? { endpoint } : {}), host, port };
+  let maxIdleSeconds: number | undefined;
+  if (options.maxIdle !== undefined) {
+    maxIdleSeconds = Number(options.maxIdle);
+    if (!Number.isFinite(maxIdleSeconds) || maxIdleSeconds <= 0 || maxIdleSeconds > 86400) {
+      throw new KitUsageError("--max-idle must be a positive number of seconds (at most 86400)");
+    }
+  }
+  return {
+    ...(endpoint !== undefined ? { endpoint } : {}),
+    host,
+    port,
+    ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
+  };
 }
 
 export function parseServeArgs(args: readonly string[]): ParsedServe {
@@ -126,6 +141,9 @@ export function renderServeBanner(info: ServeInfo): string {
       `  endpoints: ${info.door!.endpoints.length > 0 ? info.door!.endpoints.join(", ") : "(none — register endpoints on this host)"}`,
       `  write: ${info.door!.write.length > 0 ? info.door!.write.join(", ") + " (propose via PUT /e/<name>/v1/propose/<id>)" : "(no endpoint declares propose)"}`,
       `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback bind; ssh-forwarded clients authenticate by SSH key)"}`,
+      ...(info.maxIdleSeconds !== undefined
+        ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
+        : []),
       ...(info.tls !== undefined
         ? [`  tls: ${info.tls.source === "operator" ? "operator certificate" : `self-signed identity (${info.tls.source})`} ${info.tls.pin} (SAN: ${info.tls.san})`]
         : []),
@@ -137,6 +155,9 @@ export function renderServeBanner(info: ServeInfo): string {
     `  listening: ${info.url}`,
     `  discovery: ${info.url}${DISCOVERY_PATH}`,
     `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback only)"}`,
+    ...(info.maxIdleSeconds !== undefined
+      ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
+      : []),
     ...(info.tls !== undefined
       ? [`  tls: ${info.tls.source === "operator" ? "operator certificate" : `self-signed identity (${info.tls.source})`} ${info.tls.pin} (SAN: ${info.tls.san})`]
       : []),
@@ -173,7 +194,7 @@ export function executeServeCommand(
   context: ServeCommandContext,
 ): KitCommandResult {
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
-    const { endpoint, host, port } = toParsedServe(parsed);
+    const { endpoint, host, port, maxIdleSeconds } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
     const options = parsed.options as { tls?: boolean; tlsCert?: string; tlsKey?: string };
     // TLS flag family (W5'): --tls and --tls-cert/--tls-key are mutually
@@ -198,6 +219,7 @@ export function executeServeCommand(
       port,
       ...(endpoint !== undefined ? { endpointName: endpoint } : {}),
       ...(tokens.length > 0 ? { tokens } : {}),
+      ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
       ...(options.tls === true
         ? { tls: { mode: "self-signed" as const } }
         : options.tlsCert !== undefined && options.tlsKey !== undefined
