@@ -25,6 +25,8 @@ import {
   type StartedServe,
 } from "../src/server.ts";
 import { parseServeArgs, renderServeBanner } from "../src/commands/serve.ts";
+import { parseListenFds, createSocketBridge } from "../src/server.ts";
+import { createServer as netCreateServer } from "node:net";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
 // Private fixture copy (see helper doc: invocation state is written into the
@@ -804,3 +806,58 @@ function eventuallyRefuses(host: string, port: number, timeoutMs: number): Promi
     attempt();
   });
 }
+
+describe("serve --systemd-socket (W10 / ADR-REM-006)", () => {
+  test("flag parsing: --systemd-socket parses; --port alongside is rejected", () => {
+    expect(parseServeArgs(["--systemd-socket"]).systemdSocket).toBe(true);
+    expect(parseServeArgs([]).systemdSocket).toBeUndefined();
+    expect(parseServeArgs(["--systemd-socket", "--max-idle", "60"]).systemdSocket).toBe(true);
+    expect(() => parseServeArgs(["--systemd-socket", "--port", "8570"])).toThrow(
+      "--systemd-socket and --port are mutually exclusive (the socket unit owns the port)",
+    );
+  });
+
+  test("parseListenFds: the full LISTEN_FDS convention", () => {
+    const pid = String(process.pid);
+    expect(parseListenFds({ LISTEN_FDS: "1", LISTEN_PID: pid })).toEqual({ fd: 3 });
+    // The happy path CONSUMES the variables (children must not double-count).
+    const env: NodeJS.ProcessEnv = { LISTEN_FDS: "1", LISTEN_PID: pid };
+    parseListenFds(env);
+    expect(env.LISTEN_FDS).toBeUndefined();
+    expect(env.LISTEN_PID).toBeUndefined();
+    const miss = parseListenFds({});
+    expect("error" in miss ? miss.error : "").toContain("LISTEN_FDS/LISTEN_PID are not set");
+    const wrongPid = parseListenFds({ LISTEN_FDS: "1", LISTEN_PID: "1" });
+    expect("error" in wrongPid ? wrongPid.error : "").toContain("does not match this process");
+    const zero = parseListenFds({ LISTEN_FDS: "0", LISTEN_PID: pid });
+    expect("error" in zero ? zero.error : "").toContain("not a positive integer");
+    const two = parseListenFds({ LISTEN_FDS: "2", LISTEN_PID: pid });
+    expect("error" in two ? two.error : "").toContain("expected exactly one listening fd (LISTEN_FDS=1), got 2");
+  });
+
+  test("createSocketBridge: connections on the acceptor reach the real listener", async () => {
+    // The door side is a REAL server (discovery answers); the acceptor is a
+    // plain TCP listener standing in for the systemd-passed fd — the pipe is
+    // the production code under test.
+    const door = startDoor();
+    const acceptor = netCreateServer();
+    createSocketBridge(acceptor, door.info.port);
+    await new Promise<void>((resolve) => acceptor.listen(0, "127.0.0.1", resolve));
+    const acceptorPort = (acceptor.address() as { port: number }).port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${acceptorPort}${DISCOVERY_PATH}`);
+      expect(response.ok).toBe(true);
+      const doc = (await response.json()) as { protocol: string };
+      expect(doc.protocol).toBe("ukp-remote");
+    } finally {
+      acceptor.close();
+    }
+  });
+
+  test("non-Linux or missing activation env: setup fails loudly, not at runtime", () => {
+    if (process.platform === "linux") return; // the Linux path is the ali E2E's job
+    expect(() =>
+      startDoor({ systemdSocket: true }),
+    ).toThrow("--systemd-socket is Linux-only");
+  });
+});

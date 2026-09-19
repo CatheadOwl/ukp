@@ -36,7 +36,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
   group: "operations",
   description:
     "Expose a registered endpoint over HTTP using the ukp-remote wire, or — without --endpoint — serve every local endpoint as one host door routed by name.",
-  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>]",
+  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket]",
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve the whole registry as a host door (/e/<name>/ routing, all endpoints, one port)" },
     { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
@@ -46,6 +46,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
     { flags: "--tls-key <pem>", help: "TLS private key PEM path; pair with --tls-cert" },
     { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
     { flags: "--max-idle <seconds>", help: "exit after <seconds> without requests (self-reap; the orphan backstop for on-demand-woken doors — fractional values accepted for tests)" },
+    { flags: "--systemd-socket", help: "serve on the systemd socket-activation listener (LISTEN_FDS fd 3) instead of binding a port — the port belongs to your .socket unit; Linux-only" },
   ],
   helpSuffix: [
     "",
@@ -96,10 +97,12 @@ export interface ParsedServe {
   port: number;
   /** Present = the --max-idle self-reap timer is armed (W9). */
   maxIdleSeconds?: number;
+  /** Present = serve on the systemd-passed listener (W10, Linux-only). */
+  systemdSocket?: boolean;
 }
 
 function toParsedServe(parsed: KitParsed): ParsedServe {
-  const options = parsed.options as { host?: string; port?: string; endpoint?: string; maxIdle?: string };
+  const options = parsed.options as { host?: string; port?: string; endpoint?: string; maxIdle?: string; systemdSocket?: boolean };
   const endpoint = options.endpoint;
   if (endpoint !== undefined && endpoint.length === 0) {
     throw new KitUsageError("--endpoint <name> must not be empty (omit it to serve a host door)");
@@ -108,6 +111,10 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
   const port = Number(options.port ?? "8570");
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new KitUsageError("--port must be an integer between 1 and 65535");
+  }
+  const systemdSocket = options.systemdSocket === true;
+  if (systemdSocket && options.port !== undefined) {
+    throw new KitUsageError("--systemd-socket and --port are mutually exclusive (the socket unit owns the port)");
   }
   let maxIdleSeconds: number | undefined;
   if (options.maxIdle !== undefined) {
@@ -121,6 +128,7 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
     host,
     port,
     ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
+    ...(systemdSocket ? { systemdSocket } : {}),
   };
 }
 
@@ -194,7 +202,7 @@ export function executeServeCommand(
   context: ServeCommandContext,
 ): KitCommandResult {
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
-    const { endpoint, host, port, maxIdleSeconds } = toParsedServe(parsed);
+    const { endpoint, host, port, maxIdleSeconds, systemdSocket } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
     const options = parsed.options as { tls?: boolean; tlsCert?: string; tlsKey?: string };
     // TLS flag family (W5'): --tls and --tls-cert/--tls-key are mutually
@@ -211,7 +219,7 @@ export function executeServeCommand(
       const target = endpoint === undefined ? "host door" : `'${endpoint}'`;
       throw new Error(`refusing to serve ${target}: ${decision.reason}`);
     }
-    const { server, info } = startUkpServer({
+    const { server, info, stopAll } = startUkpServer({
       currentDirectory: context.currentDirectory,
       registryPath: context.registryPath,
       qmdCommand: context.qmdCommand,
@@ -220,6 +228,7 @@ export function executeServeCommand(
       ...(endpoint !== undefined ? { endpointName: endpoint } : {}),
       ...(tokens.length > 0 ? { tokens } : {}),
       ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
+      ...(systemdSocket !== undefined && systemdSocket ? { systemdSocket } : {}),
       ...(options.tls === true
         ? { tls: { mode: "self-signed" as const } }
         : options.tlsCert !== undefined && options.tlsKey !== undefined
@@ -228,7 +237,7 @@ export function executeServeCommand(
     });
     const stop = () => {
       console.error(`ukp serve: stopped (${info.url})`);
-      server.stop(true);
+      stopAll();
     };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
