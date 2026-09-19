@@ -376,7 +376,7 @@ describe("CLI bootstrap", () => {
     const guide = output.join("\n");
     // ssh path: the wake model — nothing to start, host prerequisites stated.
     expect(guide).toContain("wakes a loopback door over the SSH connection");
-    expect(guide).toContain("ssh reachable and ukp is on the remote PATH");
+    expect(guide).toContain("has ukp installed the usual way (npm i -g or bun add -g");
     expect(guide).toContain("ukp register --url ssh://<host>");
     // https path: resident door under the operator's process manager.
     expect(guide).toContain("UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls");
