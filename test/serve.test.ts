@@ -24,7 +24,7 @@ import {
   type DoorDocument,
   type StartedServe,
 } from "../src/server.ts";
-import { parseServeArgs, renderServeBanner } from "../src/commands/serve.ts";
+import { parseServeArgs, renderServeBanner, executeServeCommand } from "../src/commands/serve.ts";
 import { parseListenFds, createSocketBridge } from "../src/server.ts";
 import { createServer as netCreateServer } from "node:net";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
@@ -94,7 +94,7 @@ function startDoor(overrides: Partial<Parameters<typeof startUkpServer>[0]> = {}
 }
 
 afterAll(() => {
-  for (const { server } of started) server.stop(true);
+  for (const handle of started) handle.stopAll();
   rmSync(root, { recursive: true, force: true });
   rmSync(fixture, { recursive: true, force: true });
 });
@@ -859,5 +859,12 @@ describe("serve --systemd-socket (W10 / ADR-REM-006)", () => {
     expect(() =>
       startDoor({ systemdSocket: true }),
     ).toThrow("--systemd-socket is Linux-only");
+  });
+
+  test("tokenless socket activation is refused (the bind belongs to the socket unit)", () => {
+    const result = executeServeCommand(["--systemd-socket"], { currentDirectory: root, registryPath, qmdCommand, tokens: [] });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--systemd-socket without a token");
+    expect(result.stderr).toContain("set UKP_SERVE_TOKEN");
   });
 });

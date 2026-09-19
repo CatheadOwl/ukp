@@ -543,14 +543,44 @@ export function parseListenFds(env: NodeJS.ProcessEnv): { fd: number } | { error
  * (`createServer().listen({fd: 3})` verified under bun). Each connection the
  * systemd-held listener accepts is piped to the real Bun.serve listener on
  * an ephemeral loopback port — the fake-ssh proxy pattern, in-process. */
-export function createSocketBridge(acceptor: NetServer, targetPort: number): void {
+export function createSocketBridge(acceptor: NetServer, targetPort: number): { destroyAll: () => void } {
+  // Live connections are tracked so stopAll can force-close the pairs — a
+  // peer that receives FIN but never closes (half-open keep-alive shape)
+  // would otherwise hold the process open after the idle exit forever
+  // (review P2: probe-confirmed liveness hang), letting stale serve
+  // processes accumulate beside systemd's fresh spawns.
+  const live = new Set<{ socket: import("node:net").Socket; upstream: import("node:net").Socket }>();
   acceptor.on("connection", (socket) => {
     const upstream = netConnect({ host: "127.0.0.1", port: targetPort });
+    const pair = { socket, upstream };
+    live.add(pair);
     socket.pipe(upstream);
     upstream.pipe(socket);
-    socket.on("error", () => upstream.destroy());
-    upstream.on("error", () => socket.destroy());
+    const drop = () => {
+      live.delete(pair);
+      socket.destroy();
+      upstream.destroy();
+    };
+    socket.on("error", drop);
+    upstream.on("error", drop);
+    socket.on("close", () => {
+      live.delete(pair);
+      upstream.destroy();
+    });
+    upstream.on("close", () => {
+      live.delete(pair);
+      socket.destroy();
+    });
   });
+  return {
+    destroyAll() {
+      for (const pair of live) {
+        pair.socket.destroy();
+        pair.upstream.destroy();
+      }
+      live.clear();
+    },
+  };
 }
 
 /** One serve listener, both modes (W10): plain binding by default; under
@@ -597,22 +627,28 @@ function startServeListener(
   }
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, ...tls, fetch });
   const acceptor = netCreateServer();
-  createSocketBridge(acceptor, server.port ?? 0);
+  const bridge = createSocketBridge(acceptor, server.port ?? 0);
   acceptor.on("error", (error) => {
-    console.error(`ukp serve: fd3 acceptor failed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  });
-  acceptor.listen({ fd: parsed.fd });
-  idle?.bind(() => {
+    // Async setup failure channel (e.g. fd 3 is a CONNECTED socket — passes
+    // the S_IFSOCK pre-check but cannot listen): no hard exit from library
+    // code — report, stop both listeners, and let the loop drain with a
+    // failing exit code.
+    console.error(`ukp serve: fd${parsed.fd} acceptor failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
     acceptor.close();
+    bridge.destroyAll();
     server.stop(true);
   });
+  acceptor.listen({ fd: parsed.fd });
+  const stopAll = () => {
+    acceptor.close();
+    bridge.destroyAll();
+    server.stop(true);
+  };
+  idle?.bind(stopAll);
   return {
     server,
-    stopAll: () => {
-      acceptor.close();
-      server.stop(true);
-    },
+    stopAll,
     publicUrl: `systemd:fd${parsed.fd} (bridge ${scheme}://127.0.0.1:${server.port})`,
     port: server.port ?? 0,
   };
