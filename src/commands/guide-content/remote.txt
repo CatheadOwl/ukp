@@ -7,7 +7,7 @@ Current model:
 - The https path (LAN, public IP, or behind a reverse proxy) uses a resident door: run ukp serve under your process manager. Arbitrary consumers have no SSH credentials, so the listener itself is the trust boundary (TLS + bearer token).
 - Prefer host door mode: run ukp serve without --endpoint to expose every local endpoint behind one port.
 - The door reads the host Registry fresh on each request, so newly registered local endpoints appear without restarting the door.
-- Endpoint names still come from the host Service Manifest or discovery document. Client-side --endpoint during register is an expected-name assertion, not an alias.
+- Declared endpoint names come from the host Service Manifest or discovery document; your registry binds each one under a local handle — the declared name by default, or --name <handle> when that name is already taken (two hosts both declaring 'notes' become your 'notes' and 'ali-notes'). --endpoint during register stays an expected-name assertion on the declared name.
 
 Owner path over SSH (zero ceremony — nothing to start on the host):
 1. Prerequisites (once): the host accepts your SSH key and has ukp installed the usual way
@@ -43,7 +43,7 @@ Use this when you deliberately want to expose only one endpoint instead of the w
    ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
 
 Name and identity:
-- register --url fetches /.well-known/ukp.json and registers the name declared there.
+- register --url fetches /.well-known/ukp.json and registers the declared name under a local handle (--name <handle> chooses another, e.g. when the name is taken).
 - --endpoint <name> on register asserts the expected name; if discovery declares a different name, registration fails.
 - A host door can import everything, --select a comma-separated subset, or --endpoint exactly one endpoint.
 - Self-signed HTTPS certificates are pinned on first registration; compare the pinned fingerprint with the serve banner on untrusted networks.

@@ -203,10 +203,9 @@ describe("ukp register --url <door> (W7 import)", () => {
     registerRemoteAt(registryPath, { name: "notes", url: "https://elsewhere.example/notes", instance_uid: "u-1" });
     const partial = await asResult(executeRegisterCommand(["--url", info.url], context));
     expect(partial.exitCode).toBe(0);
-    expect(partial.stdout).toContain(
-      "skipped:  notes  (name 'notes' already bound to https://elsewhere.example/notes; "
-        + "re-register this endpoint with --name <handle> to land it under another)",
-    );
+    expect(partial.stdout).toContain("skipped:  notes");
+    expect(partial.stdout).toContain("name 'notes' already bound to https://elsewhere.example/notes");
+    expect(partial.stdout).toContain("re-register this endpoint with --name <handle> to land it under another");
     expect(partial.stdout).toContain("imported: archive");
     expect(readRegistry(registryPath).find((binding) => binding.name === "notes")?.url)
       .toBe("https://elsewhere.example/notes");
@@ -297,6 +296,12 @@ describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
     expect(refused.exitCode).toBe(1);
     expect(refused.stdout).toContain("already bound to 'ali-notes'; unregister it to change the handle");
     expect(readRegistry(registryPath)).toHaveLength(1);
+
+    // Explicit means explicit: --name equal to the DECLARED name but not the
+    // existing handle is still a rename attempt, not a default gesture.
+    const renegade = await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "notes"], context));
+    expect(renegade.exitCode).toBe(1);
+    expect(renegade.stdout).toContain("already bound to 'ali-notes'; unregister it to change the handle");
   });
 
   test("a taken name is the --name remedy path: skip line names it, --name then lands", async () => {
@@ -322,6 +327,22 @@ describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
     const local = localOutcome instanceof Promise ? await localOutcome : localOutcome;
     expect(local.exitCode).toBe(2);
     expect(local.stderr).toContain("--name chooses a remote registration handle and requires --url");
+  });
+
+  test("--endpoint stays an assertion on the DECLARED name when --name renames the handle", async () => {
+    const { info } = startDoor();
+    // Positive: the assertion matches the declared name alongside a rename.
+    const ok = await asResult(
+      executeRegisterCommand(["--url", `${info.url}/notes`, "--endpoint", "notes", "--name", "ali-notes"], context),
+    );
+    expect(ok.exitCode).toBe(0);
+    expect(readRegistry(registryPath).map((binding) => [binding.name, binding.declared_name]))
+      .toEqual([["ali-notes", "notes"]]);
+
+    // Negative: asserting the HANDLE (not the declared name) fails.
+    const assertedHandle = await asResult(executeRegisterCommand(["--url", info.url, "--endpoint", "ali-notes"], context));
+    expect(assertedHandle.exitCode).toBe(1);
+    expect(assertedHandle.stderr).toContain(`no such endpoint 'ali-notes' on door ${info.url} (available: archive, notes)`);
   });
 
   test("single-endpoint (non-door) registration: --name output, idempotent re-register, refusal", async () => {
@@ -350,18 +371,25 @@ describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
     const refused = await asResult(executeRegisterCommand(["--url", single.info.url, "--name", "pi-skills"], context));
     expect(refused.exitCode).toBe(1);
     expect(refused.stderr).toContain("already registered as 'ali-skills'");
+
+    const renegade = await asResult(executeRegisterCommand(["--url", single.info.url, "--name", "skills"], context));
+    expect(renegade.exitCode).toBe(1);
+    expect(renegade.stderr).toContain("already registered as 'ali-skills'");
   });
 
   test("one service under two handles (different urls, same instance_uid) notes in list", async () => {
     const { info } = startDoor();
     await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "ali-notes"], context));
     const uid = readRegistry(registryPath).find((binding) => binding.name === "ali-notes")!.instance_uid;
-    registerRemoteAt(registryPath, { name: "mirror-notes", url: "https://mirror.example/notes", instance_uid: uid });
+    registerRemoteAt(registryPath, { name: "mirror-notes", url: "https://mirror.example/notes", declared_name: "notes", instance_uid: uid });
 
     const list = await asResult(executeListCommand([], context));
     expect(list.exitCode).toBe(0);
     expect(list.stderr).toContain("'ali-notes' and 'mirror-notes' pin the same instance_uid");
     expect(list.stderr).toContain("one service under two handles");
+    // The declared annotation survives row degradation (unreachable mirror).
+    expect(list.stdout).toContain("mirror-notes (declares notes)\t");
+    expect(list.stdout).toContain("(unavailable)");
   });
 });
 

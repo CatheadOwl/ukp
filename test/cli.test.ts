@@ -381,7 +381,10 @@ describe("CLI bootstrap", () => {
     // https path: resident door under the operator's process manager.
     expect(guide).toContain("UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls");
     expect(guide).toContain("ukp register --url https://<ip>:8570 --endpoint <name> --token <token>");
-    expect(guide).toContain("expected-name assertion, not an alias");
+    // ADR-REM-007 guard: --endpoint stays a declared-name assertion; the
+    // consumer handle (not an alias layer) is the --name registration slot.
+    expect(guide).toContain("expected-name assertion on the declared name");
+    expect(guide).toContain("--name <handle> when that name is already taken");
     expect(guide).toContain("An ssh:// url port selects nothing");
     expect(guide).toContain("--max-idle <seconds>");
   });
