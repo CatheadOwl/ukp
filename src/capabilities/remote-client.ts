@@ -208,6 +208,54 @@ function randomRemotePort(): number {
   return WAKE_REMOTE_PORT_MIN + Math.floor(Math.random() * WAKE_REMOTE_PORT_SPAN);
 }
 
+/** Tier 1 (ADR-REM-006 §4): substrate-native handshake amortization. A
+ * dedicated `-N` mux master is spawned per origin before the wake client;
+ * with ControlPersist it daemonizes immediately and self-exits WINDOW
+ * seconds after the last session — ukp never reaps it. The wake client then
+ * multiplexes over the warm connection (no TCP+key handshake); only the
+ * remote bun startup stays per-call. The door STILL spawns per call as the
+ * client's own session and dies with it — this is NOT the deferred Tier-2
+ * persistent door. UKP-owned ControlPath namespace (keyed by %r/%h/%p = the
+ * SSH endpoint, not the forwarded ports) avoids colliding with the user's
+ * own multiplexing config. Native Windows OpenSSH has no ControlMaster
+ * support ("unix listener too long") — Tier 0 there, per-call handshake. */
+const WAKE_MUX_PERSIST_SECONDS = 120;
+const WAKE_MUX_CONTROL_PATH = "~/.ssh/ukp-cm-%r@%h-%p";
+
+function muxOptions(): readonly string[] {
+  if (process.platform === "win32") return [];
+  return [
+    "-o", "ControlMaster=auto",
+    "-o", `ControlPersist=${WAKE_MUX_PERSIST_SECONDS}`,
+    "-o", `ControlPath=${WAKE_MUX_CONTROL_PATH}`,
+  ];
+}
+
+/** The detached mux master (Tier 1): no session, no forwards — with
+ * ControlPersist it backgrounds itself and holds just the authenticated
+ * connection for the persist window. If a master already exists (socket
+ * alive), this exits immediately and harmlessly. Its fate is deliberately
+ * ignored: ControlPersist owns its lifetime. Never spawned on win32: without
+ * ControlMaster support the bare `-N` connection would idle forever. */
+function spawnMuxMaster(
+  sshCommand: readonly string[] | undefined,
+  target: string,
+): void {
+  if (process.platform === "win32") return;
+  const argv = [
+    ...(sshCommand ?? ["ssh"]),
+    "-N",
+    "-o", "BatchMode=yes",
+    ...muxOptions(),
+    target,
+  ];
+  try {
+    Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+  } catch {
+    // best-effort: without a master the wake client just handshakes itself
+  }
+}
+
 /** The pinned wake command (W9 / ADR-REM-006 §4 安全收窄): a fixed shape where
  * only the client-chosen integer port and idle window are interpolated — the
  * exact string an operator can allowlist with git-shell / authorized_keys
@@ -281,6 +329,10 @@ async function openSshTunnel(
   endpointLabel: string,
 ): Promise<{ proc: ReturnType<typeof Bun.spawn>; base: string }> {
   const target = parts.user !== undefined ? `${parts.user}@${parts.host}` : parts.host;
+  // Tier 1 first: a detached mux master per origin (no-op when one already
+  // holds the socket); the wake client below rides it when possible and
+  // degrades to a full handshake when not (first call of a burst, win32).
+  spawnMuxMaster(options.sshCommand, target);
   const attempts = 3;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const localPort = await freePort();
@@ -289,6 +341,7 @@ async function openSshTunnel(
       ...(options.sshCommand ?? ["ssh"]),
       "-o", "ExitOnForwardFailure=yes",
       "-o", "BatchMode=yes",
+      ...muxOptions(),
       "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
       target,
       wakeDoorCommand(remotePort),

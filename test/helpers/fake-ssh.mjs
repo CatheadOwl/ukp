@@ -37,6 +37,10 @@ const logFile = own("--log");
 const registryPath = own("--registry");
 const qmdFixture = own("--qmd");
 const nodeForQmd = own("--node");
+const dumpFile = own("--dump");
+// Dump every raw argv BEFORE the -L validation below: the Tier-1 mux-master
+// invocation carries no -L and exits there — tests still want its shape.
+if (dumpFile !== undefined) appendFileSync(dumpFile, `${JSON.stringify(argv)}\n`, "utf8");
 
 const forwardIndex = argv.indexOf("-L");
 const forward = forwardIndex >= 0 ? argv[forwardIndex + 1] : undefined;
