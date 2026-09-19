@@ -90,6 +90,44 @@ only grows: the re-sign keeps everything the certificate already carried
 narrower requests reuse the certificate untouched. Explicit `--tls-cert` certificates carry their own SAN, so
 `--tls-san` next to them is a usage error, not a no-op.
 
+## Windows host (https — resident form, machine-verified on the "liku" host)
+
+Windows has no socket-activation equivalent, so the https path on a
+Windows host is the resident form: one-time setup, auto-start at logon,
+one bun process always running. Verified end to end (register/TOFU →
+read → nav) on a Windows 11 host with a plain user-level install:
+
+1. Install the usual way (bun's official installer + `npm i -g
+   @catheadowl/ukp` — the npm shim needs bun on PATH, both land in
+   per-user PATH dirs, which is fine here: the door is started by a
+   logged-on task, not a bare ssh shell).
+2. `ukp register <folder>` for every endpoint to expose.
+3. Certificate — generate ONCE (Git for Windows' openssl works; avoids
+   any runtime openssl dependency of `--tls`):
+   `openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout
+   %USERPROFILE%\.ukp	ls\key.pem -out %USERPROFILE%\.ukp	ls\cert.pem
+   -subj "/CN=ukp" -addext "subjectAltName=IP:<lan-ip>,DNS:localhost"`
+4. `%USERPROFILE%\.ukp\start-door.cmd` (CRLF!) — set PATH, set
+   UKP_SERVE_TOKEN, run `ukp serve --host 0.0.0.0 --port 8570
+   --tls-cert ... --tls-key ...`. Write it with a real editor (writing
+   cmd files over ssh echo mangles `%` escaping — copy the file instead).
+5. `schtasks /Create /TN ukp-door /TR
+   %USERPROFILE%\.ukp\start-door.cmd /SC ONLOGON /F` + a firewall rule
+   for the port; `schtasks /Run /TN ukp-door` to start now.
+6. Client: `ukp register --url https://<host>:8570 --token <token>` —
+   TOFU pins the certificate; re-registering refreshes the pin.
+
+Pitfalls the verification run caught:
+- **A silent bind failure**: if something already listens on the port
+  (a leftover manual door, say), the new door exits EADDRINUSE inside a
+  hidden window and NOTHING tells you — check `netstat -ano | findstr
+  :8570` and the PID's command line; consider adding `>>
+  %USERPROFILE%\.ukp\door.log 2>&1` to the cmd for a paper trail.
+- ONLOGON starts at LOGON, not boot; WinSW/NSSM wrapping makes it a real
+  service (boot start + restart-on-crash) if the host reboots unattended.
+- `rg` on the host is the host's business — no ripgrep installed means
+  the remote `rg` capability reports unavailable (everything else works).
+
 ## Socket activation (Linux — no resident process on the https path either)
 
 systemd can hold the listening port itself and spawn the door on first
