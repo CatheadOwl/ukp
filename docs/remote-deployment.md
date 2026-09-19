@@ -18,16 +18,30 @@ address).
 
 ## Via SSH (two personal machines — zero extra components, zero ceremony)
 
-The `ssh://` URL scheme makes the transport transparent: ukp opens an
-ephemeral SSH tunnel per invocation (key auth from your SSH config), so a
-registered remote endpoint takes the same commands as a local one — search,
-read, nav, rg, propose — with no manual tunnel and no env ceremony once the
-token is stored.
+The `ssh://` URL scheme makes the transport transparent AND wakes the door
+on demand: each invocation runs one ssh process that opens the forward and
+starts a pinned loopback `ukp serve` on the host (the door serves the host
+Registry fresh and self-reaps when idle — nothing to pre-start, no token:
+SSH carries encryption and auth). Later invocations within a couple of
+minutes reuse the warmed SSH connection. Prerequisites on the host: ssh
+reachable (your key) and ukp on its PATH. A first call that cannot find
+`ukp` on the remote PATH says so with the remedy.
 
 ```bash
-ukp register --url ssh://<host>:8570 --token <token>   # once; TOFU + token stored
-ukp read --endpoint <name> notes/x.md                   # just works, like local
+ukp register --url ssh://<host>                        # once; the first call wakes the door
+ukp read --endpoint <name> notes/x.md                  # just works, like local
 ```
+
+Notes:
+- The `ssh://` url port selects nothing — the woken door listens on a
+  client-chosen loopback port per invocation.
+- Consecutive invocations share an ssh multiplexing master for two minutes
+  (handshake amortization); Windows' native ssh has no multiplexing and
+  quietly pays the handshake per call.
+- To lock down what SSH may run, restrict the login shell (git-shell
+  style). A forced `command=` in authorized_keys does NOT compose with
+  wake — the client chooses the door port per invocation, which a fixed
+  forced command cannot express.
 
 ## Native TLS (bare IP, no domain — zero extra components)
 
@@ -52,19 +66,14 @@ files; clients then need no pinning at all.
 ## Host door (one host, many endpoints — one gesture, zero tokens)
 
 Trust's natural unit is the host, not the endpoint: if you can ssh to a
-machine, per-endpoint tokens are ceremony. Run `ukp serve` **without**
-`--endpoint` and the whole registry answers behind one loopback port
-(`docker DOCKER_HOST=ssh://` posture — SSH carries encryption and auth, so
-`--allow-anonymous` on loopback is the owner deployment):
+machine, per-endpoint tokens are ceremony — and since the on-demand wake
+(W9), you don't even run the door yourself: `ukp register --url ssh://<host>`
+wakes a loopback door (`docker DOCKER_HOST=ssh://` posture — SSH carries
+encryption and auth), imports everything behind it, and the door reaps
+itself when idle:
 
 ```bash
-# on the host (systemd: the same unit with --endpoint dropped):
-ukp serve --allow-anonymous
-# serving host door (ukp-remote v1)
-#   listening:  http://127.0.0.1:8570
-#   endpoints:  archive, notes            <- every local binding, grows without restart
-
-# on your machine — one gesture imports everything behind the door:
+# nothing to run on the host first — one gesture imports everything:
 ukp register --url ssh://<host>
 # door ssh://<host>: 2 endpoint(s)
 # imported: notes    (search,propose)
@@ -72,6 +81,11 @@ ukp register --url ssh://<host>
 ukp list                       # flat rows, urls like ssh://<host>/notes
 ukp read ukp://notes/plan.md   # day-2 is byte-identical to today's remotes
 ```
+
+A manually started door still works (e.g. under systemd, for a host you
+deliberately keep serving): `ukp serve --allow-anonymous` without
+`--endpoint` exposes the same whole-registry door on a fixed loopback port —
+but the wake makes that an explicit choice, not a prerequisite.
 
 Imported endpoints are ordinary remote bindings (`url = <door>/<name>`); a
 name already bound elsewhere is skipped with a visible reason, re-running

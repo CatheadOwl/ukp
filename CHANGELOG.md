@@ -4,6 +4,24 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `ukp serve --max-idle <seconds>`: self-exit after that long without
+  requests (requests re-arm the timer; idle connections don't). The orphan
+  backstop the on-demand-woken doors rely on, and the companion flag for
+  process-manager or socket-activated deployments.
+
+### Changed
+
+- The `ssh://` transport wakes the host door on demand: nothing to
+  pre-start on the host (prerequisites: ssh reachable + ukp on its
+  PATH). One ssh process per invocation opens the forward and runs a
+  pinned loopback `ukp serve` that serves the host Registry and reaps
+  itself when idle; consecutive invocations reuse the connection for two
+  minutes (native Windows ssh pays the handshake per call). The url port
+  in `ssh://` no longer selects anything; a missing remote `ukp` is
+  reported with the remedy.
+
 ### Fixed
 
 - `ukp register --url` now accepts `--endpoint <name>` as an expected-name
