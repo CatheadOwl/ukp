@@ -377,6 +377,22 @@ describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
     expect(renegade.stderr).toContain("already registered as 'ali-skills'");
   });
 
+  test("drift notes split free vs taken names; taken names point at the --name remedy", async () => {
+    const { info } = startDoor();
+    registerAt(registryPath, "notes", createService("w11-drift-local-notes", "notes"));
+    await asResult(executeRegisterCommand(["--url", `${info.url}/archive`], context));
+    const list = await asResult(executeListCommand([], context));
+    expect(list.exitCode).toBe(0);
+    // `notes` is unimported only because the name is held locally: the note
+    // must not suggest the bulk import (it would skip again) — the single
+    // endpoint --name form is the remedy. (The shared server registry may
+    // serve extra endpoints; only `notes`'s classification matters here.)
+    expect(list.stderr).toContain(
+      `door ${info.url}: name(s) taken: notes — import under another handle: 'ukp register --url ${info.url}/<name> --name <handle>'`,
+    );
+    expect(list.stderr).not.toContain("unimported endpoint(s): notes");
+  });
+
   test("one service under two handles (different urls, same instance_uid) notes in list", async () => {
     const { info } = startDoor();
     await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "ali-notes"], context));
