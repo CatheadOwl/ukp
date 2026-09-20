@@ -24,6 +24,17 @@ All notable public changes to UKP will be documented in this file.
   a declared `rg` still overrides it. (Windows host upgrade feedback on
   0.2.0.)
 
+### Changed
+
+- The remote surfaces now state the platform burden guidance explicitly
+  (owner discussion): ssh:// is the zero-resident path on every OS (on
+  Windows, enabling the built-in OpenSSH Server feature once); the https
+  path needs a resident listener — Linux can go resident-free via systemd
+  socket activation, Windows has no systemd equivalent so a resident door
+  wants a real service wrapper (WinSW-class). The deployment guide gains
+  a "choosing a path by burden" paragraph; `ukp guide remote`'s
+  operational note carries the same recommendation.
+
 ## [0.2.0] - 2026-09-20
 
 ### Added

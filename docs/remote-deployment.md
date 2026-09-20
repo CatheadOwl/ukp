@@ -5,6 +5,16 @@ two fastest consumer-side paths (SSH between personal machines, native TLS
 on a bare IP), see the README's "Remote in 60 seconds"; this guide covers
 every deployment shape end to end.
 
+**Choosing a path by burden** (someone always holds the port — the only
+question is who): the ssh:// path wakes the door on demand and adds zero
+resident processes on every OS (Windows hosts enable the built-in OpenSSH
+Server feature once). The https path needs a resident listener: on Linux,
+systemd socket activation holds the port and spawns the door per use
+(zero resident ukp); on Windows there is no systemd equivalent and a bun
+process cannot natively be a service, so a resident door wants a real
+service wrapper (WinSW-class) — or prefer ssh:// there. The https door is
+the right shape when consumers have no SSH credentials.
+
 `ukp serve` speaks plain HTTP by default; TLS and public exposure are either
 **native** (`--tls` self-signs through the local openssl, `--tls-cert/--tls-key`
 serve your own certificate) or **delegated to a fronting component** (reverse
