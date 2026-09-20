@@ -4,6 +4,7 @@ import { createServer as netCreateServer, connect as netConnect, type Server as 
 import { ENDPOINT_NAME, loadManifest, type LoadedManifest } from "./config/manifest.ts";
 import { localPathOf, readRegistry } from "./registry.ts";
 import { FILE_NATIVE_CAPABILITIES, resolveFileNativeCapability } from "./config/file-native.ts";
+import { EXTERNAL_PROVIDER, EXTERNAL_TOOL_CAPABILITIES } from "./config/external-tool.ts";
 import {
   PROPOSE_SLUG,
   ProposeBusyError,
@@ -231,12 +232,18 @@ function readInstanceUid(serviceFolder: string): string {
 }
 
 /** Capability projection shared by endpoint and door documents: derived
- * file-native defaults (read/nav) are always present; declared capabilities
- * override or extend them (a declared nav replaces the derived entry). */
+ * file-native defaults (read/nav) are always present, then the external-tool
+ * base tier (rg, ADR-RG-003 — served on /v1/rg for every endpoint; a missing
+ * binary degrades to per-endpoint availability data per the W6 wire
+ * contract, never an undeclared capability); declared capabilities override
+ * or extend both (a declared nav or rg replaces the default entry). */
 function projectCapabilities(loaded: LoadedManifest): DiscoveryDocument["capabilities"] {
   const capabilities: DiscoveryDocument["capabilities"] = {};
   for (const [name, spec] of Object.entries(FILE_NATIVE_CAPABILITIES)) {
     if (spec.derived) capabilities[name] = { provider: "file", derived: true };
+  }
+  for (const name of Object.keys(EXTERNAL_TOOL_CAPABILITIES)) {
+    capabilities[name] = { provider: EXTERNAL_PROVIDER, derived: true };
   }
   for (const name of Object.keys(loaded.manifest.capabilities).sort()) {
     const declared = loaded.manifest.capabilities[name]!;
