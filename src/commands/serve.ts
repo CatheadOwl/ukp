@@ -9,6 +9,7 @@ import {
 } from "./kit.ts";
 import { normalizeTlsSanEntry } from "../capabilities/tls-identity.ts";
 import { DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
+import { printTaskPreflightError, renderServeTaskArtifacts, type ServeTaskTls } from "./serve-task.ts";
 
 export interface ServeCommandContext {
   currentDirectory: string;
@@ -37,7 +38,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
   group: "operations",
   description:
     "Expose a registered endpoint over HTTP using the ukp-remote wire, or — without --endpoint — serve every local endpoint as one host door routed by name.",
-  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]… | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket]",
+  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]… | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task]",
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve the whole registry as a host door (/e/<name>/ routing, all endpoints, one port)" },
     { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
@@ -49,6 +50,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
     { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
     { flags: "--max-idle <seconds>", help: "exit after <seconds> without requests (self-reap; the orphan backstop for on-demand-woken doors — fractional values accepted for tests)" },
     { flags: "--systemd-socket", help: "serve on the systemd socket-activation listener (LISTEN_FDS fd 3) instead of binding a port — the port belongs to your .socket unit; Linux-only" },
+    { flags: "--print-task", help: "Windows: print this door's process-manager artifacts (start script, hidden launcher, Task Scheduler command, firewall rule) instead of serving — review and apply them yourself; nothing is installed or started for you, and the token is yours to paste (never printed)" },
   ],
   helpSuffix: [
     "",
@@ -107,6 +109,9 @@ export interface ParsedServe {
   maxIdleSeconds?: number;
   /** Present = the systemd-passed listener (W10, Linux-only). */
   systemdSocket?: boolean;
+  /** Present = render the Windows process-manager artifacts instead of
+   * serving (W12; Windows-only, print-only, never starts a listener). */
+  printTask?: boolean;
   /** `--tls-san` values, normalized to `IP:x`/`DNS:y` SAN form (repeatable);
    * valid only next to `--tls` — the execute layer enforces the pairing.
    * Absent when the flag is not passed (parse output stays byte-identical
@@ -115,7 +120,7 @@ export interface ParsedServe {
 }
 
 function toParsedServe(parsed: KitParsed): ParsedServe {
-  const options = parsed.options as { host?: string; port?: string; endpoint?: string; maxIdle?: string; systemdSocket?: boolean; tlsSan?: string[] };
+  const options = parsed.options as { host?: string; port?: string; endpoint?: string; maxIdle?: string; systemdSocket?: boolean; printTask?: boolean; tlsSan?: string[] };
   const endpoint = options.endpoint;
   if (endpoint !== undefined && endpoint.length === 0) {
     throw new KitUsageError("--endpoint <name> must not be empty (omit it to serve a host door)");
@@ -129,11 +134,18 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
   if (systemdSocket && options.port !== undefined) {
     throw new KitUsageError("--systemd-socket and --port are mutually exclusive (the socket unit owns the port)");
   }
+  const printTask = options.printTask === true;
+  if (printTask && systemdSocket) {
+    throw new KitUsageError("--print-task is the Windows resident form; --systemd-socket is the Linux one (systemd holds the port — see the deployment handbook)");
+  }
   let maxIdleSeconds: number | undefined;
   if (options.maxIdle !== undefined) {
     maxIdleSeconds = Number(options.maxIdle);
     if (!Number.isFinite(maxIdleSeconds) || maxIdleSeconds <= 0 || maxIdleSeconds > 86400) {
       throw new KitUsageError("--max-idle must be a positive number of seconds (at most 86400)");
+    }
+    if (printTask) {
+      throw new KitUsageError("--print-task is for a resident door; --max-idle self-reaps (it is the on-demand backstop) and would leave the door down until the next logon");
     }
   }
   let tlsSan: string[] = [];
@@ -152,6 +164,7 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
     port,
     ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
     ...(systemdSocket ? { systemdSocket } : {}),
+    ...(printTask ? { printTask } : {}),
     ...(tlsSan.length > 0 ? { tlsSan } : {}),
   };
 }
@@ -230,6 +243,7 @@ export function executeServeCommand(
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
     const { endpoint, host, port, maxIdleSeconds, systemdSocket, tlsSan = [] } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
+    const printTask = (parsed.options as { printTask?: boolean }).printTask === true;
     const options = parsed.options as { tls?: boolean; tlsCert?: string; tlsKey?: string };
     // TLS flag family (W5'): --tls and --tls-cert/--tls-key are mutually
     // exclusive; the explicit pair must arrive complete. --tls-san only
@@ -243,6 +257,37 @@ export function executeServeCommand(
     }
     if (tlsSan.length > 0 && options.tls !== true) {
       throw new KitUsageError("--tls-san is only used with --tls (an explicit --tls-cert certificate carries its own SAN)");
+    }
+    // W12 print-only branch: render the Windows artifacts and stop. No
+    // listener, no admission token check (the token is pasted into the
+    // generated script later), and the env token is deliberately not read
+    // — the output is secret-free by construction.
+    if (printTask) {
+      const preflight = printTaskPreflightError({
+        platform: process.platform,
+        host,
+        hasTls: options.tls === true || options.tlsCert !== undefined,
+        allowAnonymous,
+      });
+      if (preflight !== undefined) {
+        throw new Error(preflight);
+      }
+      const tls: ServeTaskTls | undefined =
+        options.tls === true
+          ? { mode: "self-signed", sanEntries: tlsSan }
+          : options.tlsCert !== undefined && options.tlsKey !== undefined
+            ? { mode: "certificates", certPath: options.tlsCert, keyPath: options.tlsKey }
+            : undefined;
+      return {
+        exitCode: 0,
+        stdout: renderServeTaskArtifacts({
+          host,
+          port,
+          ...(endpoint !== undefined ? { endpoint } : {}),
+          ...(tls !== undefined ? { tls } : {}),
+        }),
+        stderr: "",
+      };
     }
     const tokens = context.tokens ?? parseServeTokens(process.env.UKP_SERVE_TOKEN);
     // W10: socket activation must not admit tokenless serving — the bind

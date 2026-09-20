@@ -11,8 +11,10 @@ resident processes on every OS (Windows hosts enable the built-in OpenSSH
 Server feature once). The https path needs a resident listener: on Linux,
 systemd socket activation holds the port and spawns the door per use
 (zero resident ukp); on Windows there is no systemd equivalent and a bun
-process cannot natively be a service, so a resident door wants a real
-service wrapper (WinSW-class) — or prefer ssh:// there. The https door is
+process cannot natively be a service — the resident door runs as a
+hidden logon task (no visible window, bounded crash retry; see the
+Windows section), and only unattended-boot always-on would want a real
+service wrapper (WinSW-class), or prefer ssh:// there. The https door is
 the right shape when consumers have no SSH credentials.
 
 `ukp serve` speaks plain HTTP by default; TLS and public exposure are either
@@ -110,37 +112,62 @@ narrower requests reuse the certificate untouched. Explicit `--tls-cert` certifi
 
 Windows has no socket-activation equivalent, so the https path on a
 Windows host is the resident form: one-time setup, auto-start at logon,
-one bun process always running. Verified end to end (register/TOFU →
-read → nav) on a Windows 11 host with a plain user-level install:
+one bun process always running — with **no visible window** (a hidden
+launcher owns the console; a popping cmd box is not an acceptable product
+form) and bounded crash retry. Verified end to end (register/TOFU →
+read → nav, plus zero-flash and crash-recovery drills) on a Windows 11
+host with a plain user-level install. Steps 3–6 are exactly what
+`ukp serve --print-task --host 0.0.0.0 --tls`
+(or `--tls-cert/--tls-key`) prints for you — the generator assembles the
+mechanical half (start script, hidden launcher, Task Scheduler command,
+firewall rule, token placeholder); this section keeps the judgment calls
+and the pitfalls the verification run caught:
 
 1. Install the usual way (bun's official installer + `npm i -g
    @catheadowl/ukp` — the npm shim needs bun on PATH, both land in
    per-user PATH dirs, which is fine here: the door is started by a
    logged-on task, not a bare ssh shell).
-2. `ukp register <folder>` for every endpoint to expose.
+2. `ukp init service` in each folder, then run `ukp register` from inside
+   it (register takes no folder argument) for every endpoint to expose.
 3. Certificate — generate ONCE (Git for Windows' openssl works; avoids
    any runtime openssl dependency of `--tls`):
    `openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout
-   %USERPROFILE%\.ukp	ls\key.pem -out %USERPROFILE%\.ukp	ls\cert.pem
+   %USERPROFILE%\.ukp\tls\key.pem -out %USERPROFILE%\.ukp\tls\cert.pem
    -subj "/CN=ukp" -addext "subjectAltName=IP:<lan-ip>,DNS:localhost"`
-4. `%USERPROFILE%\.ukp\start-door.cmd` (CRLF!) — set PATH, set
-   UKP_SERVE_TOKEN, run `ukp serve --host 0.0.0.0 --port 8570
-   --tls-cert ... --tls-key ...`. Write it with a real editor (writing
-   cmd files over ssh echo mangles `%` escaping — copy the file instead).
-5. `schtasks /Create /TN ukp-door /TR
-   %USERPROFILE%\.ukp\start-door.cmd /SC ONLOGON /F` + a firewall rule
-   for the port; `schtasks /Run /TN ukp-door` to start now.
-6. Client: `ukp register --url https://<host>:8570 --token <token>` —
+4. `%USERPROFILE%\.ukp\start-door.cmd` (CRLF!) — set UKP_SERVE_TOKEN,
+   run `ukp serve --host 0.0.0.0 --port 8570 --tls-cert ... --tls-key ...`
+   with the door.log redirect. No PATH export: the launcher finds bun
+   itself, and the logged-on task carries the per-user PATH. Write it
+   with a real editor (writing cmd files over ssh echo mangles `%`
+   escaping — copy the file instead).
+5. `%USERPROFILE%\.ukp\start-door-hidden.vbs` (CRLF, real editor) — the
+   hidden launcher the task actually runs: it starts the console hidden
+   at process creation (nothing ever flashes), captures everything to
+   door.log, propagates the exit code, and retries a crashed door
+   3 times, 30s apart. `ukp serve --print-task` prints it verbatim.
+6. `schtasks /Create /TN ukp-door /TR "wscript.exe
+   \"%USERPROFILE%\.ukp\start-door-hidden.vbs\"" /SC ONLOGON /F` (from an
+   elevated shell — creating an ONLOGON task from a plain one fails with
+   Access denied) + a firewall rule for the port; `schtasks /Run /TN
+   ukp-door` to start now.
+7. Client: `ukp register --url https://<host>:8570 --token <token>` —
    TOFU pins the certificate; re-registering refreshes the pin.
 
 Pitfalls the verification run caught:
 - **A silent bind failure**: if something already listens on the port
-  (a leftover manual door, say), the new door exits EADDRINUSE inside a
-  hidden window and NOTHING tells you — check `netstat -ano | findstr
-  :8570` and the PID's command line; consider adding `>>
-  %USERPROFILE%\.ukp\door.log 2>&1` to the cmd for a paper trail.
-- ONLOGON starts at LOGON, not boot; WinSW/NSSM wrapping makes it a real
-  service (boot start + restart-on-crash) if the host reboots unattended.
+  (a leftover manual door, say), the new door exits EADDRINUSE invisibly
+  — door.log carries the line (the hidden launcher captures everything);
+  check `netstat -ano | findstr :8570` and the PID's command line.
+- ONLOGON starts at LOGON, not boot, and the launcher's crash retry is
+  bounded (3×30s): after an unattended reboot nobody logs into, or after
+  exhausted retries, the door is down until the next logon or a manual
+  `schtasks /Run`. Unattended-boot always-on would need WinSW/NSSM-class
+  wrapping — or prefer ssh:// there. (Task Scheduler's own
+  restart-on-failure setting does not fire on exit codes — do not rely
+  on it.)
+- To restart the door by hand (new token, ukp upgrade, new cert):
+  `taskkill /PID <door-pid> /T /F`, then `schtasks /Run /TN ukp-door` —
+  `schtasks /End` does not reliably kill the process tree.
 - `rg` on the host is the host's business — no ripgrep installed means
   the remote `rg` capability reports unavailable (everything else works).
 
