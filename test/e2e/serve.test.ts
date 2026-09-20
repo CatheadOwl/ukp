@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 // the same sha256 prefix from the served file's content.
 const shaPrefix = (content: string): string =>
   createHash("sha256").update(content).digest("hex").slice(0, 6);
-import { registerAt } from "../src/registry.ts";
+import { registerAt } from "../../src/registry.ts";
 import {
   DISCOVERY_PATH,
   buildDiscoveryDocument,
@@ -24,12 +24,12 @@ import {
   type DiscoveryDocument,
   type DoorDocument,
   type StartedServe,
-} from "../src/server.ts";
-import { loadManifest } from "../src/config/manifest.ts";
-import { parseServeArgs, renderServeBanner, executeServeCommand } from "../src/commands/serve.ts";
-import { parseListenFds, createSocketBridge } from "../src/server.ts";
+} from "../../src/server.ts";
+import { loadManifest } from "../../src/config/manifest.ts";
+import { parseServeArgs, renderServeBanner, executeServeCommand } from "../../src/commands/serve.ts";
+import { parseListenFds, createSocketBridge } from "../../src/server.ts";
 import { createServer as netCreateServer } from "node:net";
-import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
+import { createQmdFixtureCopy } from "../helpers/qmd-fixture.ts";
 
 // Private fixture copy (see helper doc: invocation state is written into the
 // served folder and bun runs test files in parallel).
@@ -382,7 +382,7 @@ describe("serve auth", () => {
 
 describe("serve auth admission (RQ-18, deny by default)", () => {
   test("tokenless startup requires an explicit loopback-only opt-in", async () => {
-    const { serveAuthDecision, executeServeCommand } = await import("../src/commands/serve.ts");
+    const { serveAuthDecision, executeServeCommand } = await import("../../src/commands/serve.ts");
     // Token present: authorized, auth required.
     expect(serveAuthDecision("127.0.0.1", ["t1"], false)).toEqual({ ok: true, authRequired: true });
     // Loopback, no token, no flag: refused with the opt-in hint.
@@ -474,7 +474,7 @@ const opensslAvailable =
 
 describe("serve TLS (W5' / D-079)", () => {
   test.skipIf(!opensslAvailable)("--tls generates a self-signed identity, persists it, and reuses it on restart", async () => {
-    const { spkiPinOf } = await import("../src/capabilities/tls-identity.ts");
+    const { spkiPinOf } = await import("../../src/capabilities/tls-identity.ts");
     const first = start({ tls: { mode: "self-signed" } });
     expect(first.info.url.startsWith("https://")).toBe(true);
     expect(first.info.tls?.source).toBe("generated");
@@ -507,7 +507,7 @@ describe("serve TLS (W5' / D-079)", () => {
   });
 
   test("--tls and --tls-cert/--tls-key flag family validation (usage errors, no listener)", async () => {
-    const { executeServeCommand } = await import("../src/commands/serve.ts");
+    const { executeServeCommand } = await import("../../src/commands/serve.ts");
     const context = { currentDirectory: root, registryPath, qmdCommand, tokens: ["t"] };
     const clash = executeServeCommand(["--endpoint", "serve-fixture", "--tls", "--tls-cert", "x.pem"], context);
     expect(clash.exitCode).toBe(2);
@@ -540,7 +540,7 @@ describe("serve TLS (W5' / D-079)", () => {
   });
 
   test("--tls-san without --tls is a usage error (explicit certificates carry their own SAN)", async () => {
-    const { executeServeCommand } = await import("../src/commands/serve.ts");
+    const { executeServeCommand } = await import("../../src/commands/serve.ts");
     const context = { currentDirectory: root, registryPath, qmdCommand, tokens: ["t"] };
     const bare = executeServeCommand(["--endpoint", "serve-fixture", "--tls-san", "203.0.113.7"], context);
     expect(bare.exitCode).toBe(2);
@@ -554,7 +554,7 @@ describe("serve TLS (W5' / D-079)", () => {
   });
 
   test.skipIf(!opensslAvailable)("--tls-san merges into the self-signed SAN; growing it re-signs the persisted certificate over the same key", async () => {
-    const { certSanEntriesOf } = await import("../src/capabilities/tls-identity.ts");
+    const { certSanEntriesOf } = await import("../../src/capabilities/tls-identity.ts");
     // Own registry: registering into the shared one would leak into the door
     // roster snapshot tests.
     const tlsSanRegistry = join(root, "tls-san-registry.toml");
@@ -612,7 +612,7 @@ describe("serve TLS (W5' / D-079)", () => {
   });
 
   test.skipIf(!opensslAvailable)("--tls-san with an IPv6 entry is idempotent across openssl's re-rendering (review P2)", async () => {
-    const { certSanEntriesOf } = await import("../src/capabilities/tls-identity.ts");
+    const { certSanEntriesOf } = await import("../../src/capabilities/tls-identity.ts");
     // openssl re-renders a compressed IPv6 literal expanded on some
     // platforms — the coverage check compares canonical (expanded) keys, so
     // the same flag must NOT re-sign on every restart.

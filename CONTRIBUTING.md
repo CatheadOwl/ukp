@@ -13,6 +13,10 @@ bun run typecheck
 npm pack --dry-run --json
 ```
 
+The suite splits by scope: unit regression lives at `test/`, closed-chain
+end-to-end scenarios (identity registration, transport, search, handoff,
+read-back) live at [`test/e2e/`](./test/e2e/README.md).
+
 Release maintainers run a release preflight before publishing: git hygiene,
 the full test suite, typecheck, package metadata and tarball allowlist
 review, private-material leak scans, and a publish dry-run. After publishing,

@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { executeHumanSearch, parseSearchArgs } from "../src/commands/search.ts";
-import { executeReadCommand as executeReadCommandMaybeAsync, type ReadCommandResult } from "../src/commands/read.ts";
-import { registerAt } from "../src/registry.ts";
-import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
+import { executeHumanSearch, parseSearchArgs } from "../../src/commands/search.ts";
+import { executeReadCommand as executeReadCommandMaybeAsync, type ReadCommandResult } from "../../src/commands/read.ts";
+import { registerAt } from "../../src/registry.ts";
+import { createQmdFixtureCopy } from "../helpers/qmd-fixture.ts";
 
 // Reference-integrity invariant harness (ADR 0025 acceptance; REF-1..4 in
 // docs/concepts/reference-integrity.md; the engineering lesson's six-layout
