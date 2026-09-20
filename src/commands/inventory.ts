@@ -2,7 +2,7 @@ import { ENDPOINT_NAME, loadManifest } from "../config/manifest.ts";
 import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
 import {
-  assertRemoteUrlAllowed,
+  assertRegistrableRemoteUrl,
   isRemoteBinding,
   parseRemoteUrl,
   readRegistry,
@@ -56,7 +56,7 @@ export const REGISTER_SPEC: UkpCommandSpec = {
   usage: "[options]",
   strictArguments: true,
   options: [
-    { flags: "--url <url>", help: "register a remote ukp-serve endpoint (https, ssh://host[:port][/endpoint], or loopback http); a host door url (its document declares scope:\"host\") imports every endpoint behind the door — binding urls gain the endpoint-name path (ssh://ali/notes)" },
+    { flags: "--url <url>", help: "register a remote ukp-serve endpoint (https://host[:port], ssh://host[/endpoint] — ssh takes no port, the woken door picks its own — or loopback http); a host door url (its document declares scope:\"host\") imports every endpoint behind the door — binding urls gain the endpoint-name path (ssh://ali/notes)" },
     { flags: "--endpoint <name>", help: "assert the remote-declared name of the endpoint being registered (expected-name assertion; with a host door this imports only that endpoint)" },
     { flags: "--name <handle>", help: "remote only: register under this local handle — the registry key and ukp:// authority — instead of the declared name; use it when the declared name is already taken" },
     { flags: "--select <names>", help: "with a host door url: import only the named endpoints (comma-separated); a name not on the door is a usage error" },
@@ -337,7 +337,9 @@ async function executeRegisterRemote(
 
   let pool: RemoteTransportPool | undefined;
   try {
-    assertRemoteUrlAllowed(url);
+    // D-089: registration intake rejects an explicit ssh:// port (dead
+    // grammar since the W9 wake); parse-time surfaces stay permissive.
+    assertRegistrableRemoteUrl(url);
     const parts = parseRemoteUrl(url);
     if (parts === undefined) {
       throw new Error(`remote endpoint url is not admissible: ${url}`);

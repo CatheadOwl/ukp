@@ -389,8 +389,21 @@ describe("CLI bootstrap", () => {
     // consumer handle (not an alias layer) is the --name registration slot.
     expect(guide).toContain("expected-name assertion on the declared name");
     expect(guide).toContain("--name <handle> when that name is already taken");
-    expect(guide).toContain("An ssh:// url port selects nothing");
+    // D-089: the guide states the rejection (dead grammar since the W9 wake),
+    // not a silent no-op port.
+    expect(guide).toContain("ssh:// urls take no port");
     expect(guide).toContain("--max-idle <seconds>");
+  });
+
+  test("register rejects an explicit ssh:// port (dead grammar since the W9 wake, D-089)", async () => {
+    const errors: string[] = [];
+    // Fails at intake, before any transport is opened.
+    const code = await runCli(["register", "--url", "ssh://ali:8571"], undefined, (message) => errors.push(message));
+    expect(code).toBe(1);
+    const text = errors.join("\n");
+    expect(text).toContain("ssh:// urls take no port");
+    expect(text).toContain("register 'ssh://ali' instead");
+    expect(text).toContain("ssh config Host alias");
   });
 
   test("guide shows help when -h/--help follows a topic or subtopic", () => {
@@ -494,6 +507,9 @@ describe("CLI bootstrap", () => {
     expect(readHelp).toContain("docid[:line] / qmd://<reference> — provider-owned references");
     expect(readHelp).toContain("count omitted: to end of file");
     expect(readHelp).toContain("default is human output");
+    // D-088: --pin routes to --show-pin for emission, not to a guide topic.
+    expect(readHelp).toContain("emit the current pin with --show-pin");
+    expect(readHelp).toContain("emit the ukp-pin for the read resource on stderr");
     // propose: endpoint-name discovery pointer + slug constraint scoped to
     // explicit ids and the default alike; lifecycle visibility (owner
     // adjudication, no accept/reject command yet).
@@ -752,6 +768,10 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("may hold both roles at once (dual-role)");
     expect(guide).toContain("does not fall back to the Registry");
     expect(guide).toContain("ukp register does not edit .ukp/client.toml");
+    // D-088: pin emission is a read flag, never a manual hashing recipe —
+    // the guide must route to it instead of teaching sed|sha256sum.
+    expect(guide).toContain("ukp read --show-pin");
+    expect(guide).not.toContain("sha256sum");
   });
 
   test("guide propose is a short CLI-accessible propose-path guide", () => {

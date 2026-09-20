@@ -179,6 +179,9 @@ describe("rename recovery", () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("resource-missing 'docs/note.md'");
       expect(result.stderr).toContain("docs/moved.md (recovery candidate, mismatch)");
+      // D-088: the mismatch listing points at the emission flag instead of
+      // leaving the reader to hand-compute the current pin.
+      expect(result.stderr).toContain("check the current content pin with 'ukp read --show-pin'");
       expect(result.recovery?.outcome).toBe("exhausted");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -404,6 +407,29 @@ describe("rename recovery", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).not.toContain("pin stale");
       expect(result.recovery?.verification).toBe("match");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, GIT_TEST_TIMEOUT_MS);
+
+  // D-088 review follow-up: emission must survive the recovery request
+  // spread — a refactor that rebuilds the recovery request without emitPin
+  // would silently regress this.
+  test("recovered read emits the pin of the recovered file (--show-pin through recovery)", () => {
+    const { root, registryPath, service } = setup();
+    try {
+      initGitRepo(service);
+      git(service, "mv", "docs/note.md", "docs/moved.md");
+      commit(service, "relocate note");
+
+      const result = executeReadCommand(
+        ["ukp://notes/docs/note.md", "--show-pin"],
+        { currentDirectory: root, registryPath },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("recovered: 'docs/note.md' moved to 'docs/moved.md'");
+      // The emitted pin is the RECOVERED file's whole-content pin.
+      expect(result.stderr).toContain(`<!-- ukp-pin: sha256-${pinHashOf("one\ntwo\nthree\nfour\n")} -->`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

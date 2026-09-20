@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
-import { readRegistry, registerAt, registerRemoteBinding, serializeRegistry, unregisterAt, parseRegistry, RegistryError } from "../src/registry.ts";
+import { readRegistry, registerAt, registerRemoteBinding, serializeRegistry, unregisterAt, parseRegistry, parseRemoteUrl, assertRegistrableRemoteUrl, assertRemoteUrlAllowed, RegistryError } from "../src/registry.ts";
 
 function tempRegistry() {
   const root = mkdtempSync(join(tmpdir(), "ukp-registry-"));
@@ -127,5 +127,47 @@ instance_uid = "u-1"
       name: "notes", kind: "remote", url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u-2",
     });
     expect(refreshed).toEqual([{ ...legacy, declared_name: "notes", instance_uid: "u-2" }]);
+  });
+});
+
+describe("registration-only ssh port admission (D-089)", () => {
+  test("parse-time url surfaces stay permissive for legacy ported ssh urls", () => {
+    // Call-time parsing must keep accepting W4–W8 resident-door-era bindings
+    // (e.g. the owner's ssh://ali:8571): only intake rejects the port.
+    expect(parseRemoteUrl("ssh://ali:8571")?.port).toBe(8571);
+    expect(parseRemoteUrl("ssh://ali:8571/notes")?.endpointName).toBe("notes");
+    expect(() => assertRemoteUrlAllowed("ssh://ali:8571")).not.toThrow();
+  });
+
+  test("registration rejects an explicit ssh port — any value, with or without a path", () => {
+    for (const url of ["ssh://ali:8571", "ssh://ali:8570", "ssh://ali:22", "ssh://user@ali:2222/notes"]) {
+      expect(() => assertRegistrableRemoteUrl(url)).toThrow("ssh:// urls take no port");
+    }
+    // Ports stay meaningful for the other schemes, and a portless ssh url
+    // (with or without the door-endpoint path) is the admissible form.
+    expect(() => assertRegistrableRemoteUrl("https://kb.example.com:8570")).not.toThrow();
+    expect(() => assertRegistrableRemoteUrl("http://127.0.0.1:8080")).not.toThrow();
+    expect(() => assertRegistrableRemoteUrl("ssh://ali")).not.toThrow();
+    expect(() => assertRegistrableRemoteUrl("ssh://ali/notes")).not.toThrow();
+    expect(() => assertRegistrableRemoteUrl("ssh://user@ali")).not.toThrow();
+  });
+
+  test("registerRemoteBinding enforces the rule at the API seam; legacy disk state stays loadable", () => {
+    const { registry } = tempRegistry();
+    // The registry never gains a NEW ported ssh binding, direct API included.
+    expect(() =>
+      registerRemoteBinding([], { name: "ali-notes", kind: "remote", url: "ssh://ali:8571" })
+    ).toThrow("ssh:// urls take no port");
+    // A legacy binding already on disk still loads (validateBindings uses the
+    // permissive parse-time admission).
+    const legacy = [
+      'endpoints = [',
+      '  { name = "ali-notes", kind = "remote", url = "ssh://ali:8571", instance_uid = "6f1c2b3a-1111-4000-8000-000000000000" },',
+      ']',
+    ].join("\n");
+    writeFileSync(registry, legacy, "utf8");
+    const loaded = readRegistry(registry);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].url).toBe("ssh://ali:8571");
   });
 });
