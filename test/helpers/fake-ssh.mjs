@@ -46,6 +46,13 @@ const shellPersona = own("--shell") ?? "posix";
 // Dump every raw argv BEFORE the -L validation below: the Tier-1 mux-master
 // invocation carries no -L and exits there — tests still want its shape.
 if (dumpFile !== undefined) appendFileSync(dumpFile, `${JSON.stringify(argv)}\n`, "utf8");
+// Host-shell family pre-probe (the client sends `echo %OS%` with no -L, no
+// pty): cmd hosts expand to Windows_NT, POSIX shells echo the literal token.
+const probeIndex = argv.indexOf("echo %OS%");
+if (probeIndex >= 0) {
+  process.stdout.write(shellPersona === "cmd" ? "Windows_NT\r\n" : "%OS%\n");
+  process.exit(0);
+}
 
 const forwardIndex = argv.indexOf("-L");
 const forward = forwardIndex >= 0 ? argv[forwardIndex + 1] : undefined;

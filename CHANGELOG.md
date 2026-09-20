@@ -2,6 +2,29 @@
 
 All notable public changes to UKP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- The ssh:// wake now probes the host's shell family before its first
+  attempt (`echo %OS%`: cmd.exe expands it to `Windows_NT`, a POSIX shell
+  echoes the literal token — language-independent) and sends the matching
+  wake form directly: Windows hosts no longer pay a dead 20-second
+  POSIX attempt on every invocation. The probe also picks the tty stance:
+  `-tt` (which exists for POSIX SIGHUP reaping) now rides the POSIX form
+  only — Windows has no SIGHUP (max-idle bounds the door), and a
+  Win32-OpenSSH 9.5 build was caught losing quoted remote commands under
+  a pty (an interactive cmd swallowed the wake and waited on stdin
+  forever; the no-pty path executes it correctly). Failure classification
+  is language-independent: cmd locales vary the message body but always
+  quote the missing ASCII token ('sh' / 'ukp'), and exit codes are
+  unusable (pty sessions report 0 even for failed commands). Verified
+  end to end on the Windows dogfood host: register through the woken
+  door in ~9s, nav/read/rg and ukp:// URI round-trips, a name-collision
+  skip with the --name remedy, sshd-session doors reaping within the 60s
+  max-idle while the resident https door stayed untouched, and the
+  discovery document declaring rg on every endpoint.
+
 ## [0.2.1] - 2026-09-20
 
 ### Fixed
@@ -14,6 +37,13 @@ All notable public changes to UKP will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+
+- Door drift notes no longer send taken names down a dead end: `ukp list`
+  now separates door endpoints that merely need importing (bulk-import
+  hint, unchanged) from endpoints whose name is already held by another
+  binding — those get the single-endpoint remedy
+  (`ukp register --url <door>/<name> --name <handle>`), because the bulk
+  import would skip them again.
 
 - The discovery document (and the host-door roster) under-declared `rg`:
   `/v1/rg` serves every endpoint and a missing ripgrep binary degrades to
