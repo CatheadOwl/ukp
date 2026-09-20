@@ -393,6 +393,10 @@ describe("CLI bootstrap", () => {
     // D-089: the guide states the rejection (dead grammar since the W9 wake),
     // not a silent no-op port.
     expect(guide).toContain("ssh:// urls take no port");
+    // Platform burden guidance (owner discussion 2026-09-20): ssh is the
+    // zero-resident path everywhere; Windows https wants a service wrapper.
+    expect(guide).toContain("enabling the built-in OpenSSH Server feature once is the low-burden path");
+    expect(guide).toContain("Windows has no systemd equivalent");
     expect(guide).toContain("--max-idle <seconds>");
   });
 
