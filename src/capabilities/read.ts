@@ -5,7 +5,7 @@ import { loadManifest } from "../config/manifest.ts";
 import { isRemoteBinding, localPathOf, readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { buildQmdInvocation, defaultQmdCommand, isBareDocidReference, providerTimeoutMs, stripDocidHash, stripQmdHeader, toQmdGetArgument } from "./qmd.ts";
-import { isValidPin, pinFromSourceDocument, recoverRenamedResource, type RecoveryCandidate } from "./rename-recovery.ts";
+import { isValidPin, pinFromSourceDocument, pinHashOf, recoverRenamedResource, type RecoveryCandidate } from "./rename-recovery.ts";
 import { isInsideRealRoot, splitEndpointRelativeSegments } from "../path-safety.ts";
 
 export interface ReadRequest {
@@ -30,6 +30,13 @@ export interface ReadRequest {
    * read-rename-recovery): the ukp-pin verification key for the miss-path
    * recovery descent. Absent = stale-unknown verification. */
   pin?: string;
+  /** Emission request: compute the ukp-pin for the read resource and return
+   * it as `result.pin`. The pin always covers the WHOLE file (LF-normalized)
+   * regardless of a `lines` window — computed before windowing in
+   * readTargetWithLines. Provider-tier references never carry it: the
+   * ukp-pin is a file-slot concept (same boundary as pin verification), and
+   * the command layer rejects the combination at parse time. */
+  emitPin?: boolean;
   /** The reference exactly as the caller wrote it before tolerant-tier
    * rewriting — used to locate the same-line ukp-pin annotation in the
    * --from source document (Q1 spelling). */
@@ -108,6 +115,10 @@ export interface ReadFailure {
  * purity); echoes, recovery metadata, and warnings are sideband fields. */
 export interface ReadSuccess {
   content: string;
+  /** ukp-pin for the read resource (`sha256-<64 hex>`), present only when
+   * the request asked for emission (`emitPin`). Whole-file content,
+   * LF-normalized — independent of any `lines` window. */
+  pin?: string;
   recovery?: ReadRecoveryMeta;
   /** Recovery-descent warnings (factual lines; adapter prefixes each). */
   recoveryWarnings: string[];
@@ -607,7 +618,13 @@ function attemptRenameRecovery(
 function formatRecoveryCandidates(candidates: readonly RecoveryCandidate[] | undefined): string {
   if (!candidates || candidates.length === 0) return "";
   const lines = candidates.map((candidate) => `  - ${candidate.path} (recovery candidate, ${candidate.verified})`);
-  return `Rename recovery candidates:\n${lines.join("\n")}\n`;
+  // A mismatched candidate is the pin contract doing its job (path recycling
+  // guard) — the reader's next question is "what IS the current pin", so the
+  // emission flag answers it in place (no manual hashing, D-088).
+  const mismatchNote = candidates.some((candidate) => candidate.verified === "mismatch")
+    ? `\n  (a mismatched ukp-pin means the candidate is not the pinned content; check the current content pin with 'ukp read --show-pin')`
+    : "";
+  return `Rename recovery candidates:\n${lines.join("\n")}${mismatchNote}\n`;
 }
 
 function readTargetWithLines(targetPath: string, request: ReadRequest): ReadOutcome {
@@ -629,6 +646,9 @@ function readTargetWithLines(targetPath: string, request: ReadRequest): ReadOutc
     }
     throw error;
   }
+  // Emission hashes the whole file BEFORE any windowing: a pin alongside a
+  // `--lines` read must still verify the whole resource.
+  const pin = request.emitPin === true ? `sha256-${pinHashOf(content)}` : undefined;
   const rangeResult = applyLineRange(content, request.lines);
   if (rangeResult.kind === "start-beyond-eof") {
     // Word by input origin: a URI #L<line> fragment never mentions --lines.
@@ -638,7 +658,10 @@ function readTargetWithLines(targetPath: string, request: ReadRequest): ReadOutc
       `${origin} ${rangeResult.start} is beyond the end of '${request.path}' (${rangeResult.lineCount} lines)`,
     );
   }
-  return { ok: true, result: { content: rangeResult.content, recoveryWarnings: [] } };
+  return {
+    ok: true,
+    result: { content: rangeResult.content, ...(pin !== undefined ? { pin } : {}), recoveryWarnings: [] },
+  };
 }
 
 /** ADR 0021 core entry: runs the read capability and returns the structured
@@ -949,6 +972,9 @@ function renderReadSideband(result: ReadSuccess): string {
     const layerLabel = result.recovery.layer === "search-reanchor" ? "search re-anchor" : "git history";
     parts.push(`ukp read: recovered: '${result.recovery.from}' moved to '${result.recovery.recoveredTo}' (${layerLabel})`);
   }
+  if (result.pin !== undefined) {
+    parts.push(`ukp read: pin: <!-- ukp-pin: ${result.pin} -->`);
+  }
   for (const warning of result.recoveryWarnings) {
     parts.push(`ukp read: warning: ${warning}`);
   }
@@ -984,6 +1010,9 @@ export interface ReadEnvelope {
   ok: boolean;
   endpoint?: string;
   reference: string;
+  /** ukp-pin (`sha256-<64 hex>`) on success, when the request asked for
+   * emission (`--show-pin`). */
+  pin?: string;
   recovered_to?: string;
   error?: {
     class: string;
@@ -1003,6 +1032,7 @@ export function projectReadEnvelope(request: ReadRequest, outcome: ReadOutcome):
       ok: true,
       ...(request.endpoint !== undefined ? { endpoint: request.endpoint } : {}),
       reference: request.path,
+      ...(outcome.result.pin !== undefined ? { pin: outcome.result.pin } : {}),
       ...(outcome.result.recovery?.recoveredTo !== undefined
         ? { recovered_to: outcome.result.recovery.recoveredTo }
         : {}),

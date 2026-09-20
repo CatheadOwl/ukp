@@ -32,8 +32,8 @@ Model:
 5. Pin your own ukp:// references (optional; powers rename recovery)
    A pin is a same-line HTML comment carrying the target's content hash:
    see ukp://endpoint-a/docs/foo.md   <!-- ukp-pin: sha256-<64 lowercase hex> -->
-   Compute one from the file bytes with CRLF line endings normalized to LF:
-   sed 's/\r$//' docs/foo.md | sha256sum   (prefix the digest with sha256-)
+   Emit one with 'ukp read --show-pin <same reference>'; the pin covers the
+   whole file (line endings normalized, so a pin verifies on any platform).
    When 'ukp read' recovers a moved target, the pin is verified against the
    recovered file; a mismatch refuses. Boundary: without git history only
    same-name moves are recoverable (search re-anchor); a true rename in a

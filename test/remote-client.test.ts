@@ -13,6 +13,7 @@ import {
 import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../src/server.ts";
 import { executeListCommand, executeRegisterCommand } from "../src/commands/inventory.ts";
 import { executeSearchCommand } from "../src/commands/search.ts";
+import { createHash } from "node:crypto";
 import { executeReadCommand } from "../src/commands/read.ts";
 import { executeNavCommand } from "../src/commands/nav.ts";
 import { executeRgCommand } from "../src/commands/rg.ts";
@@ -1017,5 +1018,36 @@ describe("ukp_remote W8: propose over the wire", () => {
     } finally {
       stub.stop(true);
     }
+  });
+});
+
+describe("remote --show-pin (D-088)", () => {
+  test("emits the whole-file pin computed client-side over the served content", async () => {
+    const { info } = startRemote();
+    await asResult(executeRegisterCommand(["--url", info.url], { currentDirectory: root, registryPath }));
+    const content = "# CAD notes\n\nCAD fixture note content.\n";
+    const result = await asResult(executeReadCommand(
+      ["--endpoint", "serve-fixture", "documents/cad-notes.md", "--show-pin"],
+      { currentDirectory: root, registryPath },
+    ));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(content);
+    const expected = `sha256-${createHash("sha256").update(content, "utf8").digest("hex")}`;
+    expect(result.stderr).toContain(`ukp read: pin: <!-- ukp-pin: ${expected} -->`);
+  });
+
+  test("refuses --show-pin with a line window before opening any transport", async () => {
+    // A binding to an unreachable origin (TEST-NET-1): the usage refusal must
+    // return instantly with the usage error, proving it precedes transport
+    // work — an ordered-after check would hang on the connect timeout.
+    registerRemoteAt(registryPath, { name: "unreachable-pin", url: "https://192.0.2.1:1" });
+    const startedAt = Date.now();
+    const result = await asResult(executeReadCommand(
+      ["--endpoint", "unreachable-pin", "documents/x.md", "--lines", "1:1", "--show-pin"],
+      { currentDirectory: root, registryPath },
+    ));
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--show-pin needs whole-file content");
   });
 });

@@ -12,6 +12,7 @@ function executeReadCommand(args: readonly string[], context: Parameters<typeof 
   if (result instanceof Promise) throw new Error("local read unexpectedly took the async path");
   return result;
 }
+import { createHash } from "node:crypto";
 import { registerAt } from "../src/registry.ts";
 import { buildQmdInvocation, stripQmdHeader } from "../src/capabilities/qmd.ts";
 
@@ -1491,6 +1492,137 @@ describe("get ukp:// URI encoding and normalization (G3 pin, D-059)", () => {
     } finally {
       if (previous === undefined) delete process.env.UKP_CANDIDATE_SCAN_FILE_BUDGET;
       else process.env.UKP_CANDIDATE_SCAN_FILE_BUDGET = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// D-088 (guide complexity attribution follow-through): the ukp-pin recipe is
+// a read flag, never a manual hashing pipeline. Expected pins are recomputed
+// here with node:crypto against the published contract (sha256 over the
+// LF-normalized whole-file content) — not by calling the implementation's
+// pinHashOf, so a contract drift fails these tests rather than mirroring it.
+function lfSha256(content: string): string {
+  return `sha256-${createHash("sha256").update(content.replace(/\r\n/g, "\n"), "utf8").digest("hex")}`;
+}
+
+const NOTE_CONTENT = "one\ntwo\nthree\nfour\n";
+
+describe("read --show-pin (pin emission, D-088)", () => {
+  test("emits the whole-file ukp-pin on stderr; stdout stays body-only", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-show-pin-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeReadCommand(["--endpoint", "notes", "docs/note.md", "--show-pin"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe(NOTE_CONTENT);
+      expect(result.stderr).toBe(`ukp read: pin: <!-- ukp-pin: ${lfSha256(NOTE_CONTENT)} -->\n`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("pin covers the whole file regardless of a --lines window and CRLF endings", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-show-pin-window-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    writeFileSync(join(service, "docs", "crlf.md"), "one\r\ntwo\r\nthree\r\n", "utf8");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeReadCommand(["--endpoint", "notes", "docs/crlf.md", "--lines", "1:1", "--show-pin"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("one\n");
+      // Whole-file LF-normalized hash, not the displayed window.
+      expect(result.stderr).toBe(`ukp read: pin: <!-- ukp-pin: ${lfSha256("one\ntwo\nthree\n")} -->\n`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("ukp:// URI reads emit the pin", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-show-pin-uri-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeReadCommand(["ukp://notes/docs/note.md", "--show-pin"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain(`<!-- ukp-pin: ${lfSha256(NOTE_CONTENT)} -->`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("--format json carries the pin in the success envelope", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-show-pin-json-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const result = executeReadCommand([
+        "--endpoint", "notes", "docs/note.md", "--show-pin", "--format", "json",
+      ], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(result.stderr.split("\n")[0]);
+      expect(envelope.ok).toBe(true);
+      expect(envelope.pin).toBe(lfSha256(NOTE_CONTENT));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("--show-pin is file-slot-only: provider reference shapes are usage errors", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-show-pin-provider-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const docid = executeReadCommand(["--endpoint", "notes", "abc123", "--show-pin"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(docid.exitCode).toBe(2);
+      expect(docid.stderr).toContain("file-slot-only");
+
+      const qmdRef = executeReadCommand(["--endpoint", "notes", "qmd://coll/x.md", "--show-pin"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(qmdRef.exitCode).toBe(2);
+      expect(qmdRef.stderr).toContain("file-slot-only");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("--show-pin composes with --pin verification", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-show-pin-verify-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      const pin = lfSha256(NOTE_CONTENT);
+      const result = executeReadCommand(["--endpoint", "notes", "docs/note.md", "--pin", pin, "--show-pin"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain(`<!-- ukp-pin: ${pin} -->`);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });

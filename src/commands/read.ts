@@ -11,7 +11,8 @@ import {
   type ReadRequest,
   type LineRange,
 } from "../capabilities/read.ts";
-import { isValidPin } from "../capabilities/rename-recovery.ts";
+import { isValidPin, pinHashOf } from "../capabilities/rename-recovery.ts";
+import { isBareDocidReference, stripDocidHash } from "../capabilities/qmd.ts";
 import {
   fetchDiscoveryDocument,
   openRemoteTransport,
@@ -89,7 +90,14 @@ export const READ_SPEC: UkpCommandSpec = {
       flags: "--from <route>",
       help: "resolve a document-relative reference (../x.md, bare filename) against this source document's endpoint-relative route",
     },
-    { flags: "--pin <sha256-hex>", help: "verify rename recovery against this ukp-pin content hash (sha256-<64 hex>; how to compute and embed one: 'ukp guide client')" },
+    {
+      flags: "--pin <sha256-hex>",
+      help: "verify rename recovery against this ukp-pin content hash (sha256-<64 hex>; emit the current pin with --show-pin)",
+    },
+    {
+      flags: "--show-pin",
+      help: "emit the ukp-pin for the read resource on stderr (<!-- ukp-pin: sha256-… -->, whole-file LF-normalized sha256; embed next to a ukp:// reference to power rename recovery). Local reads allow a line window — the pin still covers the whole file; remote reads need the whole file, so drop the window there",
+    },
     { flags: "--format <mode>", help: "output mode: 'json' emits a structured failure envelope (body still goes to stdout); default is human output" },
   ],
   helpSuffix: [
@@ -111,6 +119,7 @@ interface ReadCommandOptions extends Record<string, unknown> {
   lines?: string;
   from?: string;
   pin?: string;
+  showPin?: boolean;
   format?: string;
 }
 
@@ -266,10 +275,21 @@ function parseReadWithFormat(args: readonly string[]): { request: ReadRequest; f
   if (parsed.options.pin !== undefined && !isValidPin(parsed.options.pin)) {
     // Q7-narrowed SRI form only: no multi-algorithm negotiation, no upper-case
     // hex tolerance — the pin is machine-written, not hand-typed.
-    throw new KitUsageError("--pin must use sha256-<64 lowercase hex> (the ukp-pin form embedded next to ukp:// references — 'ukp guide client' shows how to compute one)");
+    throw new KitUsageError("--pin must use sha256-<64 lowercase hex> (the ukp-pin form embedded next to ukp:// references; emit one with --show-pin)");
   }
   if (parsed.options.format !== undefined && parsed.options.format !== "json") {
     throw new KitUsageError("--format only supports 'json'");
+  }
+  // The ukp-pin is a file-slot concept (same boundary as pin verification in
+  // the recovery descent): provider-tier references never expose whole-file
+  // content, so emission is refused by input shape at parse time.
+  if (parsed.options.showPin === true && path !== undefined) {
+    const barePath = stripDocidHash(path);
+    if (path.startsWith("qmd://") || isBareDocidReference(barePath)) {
+      throw new KitUsageError(
+        "--show-pin is file-slot-only: the ukp-pin covers whole-file content, and provider references (docid, qmd://) do not expose it",
+      );
+    }
   }
   const pin = parsed.options.pin;
   if (parsed.options.g) throw new KitUsageError("read requires --endpoint <name> and does not support -g");
@@ -280,15 +300,19 @@ function parseReadWithFormat(args: readonly string[]): { request: ReadRequest; f
       `unexpected argument '${unexpected}'; read accepts exactly one reference. Use '--endpoint <name>' to select an endpoint.`,
     );
   }
-  const withPin = <T extends object>(request: T): T & { pin?: string } =>
-    parsed.options.pin === undefined ? request : { ...request, pin: parsed.options.pin };
+  const withPinOptions = <T extends object>(request: T): T & { pin?: string; emitPin?: boolean } => {
+    let out: T & { pin?: string; emitPin?: boolean } = request;
+    if (parsed.options.pin !== undefined) out = { ...out, pin: parsed.options.pin };
+    if (parsed.options.showPin === true) out = { ...out, emitPin: true };
+    return out;
+  };
   const format = parsed.options.format === "json" ? ("json" as const) : undefined;
 
   if (path !== undefined && UKP_URI_PREFIX_RE.test(path)) {
     if (parsed.options.from !== undefined) {
       throw new KitUsageError("a ukp:// URI carries its own endpoint; --from is for document-relative references");
     }
-    return { request: withPin(parseUkpUri(path, { endpoint: parsed.options.endpoint, lines: parsed.options.lines })), ...(format ? { format } : {}) };
+    return { request: withPinOptions(parseUkpUri(path, { endpoint: parsed.options.endpoint, lines: parsed.options.lines })), ...(format ? { format } : {}) };
   }
   // Tolerant tier (ADR-URI-001): an absolute filesystem path carries its own
   // endpoint (Registry-matched), so --endpoint is neither required nor
@@ -303,7 +327,7 @@ function parseReadWithFormat(args: readonly string[]): { request: ReadRequest; f
       );
     }
     return {
-      request: withPin({
+      request: withPinOptions({
         path,
         ...(parsed.options.lines === undefined ? {} : { lines: parseLineRange(parsed.options.lines) }),
       }),
@@ -321,7 +345,7 @@ function parseReadWithFormat(args: readonly string[]): { request: ReadRequest; f
   }
 
   return {
-    request: withPin({
+    request: withPinOptions({
       endpoint: parsed.options.endpoint,
       path,
       ...(parsed.options.from === undefined ? {} : { fromRef: parsed.options.from }),
@@ -450,6 +474,17 @@ async function executeRemoteRead(
   binding: RegistryBinding,
   registryPath?: string,
 ): Promise<ReadCommandResult> {
+  // Remote emission needs whole-file content, and a line window would arrive
+  // windowed from the server — refuse before opening any transport.
+  if (request.emitPin === true && request.lines !== undefined) {
+    return {
+      exitCode: 2,
+      stdout: "",
+      stderr: renderReadUsageError(
+        "--show-pin needs whole-file content; drop the line window (--lines / #L) — the pin always covers the whole file",
+      ),
+    };
+  }
   const token = resolveRemoteToken(binding);
   const warnings: string[] = [];
   let transport: RemoteTransportHandle | undefined;
@@ -516,9 +551,13 @@ async function executeRemoteRead(
     transport.close();
   }
   if (result.ok) {
+    // No line window can be present here (rejected above), so the server
+    // returned the whole file — the client-side hash is the same contract as
+    // the local capability's pre-window computation.
+    const pin = request.emitPin === true ? `sha256-${pinHashOf(result.content)}` : undefined;
     return renderReadOutcome(
       request,
-      { ok: true, result: { content: result.content, recoveryWarnings: [] } },
+      { ok: true, result: { content: result.content, ...(pin !== undefined ? { pin } : {}), recoveryWarnings: [] } },
       format,
       warnings,
     );

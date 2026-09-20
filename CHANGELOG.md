@@ -6,6 +6,16 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp read --show-pin`: the ukp-pin is emitted by the product, never
+  hand-computed. A successful read appends a ready-to-paste
+  `<!-- ukp-pin: sha256-… -->` line to stderr (stdout stays body-only);
+  the pin is the whole-file LF-normalized sha256, so it composes with a
+  `--lines` window and verifies on any platform. `--format json` success
+  envelopes gain an optional `pin` field; mismatched recovery candidates
+  point at the flag; `ukp guide client` no longer teaches a
+  sed/sha256sum recipe. Provider references (docid, `qmd://`) are
+  rejected — the pin is file-slot-only; remote reads require the whole
+  file (a line window is refused before any transport is opened).
 - `ukp register --url ... --name <handle>`: the registry is your namespace —
   register a remote endpoint under a local handle when the declared name is
   already taken. The declared name is kept as provenance (a `declares:` line
@@ -61,6 +71,15 @@ All notable public changes to UKP will be documented in this file.
 
 ### Changed
 
+- `ukp register --url ssh://host:port` is now rejected at intake (exit 1
+  with the portless remedy): since the on-demand wake the ssh url port
+  selects nothing — the woken door picks its own loopback port — so the
+  dead grammar slot is an error instead of a silent no-op (non-standard
+  sshd ports belong in an ssh config Host alias). Explicit default ports
+  (`:8570`, `:22`) are rejected alike; https and loopback http ports are
+  unaffected. Existing bindings from the resident-door era (e.g.
+  `ssh://host:8571`) keep loading and calling — migrating one is an
+  explicit unregister + register without the port.
 - `ukp init service` now creates the provider-free baseline Manifest
   (`[capabilities]`) instead of predeclaring QMD search. The first Service
   smoke is `diagnose -> register -> nav/read/rg`; `ukp guide service qmd`

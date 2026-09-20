@@ -51,7 +51,7 @@ Name and identity:
 - Self-signed HTTPS certificates are pinned on first registration; compare the pinned fingerprint with the serve banner on untrusted networks.
 - --tls names the host's interface IPs only. A NAT/EIP host's public IP needs --tls-san <public-ip>; without it registration fails on certificate name mismatch. Adding it later re-signs the persisted cert over the same key, so existing pins survive.
 - Non-loopback plain http is refused. Use https, ssh://, or loopback http for local testing.
-- An ssh:// url port selects nothing: the woken door listens on a client-chosen loopback port.
+- ssh:// urls take no port: registration rejects one (the woken door listens on a client-chosen loopback port; use an ssh config Host alias for a non-standard sshd port).
 
 Operational note:
 - ssh:// hosts: nothing to manage — ukp wakes and reaps doors itself. To lock down what SSH may run, restrict the login shell (git-shell style); a forced authorized_keys command= does not compose with wake (the client chooses the door port per invocation).

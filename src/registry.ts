@@ -205,6 +205,37 @@ export class RegistryError extends Error {
   }
 }
 
+/** Registration-only admission (D-089): since W9's on-demand wake an explicit
+ * port in an ssh:// url selects nothing — the woken door listens on a
+ * client-chosen loopback port — so intake rejects the dead grammar slot
+ * instead of documenting it (guide complexity attribution, D-087).
+ * Parse-time surfaces (parseRemoteUrl / assertRemoteUrlAllowed) stay
+ * permissive on purpose: bindings written by the resident-door era (W4–W8,
+ * e.g. `ssh://host:8571`) keep loading and calling; migrating one is an
+ * explicit unregister + register without the port (idempotency keys on the
+ * url, so an in-place refresh is not offered). */
+export function assertRegistrableRemoteUrl(raw: string): void {
+  assertRemoteUrlAllowed(raw);
+  // assertRemoteUrlAllowed returning without throwing means parseRemoteUrl is
+  // defined for this url — and new URL(raw) cannot throw either. No defensive
+  // try/catch: a rejection helper fails closed by construction.
+  const parts = parseRemoteUrl(raw)!;
+  const parsed = new URL(raw);
+  if (parts.scheme === "ssh" && parsed.port !== "") {
+    // The remedy is deliberately built portless from parts — `origin` would
+    // carry the rejected port right back into the suggestion. URL.hostname
+    // drops IPv6 brackets, so they are re-added for that shape.
+    const host = parts.host.includes(":") ? `[${parts.host}]` : parts.host;
+    const portless = `ssh://${parts.user !== undefined ? `${parts.user}@` : ""}${host}`
+      + `${parts.endpointName !== undefined ? `/${parts.endpointName}` : ""}`;
+    throw new RegistryError(
+      `ssh:// urls take no port: the woken door listens on a client-chosen loopback port and the url port selects nothing`
+        + ` — register '${portless}' instead`
+        + ` (for a non-standard sshd port, use an ssh config Host alias)`,
+    );
+  }
+}
+
 export class RegistryBusyError extends RegistryError {
   constructor(path: string) {
     super(
@@ -350,6 +381,10 @@ export function registerRemoteBinding(
     ...(binding.tls_cert !== undefined ? { tls_cert: binding.tls_cert } : {}),
     ...(binding.tls_pin !== undefined ? { tls_pin: binding.tls_pin } : {}),
   };
+  // API-seam enforcement of the registration-only ssh port rule (D-089): the
+  // registry never gains a NEW ported ssh binding, while legacy ones keep
+  // loading (validateBindings uses the permissive parse-time check).
+  assertRegistrableRemoteUrl(canonical.url!);
   const sameUrl = endpoints.find((endpoint) => endpoint.kind === "remote" && endpoint.url === canonical.url);
   if (sameUrl) {
     // Legacy bindings (pre-ADR-REM-007) carry no declared_name; their handle
