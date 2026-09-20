@@ -31,10 +31,35 @@ handoff actually works for a stranger who copies it verbatim.
 test/evals/
 ├── guard.test.ts            # enforces rule 1 mechanically
 ├── harness/scenario.ts      # spawn harness: isolated home + qmd PATH shim + git helpers
-└── scenarios/
-    ├── local-handoff.test.ts    # search → sidecar docid / ukp:// uri / read: hint → read back
-    └── recovery-chain.test.ts   # stale ukp:// → recovery echo → --show-pin verification
+├── scenarios/               # deterministic leg — CI-runnable
+│   ├── local-handoff.test.ts    # search → sidecar docid / ukp:// uri / read: hint → read back
+│   ├── recovery-chain.test.ts   # stale ukp:// → recovery echo → --show-pin verification
+│   ├── remote-handoff.test.ts   # register --url → remote search → hint replay over the wire
+│   └── write-loop.test.ts       # propose three states → ukp:// remote read back
+└── agent-scenarios/         # subagent leg — task artifacts, see below
 ```
+
+## Subagent leg (task artifacts)
+
+`agent-scenarios/` holds the other consumer: not a script, but a real agent.
+Each file is a self-contained task artifact — agent shape, verbatim prompt,
+pass criteria, fail signals, regression trigger, experiment log — that any
+agent runtime can be dispatched against. The dispatch is done by whoever
+runs it (one subagent per task, prompt verbatim); nothing here calls a model
+or holds credentials, so the artifacts are runner-neutral.
+
+Two verifier forms, chosen by the construct:
+
+- an end state exists (the right content was reached, the right command ran)
+  → deterministic checks over the transcript;
+- the construct is salience or preference (did the agent notice and use the
+  printed handoff?) → the prose criteria are the primary verifier, and the
+  optional follow-up question is diagnostic only, never ground truth.
+
+Verdicts are `pass` / `partial` / `fail`, recorded in the artifact's
+experiment log with mandatory instrument identity (model, runtime, version).
+They are evidence, never CI gates. Persistent `partial` verdicts mean the
+criteria need sharpening.
 
 ## Running
 
