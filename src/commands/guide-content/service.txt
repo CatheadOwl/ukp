@@ -54,7 +54,8 @@ Details:
 3. Optional: declare dependencies
    If this Service depends on other externally consumed knowledge endpoints,
    declare them in the Manifest with repeated --dependency <name> entries;
-   each entry becomes [[dependencies]] with kind = "context" and can be edited later.
+   each entry becomes [[dependencies]] with kind = "context" and can be
+   edited later (authority, implementation, evidence, or a reason).
 
 4. Validate and register
    ukp diagnose
@@ -101,19 +102,14 @@ Details:
    Use ukp update -g only when you explicitly want to update every registered endpoint.
 
 Advanced:
-- Declared dependencies belong in the Service Manifest as [[dependencies]] entries.
-- ukp init service --dependency <name> emits a context dependency; edit the Manifest later for authority, implementation, evidence, or a reason.
 - Dependencies do not change ordinary search/read. Only explicit search --recursive traverses direct authority/context dependencies.
 - Workspace defaults belong to the client path; run 'ukp guide client' from the consuming workspace.
-- QMD-backed search/update is a provider-owned enhancement, not part of the provider-free baseline smoke.
 
 Remember:
 - Endpoint name identifies the Service.
 - Host Registry stores endpoint name -> Service folder path.
 - Provider collection decides what content is indexed; folder-external authoritative knowledge should be modeled as its own endpoint when UKP ownership matters.
-- Register makes the folder addressable; it does not configure indexed search (provider indexing does).
 - Register does not edit .ukp/client.toml or provider configuration.
-- Declarative dependencies live in the Service Manifest as [[dependencies]] entries; they do not change ordinary search/read, while explicit search --recursive traverses direct authority/context dependencies.
 - Future providers should add provider adapters instead of turning provider internals into UKP rules.
 - To register an already-used name at a new location, unregister the old binding first:
   ukp unregister --endpoint <name>
