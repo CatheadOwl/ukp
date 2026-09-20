@@ -2,7 +2,7 @@
 
 All notable public changes to UKP will be documented in this file.
 
-## [Unreleased]
+## [0.2.1] - 2026-09-20
 
 ### Fixed
 
