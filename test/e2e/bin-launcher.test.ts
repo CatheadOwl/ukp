@@ -7,7 +7,7 @@ import { join } from "node:path";
 // links and bunx run it with bun). The launcher must find a bun executable
 // itself — the two entry shapes below cover both interpreter realities, plus
 // the UKP_BUN override.
-const launcher = join(import.meta.dir, "..", "bin", "ukp.js");
+const launcher = join(import.meta.dir, "..", "..", "bin", "ukp.js");
 
 function run(argv: readonly string[], env: NodeJS.ProcessEnv = process.env) {
   const proc = Bun.spawnSync([...argv], { stdout: "pipe", stderr: "pipe", env });

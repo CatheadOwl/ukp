@@ -11,17 +11,17 @@ import {
   registerRemoteAt,
   serializeRegistry,
   unregisterAt,
-} from "../src/registry.ts";
-import { startUkpServer, type StartedServe } from "../src/server.ts";
+} from "../../src/registry.ts";
+import { startUkpServer, type StartedServe } from "../../src/server.ts";
 import {
   executeListCommand,
   executeRegisterCommand,
-} from "../src/commands/inventory.ts";
-import { executeSearchCommand } from "../src/commands/search.ts";
-import { executeReadCommand } from "../src/commands/read.ts";
-import { executeRgCommand } from "../src/commands/rg.ts";
-import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
-import { openRemoteTransport, fetchDiscoveryDocument } from "../src/capabilities/remote-client.ts";
+} from "../../src/commands/inventory.ts";
+import { executeSearchCommand } from "../../src/commands/search.ts";
+import { executeReadCommand } from "../../src/commands/read.ts";
+import { executeRgCommand } from "../../src/commands/rg.ts";
+import { createQmdFixtureCopy } from "../helpers/qmd-fixture.ts";
+import { openRemoteTransport, fetchDiscoveryDocument } from "../../src/capabilities/remote-client.ts";
 
 // ukp_remote W7 client-side tests: host door access (ADR-REM-004). The
 // "remote" is a real door-mode server on loopback http (admissible by the
@@ -498,7 +498,7 @@ describe("ssh transport pooling (W7 / O-5) on the wake path (W9)", () => {
     rmSync(logPath, { force: true });
     const sshCommand = [
       process.execPath,
-      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
       "--log", logPath,
       "--registry", poolingServerRegistry,
     ];
@@ -535,7 +535,7 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     registerAt(wakeRegistry, "notes", createService("wake-notes-svc", "notes"));
     const sshCommand = [
       process.execPath,
-      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
       "--registry", wakeRegistry,
     ];
     const binding = {
@@ -583,7 +583,7 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     // Win32-OpenSSH 9.5 build — the real-machine finding behind this).
     const sshCommand = [
       process.execPath,
-      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
       "--log", logPath,
       "--registry", cmdRegistry,
       "--shell", "cmd",
@@ -620,7 +620,7 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     rmSync(dumpPath, { force: true });
     const sshCommand = [
       process.execPath,
-      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
       "--registry", wakeRegistry,
       "--dump", dumpPath,
     ];
@@ -661,7 +661,7 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     rmSync(dumpPath, { force: true });
     const sshCommand = [
       process.execPath,
-      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
       "--registry", wakeRegistry,
       "--dump", dumpPath,
     ];

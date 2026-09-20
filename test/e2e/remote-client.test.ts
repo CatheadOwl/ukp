@@ -9,17 +9,17 @@ import {
   registerRemoteAt,
   serializeRegistry,
   unregisterAt,
-} from "../src/registry.ts";
-import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../src/server.ts";
-import { executeListCommand, executeRegisterCommand } from "../src/commands/inventory.ts";
-import { executeSearchCommand } from "../src/commands/search.ts";
+} from "../../src/registry.ts";
+import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../../src/server.ts";
+import { executeListCommand, executeRegisterCommand } from "../../src/commands/inventory.ts";
+import { executeSearchCommand } from "../../src/commands/search.ts";
 import { createHash } from "node:crypto";
-import { executeReadCommand } from "../src/commands/read.ts";
-import { executeNavCommand } from "../src/commands/nav.ts";
-import { executeRgCommand } from "../src/commands/rg.ts";
-import { executeProposeCommand } from "../src/commands/propose.ts";
-import { renderProposeJson } from "../src/capabilities/propose.ts";
-import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
+import { executeReadCommand } from "../../src/commands/read.ts";
+import { executeNavCommand } from "../../src/commands/nav.ts";
+import { executeRgCommand } from "../../src/commands/rg.ts";
+import { executeProposeCommand } from "../../src/commands/propose.ts";
+import { renderProposeJson } from "../../src/capabilities/propose.ts";
+import { createQmdFixtureCopy } from "../helpers/qmd-fixture.ts";
 
 // ukp_remote W2 client-side tests. The "remote" is real: startUkpServer (the
 // W1 product surface) serves a fixture endpoint out of the SERVER-side
@@ -207,7 +207,7 @@ describe("W4 transparent transport + stored token (D-078)", () => {
   });
 
   test("resolveRemoteToken: env wins over the stored binding token", async () => {
-    const { resolveRemoteToken } = await import("../src/capabilities/remote-client.ts");
+    const { resolveRemoteToken } = await import("../../src/capabilities/remote-client.ts");
     const binding = { name: "ali-test", kind: "remote" as const, url: "ssh://ali:8570", token: "stored" };
     delete process.env.UKP_ENDPOINT_ALI_TEST_TOKEN;
     expect(resolveRemoteToken(binding)).toBe("stored");
@@ -220,7 +220,7 @@ describe("W4 transparent transport + stored token (D-078)", () => {
   });
 
   test("parseSshUrl: host[:port] with default 8570; rejects junk", async () => {
-    const { parseSshUrl } = await import("../src/registry.ts");
+    const { parseSshUrl } = await import("../../src/registry.ts");
     expect(parseSshUrl("ssh://ali")).toEqual({ host: "ali", port: 8570 });
     expect(parseSshUrl("ssh://ali:9443")).toEqual({ host: "ali", port: 9443 });
     expect(parseSshUrl("http://ali")).toBeUndefined();
@@ -249,7 +249,7 @@ describe("W4 transparent transport + stored token (D-078)", () => {
   });
 
   test("openRemoteTransport returns the url base directly for http bindings", async () => {
-    const { openRemoteTransport } = await import("../src/capabilities/remote-client.ts");
+    const { openRemoteTransport } = await import("../../src/capabilities/remote-client.ts");
     const handle = await openRemoteTransport({ name: "x", kind: "remote", url: "http://127.0.0.1:18575/" });
     expect(handle.base).toBe("http://127.0.0.1:18575");
     expect(() => handle.close()).not.toThrow();
@@ -777,7 +777,7 @@ describe("remote TLS identity (W5' / D-079)", () => {
       "[[endpoints]]", 'name = "bad"', 'path = "C:/abs"', 'tls_pin = "sha256/abc="', "",
     ].join("\n"))).toThrow("must not carry remote fields");
 
-    const { spkiPinOf } = await import("../src/capabilities/tls-identity.ts");
+    const { spkiPinOf } = await import("../../src/capabilities/tls-identity.ts");
     const pem = [
       "-----BEGIN CERTIFICATE-----",
       "MIIBfakeCertificateBodyForRoundTrip==",
@@ -801,7 +801,7 @@ describe("remote TLS identity (W5' / D-079)", () => {
   test.skipIf(!opensslAvailable)(
     "register pins a self-signed identity; renewal keeps going; identity change blocks until re-register",
     async () => {
-      const { spkiPinOf } = await import("../src/capabilities/tls-identity.ts");
+      const { spkiPinOf } = await import("../../src/capabilities/tls-identity.ts");
       const identityA = selfSignPair("a");
       const renewedA = selfSignPair("a-renewed", identityA.keyPath); // same key, new certificate
       const identityB = selfSignPair("b"); // different key = different identity
