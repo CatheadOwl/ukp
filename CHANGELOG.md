@@ -11,6 +11,19 @@ All notable public changes to UKP will be documented in this file.
   leak class the serve-help fix had cleaned). A guard test now sweeps
   every command help for ADR-/RQ- tokens so the class stays dead.
 
+## [Unreleased]
+
+### Fixed
+
+- The discovery document (and the host-door roster) under-declared `rg`:
+  `/v1/rg` serves every endpoint and a missing ripgrep binary degrades to
+  per-endpoint availability data, but the projected capabilities listed only
+  read/nav plus declared entries — remote consumers judging by discovery
+  could not see lexical search. The external-tool base tier (ADR-RG-003) now
+  projects unconditionally (`rg: { provider: "external", derived: true }`);
+  a declared `rg` still overrides it. (Windows host upgrade feedback on
+  0.2.0.)
+
 ## [0.2.0] - 2026-09-20
 
 ### Added

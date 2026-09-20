@@ -19,11 +19,13 @@ const shaPrefix = (content: string): string =>
 import { registerAt } from "../src/registry.ts";
 import {
   DISCOVERY_PATH,
+  buildDiscoveryDocument,
   startUkpServer,
   type DiscoveryDocument,
   type DoorDocument,
   type StartedServe,
 } from "../src/server.ts";
+import { loadManifest } from "../src/config/manifest.ts";
 import { parseServeArgs, renderServeBanner, executeServeCommand } from "../src/commands/serve.ts";
 import { parseListenFds, createSocketBridge } from "../src/server.ts";
 import { createServer as netCreateServer } from "node:net";
@@ -112,9 +114,38 @@ describe("serve discovery document", () => {
     expect(doc.description).toBe("serve test service");
     expect(doc.capabilities.read).toEqual({ provider: "file", derived: true });
     expect(doc.capabilities.nav).toEqual({ provider: "file", derived: true });
+    // External-tool base tier (ADR-RG-003) projects unconditionally: /v1/rg
+    // serves every endpoint and a missing binary degrades on the wire, so the
+    // document must not under-declare it (liku 0.2.0 feedback regression).
+    expect(doc.capabilities.rg).toEqual({ provider: "external", derived: true });
     expect(doc.capabilities.search).toEqual({ provider: "qmd" });
     expect(doc.security.schemes).toEqual([]);
     expect(doc.instance_uid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  test("a declared rg capability overrides the base-tier projection", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-serve-rg-declared-"));
+    const folder = join(root, "declared-rg");
+    mkdirSync(join(folder, ".ukp"), { recursive: true });
+    writeFileSync(
+      join(folder, ".ukp", "service.toml"),
+      'name = "declared-rg"\n\n[capabilities.rg]\n',
+      "utf8",
+    );
+    try {
+      const declared = buildDiscoveryDocument(
+        loadManifest(folder),
+        "6f1c2b3a-1111-4000-8000-000000000000",
+        false,
+      );
+      // The declared entry replaces the base-tier default (same override slot
+      // as a declared nav): the external tier marker survives, the derived
+      // flag does not.
+      expect(declared.capabilities.rg).toEqual({ provider: "external" });
+      expect(declared.capabilities.read).toEqual({ provider: "file", derived: true });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("instance uid persists in the Service folder and stays stable across fetches", async () => {
@@ -643,6 +674,7 @@ describe("serve host door mode (W7 / ADR-REM-004)", () => {
     for (const endpoint of doc.endpoints) {
       expect(endpoint.instance_uid).toMatch(/^[0-9a-f-]{36}$/);
       expect(endpoint.capabilities.read).toEqual({ provider: "file", derived: true });
+      expect(endpoint.capabilities.rg).toEqual({ provider: "external", derived: true });
       if (endpoint.name === "door-second" || endpoint.name === "serve-fixture") {
         expect(endpoint.capabilities.search).toEqual({ provider: "qmd" });
       }
