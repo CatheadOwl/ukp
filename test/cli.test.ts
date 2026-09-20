@@ -509,10 +509,9 @@ describe("CLI bootstrap", () => {
     expect(errorText).toContain("Usage: ukp guide <topic> [subtopic]");
   });
 
-  // 2026-09-11 help-cognition sweep copy fixes (agent-eval/unit-docs/
-  // help-cognition-sweep.md): default-scope semantics, name sources, guide
-  // topic descriptions, and the unregister legacy alias all became
-  // load-bearing help text — pin them.
+  // 2026-09-11 help cognition sweep copy fixes: default-scope semantics, name
+  // sources, guide topic descriptions, and the unregister legacy alias all
+  // became load-bearing help text — pin them.
   test("help documents default scope, name sources, and guide topics (sweep fixes)", () => {
     // search / rg / update share the workspace default scope semantics.
     for (const render of [renderSearchHelp, renderRgHelp, renderUpdateHelp]) {
@@ -538,8 +537,7 @@ describe("CLI bootstrap", () => {
   });
 
   // Sweep round 2 fixes (2026-09-11): the remaining doc-gaps surfaced by the
-  // second blank-agent pass — see the round-2 record in
-  // agent-eval/unit-docs/help-cognition-sweep.md.
+  // second blank-agent pass.
   test("help documents round-2 fixes (diagnose scope, read forms, propose/init pointers)", () => {
     // diagnose gains the Scope section its siblings already had.
     expect(renderDiagnoseHelp().replace(/\s+/g, " ")).toContain("validates the current folder as a Service");
