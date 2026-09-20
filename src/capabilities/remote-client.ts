@@ -344,8 +344,8 @@ function wakeDoorCommand(remotePort: number, form: WakeShellForm = "posix"): str
  * not even parse the sent form, so the OTHER form is the retry — as opposed
  * to a missing-ukp failure, where the shell ran fine and named 'ukp' as the
  * thing it cannot find. Language-independent: cmd.exe locales vary the
- * message body ('sh' is not recognized / 'sh' 不是内部或外部命令 / "sh"
- * ist …) but always quote the missing ASCII token; POSIX shells prefix the
+ * message body (English, zh-CN, German … all differ) but always quote the
+ * missing ASCII token; POSIX shells prefix the
  * token ("sh: command not found"). */
 function wrongShellSignature(form: WakeShellForm, diagnostics: string): boolean {
   if (form === "posix") return /['"]sh['"]|sh: (?:command )?not found/i.test(diagnostics);
