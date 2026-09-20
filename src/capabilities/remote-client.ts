@@ -290,10 +290,24 @@ function spawnMuxMaster(
   }
 }
 
-/** The pinned wake command (W9 / ADR-REM-006 §4 safety narrowing): a fixed shape where
- * only the client-chosen integer port and idle window are interpolated — the
- * exact string an operator can allowlist with git-shell / authorized_keys
- * `command=`. Loopback-only, anonymous: SSH carries encryption and auth.
+/** The pinned wake command (W9 / ADR-REM-006 §4 safety narrowing), in two
+ * host-shell forms: only the client-chosen integer port and idle window are
+ * interpolated — the exact string an operator can allowlist with git-shell /
+ * authorized_keys `command=`. Loopback-only, anonymous: SSH carries
+ * encryption and auth. The POSIX form is unchanged since W9; the cmd form
+ * (2026-09-20, liku feedback) serves Windows hosts whose OpenSSH default
+ * shell is cmd.exe and cannot parse `sh -c` at all — it is the pinned
+ * equivalent with a Windows-shaped PATH prefix (bun official, scoop, npm
+ * user prefix; the launcher resolves bun itself once ukp is found, the
+ * prefix guarantees ukp resolves). The `set "PATH=…"` quoting is load-
+ * bearing: an unquoted `set PATH=…%PATH%&&…` breaks when the expanded PATH
+ * contains cmd metacharacters (`&` in a directory name — verified), while
+ * the quoted form survives both the sshd double-cmd wrapper and cmd's own
+ * expansion (verified against Win32-OpenSSH source and live). The wake
+ * ladder sends POSIX first and switches on the wrong-shell failure
+ * signature; host shells covered: POSIX login shells, cmd.exe default, and
+ * Git-Bash-style DefaultShell hosts — a powershell DefaultShell is NOT
+ * supported (its -c quoting drops the form).
  *
  * The remote shell ssh runs commands in is NON-INTERACTIVE (bare system
  * PATH), while every standard install mode lands in user-local,
@@ -301,9 +315,9 @@ function spawnMuxMaster(
  * interactivity guard; `bun add -g` links into ~/.bun/bin; a user npm prefix
  * like ~/.npm-global never leaves the user dir; brew lives outside the
  * default ssh PATH). So the command prepends the standard install locations
- * to PATH before exec — ukp AND its `#!/usr/bin/env bun` shebang both
- * resolve for any usual install. nvm-style versioned layouts have no fixed
- * path shape and need a system symlink (documented exception). */
+ * to PATH before exec — ukp AND its shebang/launcher both resolve for any
+ * usual install. nvm-style versioned layouts have no fixed path shape and
+ * need a system symlink (documented exception). */
 // The Linuxbrew segment is joined, not written as one literal: its standard
 // install location is a functional constant (part of the byte-pinned remote
 // command), while the release "absolute user path" leak scan rightly flags
@@ -317,8 +331,23 @@ const WAKE_REMOTE_PATH_PREFIX = [
   ["/home", "linuxbrew", ".linuxbrew", "bin"].join("/"),
 ].join(":");
 
-function wakeDoorCommand(remotePort: number): string {
+export type WakeShellForm = "posix" | "cmd";
+
+function wakeDoorCommand(remotePort: number, form: WakeShellForm = "posix"): string {
+  if (form === "cmd") {
+    return `cmd /d /c "set "PATH=%USERPROFILE%\\.bun\\bin;%USERPROFILE%\\scoop\\shims;%APPDATA%\\npm;%PATH%"&&ukp serve --allow-anonymous --host 127.0.0.1 --port ${remotePort} --max-idle ${WAKE_DOOR_MAX_IDLE_SECONDS}"`;
+  }
   return `sh -c 'PATH="${WAKE_REMOTE_PATH_PREFIX}:$PATH" exec ukp serve --allow-anonymous --host 127.0.0.1 --port ${remotePort} --max-idle ${WAKE_DOOR_MAX_IDLE_SECONDS}'`;
+}
+
+/** Wrong-shell failure signature for the wake ladder: the remote shell could
+ * not even parse the sent form, so the OTHER form is the retry — as opposed
+ * to a missing-ukp failure, where the shell ran fine and named 'ukp' as the
+ * thing it cannot find. cmd.exe errors quote the missing token ('sh' is not
+ * recognized, exit 9009); POSIX shells print "<token>: command not found". */
+function wrongShellSignature(form: WakeShellForm, diagnostics: string): boolean {
+  if (form === "posix") return /'sh' is not recognized|sh: command not found/i.test(diagnostics);
+  return /'cmd' is not recognized|cmd: command not found/i.test(diagnostics);
 }
 
 /** HTTP-level readiness probe through the tunnel (W9): a TCP accept on the
@@ -399,6 +428,11 @@ async function openSshTunnel(
   // options for the remaining attempts so the endpoint degrades to Tier 0
   // instead of hard-failing what worked without mux.
   let muxDisabled = false;
+  // Shell-form ladder (2026-09-20): POSIX first (the common server shell),
+  // cmd second — a Windows host whose OpenSSH default shell is cmd.exe fails
+  // the POSIX form with an 'sh'-not-recognized signature (not a missing-ukp
+  // failure: the shell never got as far as looking for ukp).
+  let form: WakeShellForm = "posix";
   const attempts = 3;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const localPort = await freePort();
@@ -416,7 +450,7 @@ async function openSshTunnel(
       ...(muxDisabled ? [] : muxClientOptions()),
       "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
       target,
-      wakeDoorCommand(remotePort),
+      wakeDoorCommand(remotePort, form),
     ];
     const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
     const stderrTail = drainStderrTail([proc.stdout, proc.stderr]);
@@ -431,6 +465,17 @@ async function openSshTunnel(
     const exited = proc.exitCode !== null;
     if (/ControlPath too long|muxserver_listen|unix_listener/i.test(diagnostics)) {
       muxDisabled = true;
+    }
+    if (exited && wrongShellSignature(form, diagnostics)) {
+      if (attempt < attempts) {
+        form = form === "posix" ? "cmd" : "posix";
+        continue;
+      }
+      // Both forms rejected: this is a shell mismatch, not a missing-ukp
+      // failure — say so instead of falling into the missing-ukp wording.
+      throw new RemoteTransportError(
+        `waking the ukp door on '${target}' (endpoint '${endpointLabel}') failed — the remote shell rejected both wake command forms (POSIX and cmd.exe): ${diagnostics}. Supported host shells: POSIX login shells, cmd.exe default, Git-Bash-style DefaultShell; a powershell DefaultShell is not supported`,
+      );
     }
     // POSIX login shells print "…: ukp: command not found" (exit 127); Windows
     // OpenSSH under cmd prints "'ukp' is not recognized…" (exit 9009).

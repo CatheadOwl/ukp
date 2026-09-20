@@ -38,6 +38,11 @@ const registryPath = own("--registry");
 const qmdFixture = own("--qmd");
 const nodeForQmd = own("--node");
 const dumpFile = own("--dump");
+// Host-shell persona for the wake ladder tests (2026-09-20): "posix" (the
+// default — a login shell that parses `sh -c`) or "cmd" (a Windows OpenSSH
+// host whose default shell is cmd.exe: the POSIX form dies with
+// 'sh' is not recognized / exit 9009 before ukp is ever looked up).
+const shellPersona = own("--shell") ?? "posix";
 // Dump every raw argv BEFORE the -L validation below: the Tier-1 mux-master
 // invocation carries no -L and exits there — tests still want its shape.
 if (dumpFile !== undefined) appendFileSync(dumpFile, `${JSON.stringify(argv)}\n`, "utf8");
@@ -49,10 +54,28 @@ if (match === undefined) process.exit(1);
 
 // Wake support: find the trailing "ukp serve …" command and honor it. When
 // present, the log line records the RAW wake string so tests can pin the
-// operator-facing allowlist contract byte-for-byte (modulo the port).
-const wake = argv.find((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve "));
+// operator-facing allowlist contract byte-for-byte (modulo the port). The
+// two pinned forms (POSIX `sh -c '…'`, Windows `cmd /d /c "…"`) are matched
+// per the host-shell persona: a mismatched form emulates the shell error the
+// real host would print, so the client's form ladder is exercised end to
+// end.
+const posixWake = argv.find((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve "));
+const cmdWake = argv.find((arg) => arg.startsWith("cmd /d /c ") && arg.includes("ukp serve "));
+const wake = posixWake ?? cmdWake;
+// Log BEFORE the persona verdict so rejected attempts leave their ladder
+// evidence too (a test proves the form switch by reading both lines).
 if (logFile !== undefined) {
   appendFileSync(logFile, `${process.pid} ${forward}${wake !== undefined ? ` wake=${wake}` : ""}\n`, "utf8");
+}
+if (shellPersona === "cmd" && posixWake !== undefined) {
+  process.stderr.write(
+    "'sh' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n",
+  );
+  process.exit(9009);
+}
+if (shellPersona === "posix" && cmdWake !== undefined) {
+  process.stderr.write("sh: 1: cmd: command not found\n");
+  process.exit(127);
 }
 
 const [, localPort, remotePort] = match;

@@ -24,6 +24,24 @@ All notable public changes to UKP will be documented in this file.
   a declared `rg` still overrides it. (Windows host upgrade feedback on
   0.2.0.)
 
+### Added
+
+- Windows hosts on the ssh:// path: the wake now speaks the host's shell.
+  The pinned POSIX wake command is unchanged; when the host's default
+  shell is cmd.exe (the Windows OpenSSH default — it cannot parse
+  `sh -c` at all), the wake ladder detects the `'sh' is not recognized`
+  signature and resends the pinned cmd.exe form (Windows-shaped PATH
+  prefix: bun official, scoop, npm user prefix). Operators allowlist
+  whichever form matches their host shell; a powershell DefaultShell is
+  not supported. Both forms rejected reports a shell mismatch, not a
+  missing-ukp error.
+- The package bin is now a self-locating launcher (`bin/ukp.js`): npm
+  shims exec it with node and bun's own links run it with bun; it finds
+  the bun executable itself (UKP_BUN override, the standard install
+  locations, then PATH), so `ukp` works in non-interactive shells — ssh
+  wake sessions, Task Scheduler doors — without a PATH export, and fails
+  with an install remedy instead of a stack trace when bun is absent.
+
 ### Changed
 
 - The remote surfaces now state the platform burden guidance explicitly
