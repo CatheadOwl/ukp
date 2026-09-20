@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// rg fixture (workunits/ukp_rg W1): emulates the ripgrep surface UKP uses —
+// rg fixture: emulates the ripgrep surface UKP uses —
 // `--version`, match mode (`--json` event lines) and count mode (`--count`).
 // Scans the cwd's .md files for the `-e <pattern>` substring so tests get
 // real endpoint-relative paths.
@@ -75,3 +75,4 @@ if (args.includes("--json")) {
 
 process.stderr.write("fixture: expected --json or --count\n");
 process.exit(2);
+
