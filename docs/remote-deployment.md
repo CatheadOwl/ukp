@@ -63,6 +63,12 @@ Notes:
   wake — the client chooses the door port per invocation, which a fixed
   forced command cannot express.
 
+Windows hosts work out of the box: when the host's OpenSSH default shell
+(cmd.exe) rejects the POSIX wake form, the client detects the signature and
+resends the pinned cmd.exe form automatically — nothing to configure beyond
+the OpenSSH Server feature and your key. A powershell DefaultShell is not
+supported (its `-c` quoting drops the wake form).
+
 ## Native TLS (bare IP, no domain — zero extra components)
 
 `--tls` self-signs on first start (identity = keypair, persisted under the

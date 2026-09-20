@@ -24,9 +24,10 @@
     "agent"
   ],
   "bin": {
-    "ukp": "src/cli.ts"
+    "ukp": "bin/ukp.js"
   },
   "files": [
+    "bin",
     "src",
     "README.md",
     "LICENSE",

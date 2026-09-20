@@ -556,6 +556,44 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     expect(message).toContain("command not found");
   });
 
+  test("cmd.exe host (Windows OpenSSH): the form ladder recovers — POSIX attempt dies at 'sh', the cmd form wakes", async () => {
+    const cmdRegistry = join(root, "wake-cmd-server-registry.toml");
+    registerAt(cmdRegistry, "notes", createService("wake-cmd-notes-svc", "notes"));
+    const logPath = join(root, "fake-ssh-cmd.log");
+    rmSync(logPath, { force: true });
+    // --shell cmd: the fake sshd emulates a cmd.exe default shell — the
+    // POSIX wake form is rejected at 'sh' (exit 9009) before ukp is ever
+    // looked up, exactly what a real Windows OpenSSH host prints.
+    const sshCommand = [
+      process.execPath,
+      join(import.meta.dir, "helpers", "fake-ssh.mjs"),
+      "--log", logPath,
+      "--registry", cmdRegistry,
+      "--shell", "cmd",
+    ];
+    const binding = { name: "notes", kind: "remote" as const, url: "ssh://wake-cmd-host/notes" };
+    const transport = await openRemoteTransport(binding, { sshCommand });
+    try {
+      const fetched = await fetchDiscoveryDocument(binding, transport);
+      expect(fetched.doc.name).toBe("notes");
+      expect(fetched.doc.protocol).toBe("ukp-remote");
+    } finally {
+      transport.close();
+    }
+    // The ladder, proven: attempt 1 carried the POSIX form (rejected at the
+    // shell), attempt 2 the pinned cmd form (woke the door).
+    const log = readFileSync(logPath, "utf8").trim().split("\n");
+    expect(log.length).toBe(2);
+    expect(log[0]).toMatch(/ wake=sh -c /);
+    // The cmd allowlist contract, byte-for-byte modulo the port: Windows-
+    // shaped PATH prefix (bun official, scoop, npm user prefix) + the door.
+    // The `set "PATH=…"` quoting is load-bearing (an unquoted set breaks on
+    // '&' inside the expanded PATH) and survives the sshd double-cmd layer.
+    expect(log[1]).toMatch(
+      / wake=cmd \/d \/c "set "PATH=%USERPROFILE%\\\.bun\\bin;%USERPROFILE%\\scoop\\shims;%APPDATA%\\npm;%PATH%"&&ukp serve --allow-anonymous --host 127\.0\.0\.1 --port \d+ --max-idle 60"$/,
+    );
+  }, 20_000);
+
   test("Tier 1: a detached -N mux master precedes the wake client, which attaches only", async () => {
     // The whole flow runs against fakes, so the platform gate (win32 native
     // ssh has no ControlMaster) is spoofed to exercise the Tier-1 path on
