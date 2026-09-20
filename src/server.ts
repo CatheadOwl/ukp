@@ -29,6 +29,7 @@ import {
   type NavRequest,
 } from "./capabilities/nav.ts";
 import {
+  rgExecutableAvailable,
   runRg,
   projectRgEnvelope,
   RG_DEFAULT_LIMIT,
@@ -150,6 +151,14 @@ export interface ServeInfo {
   host: string;
   port: number;
   authRequired: boolean;
+  /** ripgrep availability probed once at startup IN THE DOOR'S OWN PROCESS
+   * (2026-09-20, liku feedback): /v1/rg serves every endpoint and a missing
+   * binary degrades per-endpoint on the wire by design — but that truth is
+   * consumer-channel only. The banner line is the operator channel, and the
+   * probe environment is by construction the one that matters (ukp diagnose
+   * measures the invoking shell instead, which can differ from the door's
+   * schtasks / wake environment). */
+  rg: "ok" | "missing";
   /** TLS identity summary (W5' / D-079) when serving over HTTPS; the pin is
    * what remote clients TOFU-pin at registration. `source` "re-signed" marks
    * the one start that grew SAN coverage over the existing key (--tls-san
@@ -893,6 +902,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
     host,
     port: listener.port,
     authRequired: (config.tokens?.length ?? 0) > 0,
+    rg: rgExecutableAvailable() ? "ok" : "missing",
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
       : {}),
@@ -1026,6 +1036,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     host,
     port: listener.port,
     authRequired: (config.tokens?.length ?? 0) > 0,
+    rg: rgExecutableAvailable() ? "ok" : "missing",
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
       : {}),

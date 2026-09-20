@@ -173,6 +173,7 @@ export function renderServeBanner(info: ServeInfo): string {
       `  endpoints: ${info.door!.endpoints.length > 0 ? info.door!.endpoints.join(", ") : "(none — register endpoints on this host)"}`,
       `  write: ${info.door!.write.length > 0 ? info.door!.write.join(", ") + " (propose via PUT /e/<name>/v1/propose/<id>)" : "(no endpoint declares propose)"}`,
       `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback bind; ssh-forwarded clients authenticate by SSH key)"}`,
+      `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning — install ripgrep on this door's PATH)"}`,
       ...(info.maxIdleSeconds !== undefined
         ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
         : []),
@@ -187,6 +188,7 @@ export function renderServeBanner(info: ServeInfo): string {
     `  listening: ${info.url}`,
     `  discovery: ${info.url.startsWith("http") ? `${info.url}${DISCOVERY_PATH}` : info.url}`,
     `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback only)"}`,
+    `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning — install ripgrep on this door's PATH)"}`,
     ...(info.maxIdleSeconds !== undefined
       ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
       : []),
