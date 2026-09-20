@@ -343,11 +343,40 @@ function wakeDoorCommand(remotePort: number, form: WakeShellForm = "posix"): str
 /** Wrong-shell failure signature for the wake ladder: the remote shell could
  * not even parse the sent form, so the OTHER form is the retry — as opposed
  * to a missing-ukp failure, where the shell ran fine and named 'ukp' as the
- * thing it cannot find. cmd.exe errors quote the missing token ('sh' is not
- * recognized, exit 9009); POSIX shells print "<token>: command not found". */
+ * thing it cannot find. Language-independent: cmd.exe locales vary the
+ * message body ('sh' is not recognized / 'sh' 不是内部或外部命令 / "sh"
+ * ist …) but always quote the missing ASCII token; POSIX shells prefix the
+ * token ("sh: command not found"). */
 function wrongShellSignature(form: WakeShellForm, diagnostics: string): boolean {
-  if (form === "posix") return /'sh' is not recognized|sh: command not found/i.test(diagnostics);
-  return /'cmd' is not recognized|cmd: command not found/i.test(diagnostics);
+  if (form === "posix") return /['"]sh['"]|sh: (?:command )?not found/i.test(diagnostics);
+  return /['"]cmd['"]|cmd: (?:command )?not found/i.test(diagnostics);
+}
+
+/** One cheap, language-independent roundtrip to learn the host shell family
+ * BEFORE the first wake attempt (2026-09-20, liku 9.5 finding): cmd.exe
+ * expands `%OS%` to `Windows_NT`; a POSIX shell echoes the literal token.
+ * Choosing the form up front avoids the blind POSIX-first attempt costing a
+ * full ready-timeout on every Windows invocation, and picks the right tty
+ * stance — `-tt` exists for POSIX SIGHUP reaping; on Windows there is no
+ * SIGHUP (max-idle bounds the door), and at least one Win32-OpenSSH 9.5
+ * build LOSES a quoted remote command under a pty (an interactive cmd
+ * swallows it and waits on stdin forever — the no-pty path executes it
+ * correctly). Defaults to POSIX (the common server shape) when the probe
+ * errors or times out; the ladder remains as the backstop. */
+async function probeHostShellFamily(
+  options: { sshCommand?: readonly string[] },
+  target: string,
+): Promise<WakeShellForm> {
+  const proc = Bun.spawn(
+    [...(options.sshCommand ?? ["ssh"]), "-o", "BatchMode=yes", target, "echo %OS%"],
+    { stdout: "pipe", stderr: "pipe", stdin: "ignore" },
+  );
+  const output = await Promise.race([
+    new Response(proc.stdout).text().catch(() => ""),
+    Bun.sleep(5_000).then(() => ""),
+  ]);
+  proc.kill();
+  return /Windows_NT/i.test(output) ? "cmd" : "posix";
 }
 
 /** HTTP-level readiness probe through the tunnel (W9): a TCP accept on the
@@ -428,11 +457,10 @@ async function openSshTunnel(
   // options for the remaining attempts so the endpoint degrades to Tier 0
   // instead of hard-failing what worked without mux.
   let muxDisabled = false;
-  // Shell-form ladder (2026-09-20): POSIX first (the common server shell),
-  // cmd second — a Windows host whose OpenSSH default shell is cmd.exe fails
-  // the POSIX form with an 'sh'-not-recognized signature (not a missing-ukp
-  // failure: the shell never got as far as looking for ukp).
-  let form: WakeShellForm = "posix";
+  // Shell form (2026-09-20): probed up front via `echo %OS%` (language-
+  // independent — see probeHostShellFamily), POSIX by default; the wrong-
+  // shell ladder below remains the backstop for a lying or timed-out probe.
+  let form: WakeShellForm = await probeHostShellFamily(options, target);
   const attempts = 3;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const localPort = await freePort();
@@ -443,8 +471,11 @@ async function openSshTunnel(
       // SIGHUP on disconnect — normal disconnect included, the door only ever
       // died to --max-idle. Forcing a pty gives the session a controlling
       // terminal, so killing the client reaps the door in seconds (verified:
-      // kill -9 of the local ssh → door gone within 3s).
-      "-tt",
+      // kill -9 of the local ssh → door gone within 3s). POSIX hosts only:
+      // Windows has no SIGHUP (max-idle bounds the door there), and pty
+      // sessions lose quoted remote commands on at least one
+      // Win32-OpenSSH 9.5 build — the cmd form goes without -tt.
+      ...(form === "posix" ? ["-tt"] : []),
       "-o", "ExitOnForwardFailure=yes",
       "-o", "BatchMode=yes",
       ...(muxDisabled ? [] : muxClientOptions()),

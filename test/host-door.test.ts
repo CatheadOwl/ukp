@@ -377,6 +377,22 @@ describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
     expect(renegade.stderr).toContain("already registered as 'ali-skills'");
   });
 
+  test("drift notes split free vs taken names; taken names point at the --name remedy", async () => {
+    const { info } = startDoor();
+    registerAt(registryPath, "notes", createService("w11-drift-local-notes", "notes"));
+    await asResult(executeRegisterCommand(["--url", `${info.url}/archive`], context));
+    const list = await asResult(executeListCommand([], context));
+    expect(list.exitCode).toBe(0);
+    // `notes` is unimported only because the name is held locally: the note
+    // must not suggest the bulk import (it would skip again) — the single
+    // endpoint --name form is the remedy. (The shared server registry may
+    // serve extra endpoints; only `notes`'s classification matters here.)
+    expect(list.stderr).toContain(
+      `door ${info.url}: name(s) taken: notes — import under another handle: 'ukp register --url ${info.url}/<name> --name <handle>'`,
+    );
+    expect(list.stderr).not.toContain("unimported endpoint(s): notes");
+  });
+
   test("one service under two handles (different urls, same instance_uid) notes in list", async () => {
     const { info } = startDoor();
     await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "ali-notes"], context));
@@ -556,14 +572,15 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     expect(message).toContain("command not found");
   });
 
-  test("cmd.exe host (Windows OpenSSH): the form ladder recovers — POSIX attempt dies at 'sh', the cmd form wakes", async () => {
+  test("cmd.exe host (Windows OpenSSH): the %OS% pre-probe selects the cmd form directly, no pty", async () => {
     const cmdRegistry = join(root, "wake-cmd-server-registry.toml");
     registerAt(cmdRegistry, "notes", createService("wake-cmd-notes-svc", "notes"));
     const logPath = join(root, "fake-ssh-cmd.log");
     rmSync(logPath, { force: true });
-    // --shell cmd: the fake sshd emulates a cmd.exe default shell — the
-    // POSIX wake form is rejected at 'sh' (exit 9009) before ukp is ever
-    // looked up, exactly what a real Windows OpenSSH host prints.
+    // --shell cmd: the fake sshd answers the family pre-probe with
+    // Windows_NT, so the first wake attempt already carries the pinned cmd
+    // form without -tt (pty sessions lose quoted commands on at least one
+    // Win32-OpenSSH 9.5 build — the real-machine finding behind this).
     const sshCommand = [
       process.execPath,
       join(import.meta.dir, "helpers", "fake-ssh.mjs"),
@@ -580,16 +597,14 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     } finally {
       transport.close();
     }
-    // The ladder, proven: attempt 1 carried the POSIX form (rejected at the
-    // shell), attempt 2 the pinned cmd form (woke the door).
+    // One wake tunnel, first attempt, cmd form.
     const log = readFileSync(logPath, "utf8").trim().split("\n");
-    expect(log.length).toBe(2);
-    expect(log[0]).toMatch(/ wake=sh -c /);
+    expect(log.length).toBe(1);
     // The cmd allowlist contract, byte-for-byte modulo the port: Windows-
     // shaped PATH prefix (bun official, scoop, npm user prefix) + the door.
     // The `set "PATH=…"` quoting is load-bearing (an unquoted set breaks on
     // '&' inside the expanded PATH) and survives the sshd double-cmd layer.
-    expect(log[1]).toMatch(
+    expect(log[0]).toMatch(
       / wake=cmd \/d \/c "set "PATH=%USERPROFILE%\\\.bun\\bin;%USERPROFILE%\\scoop\\shims;%APPDATA%\\npm;%PATH%"&&ukp serve --allow-anonymous --host 127\.0\.0\.1 --port \d+ --max-idle 60"$/,
     );
   }, 20_000);
@@ -659,11 +674,17 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
       transport.close();
     }
     const dumps = readFileSync(dumpPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
-    // Exactly one spawn (the wake client) — no bare `-N` master, no mux trio.
-    expect(dumps.length).toBe(1);
-    expect(dumps[0]).not.toContain("-N");
-    expect(dumps[0]).not.toContain("ControlMaster");
-    expect(dumps[0].some((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve "))).toBe(true);
+    // Two spawns: the `%OS%` family pre-probe (no -L, no pty) and the wake
+    // client — still no bare `-N` master, no mux trio.
+    expect(dumps.length).toBe(2);
+    const probe = dumps.find((args) => args.includes("echo %OS%"));
+    expect(probe).toBeDefined();
+    expect(probe).not.toContain("-tt");
+    const wakeClient = dumps.find((args) => args.some((arg) => arg.startsWith("sh -c ") && arg.includes("ukp serve ")));
+    expect(wakeClient).toBeDefined();
+    expect(wakeClient).not.toContain("-N");
+    expect(wakeClient).not.toContain("ControlMaster");
+    expect(wakeClient!.some((arg) => arg.startsWith("127.0.0.1:"))).toBe(true);
   }, 20_000);
 
   afterEach(() => {
