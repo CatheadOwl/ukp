@@ -3,7 +3,7 @@ UKP Remote quickstart
 Goal: expose registered Services from one machine and consume them from another with the same endpoint commands: search, read, nav, rg, and propose when declared.
 
 Current model:
-- The ssh:// path needs nothing running on the host: each invocation wakes a loopback door over the SSH connection (it serves the host Registry fresh and self-reaps when idle). Host prerequisites: the host is ssh reachable and has ukp installed the usual way (npm i -g or bun add -g — the wake finds the standard locations; nvm users link ukp into /usr/local/bin once).
+- The ssh:// path needs nothing running on the host: each invocation wakes a loopback door over the SSH connection (it serves the host Registry fresh and self-reaps when idle). Host prerequisites: the host is ssh reachable and has ukp installed the usual way (npm i -g or bun add -g — the wake finds the standard locations).
 - The https path (LAN, public IP, or behind a reverse proxy) uses a resident door: run ukp serve under your process manager. Arbitrary consumers have no SSH credentials, so the listener itself is the trust boundary (TLS + bearer token).
 - Prefer host door mode: run ukp serve without --endpoint to expose every local endpoint behind one port.
 - The door reads the host Registry fresh on each request, so newly registered local endpoints appear without restarting the door.
@@ -54,7 +54,7 @@ Name and identity:
 - ssh:// urls take no port: registration rejects one (the woken door listens on a client-chosen loopback port; use an ssh config Host alias for a non-standard sshd port).
 
 Operational note:
-- ssh:// hosts: nothing to manage — ukp wakes and reaps doors itself. To lock down what SSH may run, restrict the login shell (git-shell style); a forced authorized_keys command= does not compose with wake (the client chooses the door port per invocation).
+- ssh:// hosts: nothing to manage — ukp wakes and reaps doors itself; SSH lockdown (login-shell restriction, why a forced authorized_keys command= does not compose) and nvm-style install layouts are deployment-handbook material.
 - https hosts: keep ukp serve under your normal process manager, for example systemd, Task Scheduler, or a terminal multiplexer. The CLI does not install or autostart the door.
 - serve accepts --max-idle <seconds> to self-exit after that long without requests (the same backstop the woken doors use).
 

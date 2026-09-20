@@ -90,6 +90,12 @@ All notable public changes to UKP will be documented in this file.
   live; `ukp read`'s `--pin` messages point there.
 - `ukp nav` renders unexpanded folders as `path/ (+N .md)` instead of
   `[truncated: N] path`.
+- Guide de-duplication (the D-087 audit's B/C tails): `ukp guide remote`
+  drops host-operator material the public deployment guide already owns
+  (SSH lockdown / forced `command=` caveat, nvm symlink note) and keeps a
+  pointer; `ukp guide service` states each dependency and
+  provider-optionality fact once (Advanced and Remember lost five
+  duplicated lines, kinds folded into the Details step).
 - Added `ukp guide remote`, covering host-door setup, SSH and LAN HTTPS
   consumption, expected-name assertions during registration, and the current
   operational boundary that UKP does not yet install or autostart the remote
