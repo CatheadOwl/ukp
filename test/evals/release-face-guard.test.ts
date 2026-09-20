@@ -13,16 +13,12 @@ import { join } from "node:path";
  * - `CHANGELOG.md` released version sections are published history and are
  *   never rewritten; the rule applies to future entries (release review
  *   checks the Unreleased section).
- * - `test/cli.test.ts` carries two historical comment references pending
- *   cleanup while that file is under concurrent edit elsewhere; tracked in
- *   the workbench meta open questions. No new offender may join this list.
+ * - The allowlist is empty and capped: no new offender may join it.
  */
 
 const UKP_ROOT = join(import.meta.dir, "..", "..");
 
-const ALLOWLIST: { file: string; contains: string }[] = [
-  { file: join("test", "cli.test.ts"), contains: "agent-eval/unit-docs/" },
-];
+const ALLOWLIST: { file: string; contains: string }[] = [];
 
 const PRIVATE_REFERENCE_PATTERN =
   /agent-eval|unit-docs|surface-units|workunits\/|product\/(status|index|specs)|docs\/(spec|adr|prd|archive|release)\/|D:\\+Document|D:\/+Document/i;
