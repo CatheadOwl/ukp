@@ -771,6 +771,28 @@ describe("serve host door mode (W7 / ADR-REM-004)", () => {
     expect(renderServeBanner(tokenDoor.info)).toContain("auth: bearer token required");
     const single = start();
     expect(renderServeBanner(single.info)).toContain("serving endpoint 'serve-fixture' (ukp-remote v1)");
+    // The rg availability line rides both banner forms (2026-09-20, liku
+    // feedback): the probe runs in the door's own process, so the operator
+    // sees PATH problems at startup instead of at a consumer's search. The
+    // live value depends on the test environment's rg; both branches are
+    // pinned below with synthetic infos.
+    expect(doorBanner).toMatch(/^  rg: (ok|missing)$/m);
+    expect(renderServeBanner(single.info)).toMatch(/^  rg: (ok|missing)$/m);
+  });
+
+  test("banner: rg availability line spells both states", () => {
+    const base = {
+      mode: "door" as const,
+      door: { endpoints: [], write: [] },
+      url: "http://127.0.0.1:8570",
+      host: "127.0.0.1",
+      port: 8570,
+      authRequired: false,
+    };
+    expect(renderServeBanner({ ...base, rg: "ok" })).toContain("\n  rg: ok\n");
+    expect(renderServeBanner({ ...base, rg: "missing" })).toContain(
+      "  rg: missing (rg calls skip with a warning — install ripgrep on this door's PATH)",
+    );
   });
 });
 

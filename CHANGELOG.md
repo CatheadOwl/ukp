@@ -4,6 +4,18 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- The `ukp serve` startup banner carries a ripgrep availability line
+  (`rg: ok` / `rg: missing (rg calls skip with a warning — install ripgrep
+  on this door's PATH)`), probed once at startup in the door's own process.
+  /v1/rg serves every endpoint and a missing binary degrades per-endpoint
+  on the wire by design — but that truth reached only the consumer; an
+  operator whose door environment (schtasks session, ssh wake shell) lacks
+  rg had no startup signal, because `ukp diagnose` measures the invoking
+  shell instead. The banner probe's environment is, by construction, the
+  one that matters.
+
 ### Fixed
 
 - The ssh:// wake now probes the host's shell family before its first
