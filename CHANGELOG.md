@@ -2,6 +2,15 @@
 
 All notable public changes to UKP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `ukp register --help` drops the internal tracking ID from the "Host
+  doors" section header (the 0.2.0 acceptance re-verdict caught the same
+  leak class the serve-help fix had cleaned). A guard test now sweeps
+  every command help for ADR-/RQ- tokens so the class stays dead.
+
 ## [0.2.0] - 2026-09-20
 
 ### Added

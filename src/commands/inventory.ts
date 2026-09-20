@@ -80,7 +80,7 @@ export const REGISTER_SPEC: UkpCommandSpec = {
     "  assertion on the declared name; bearer-token services read",
     "  UKP_ENDPOINT_<NAME>_TOKEN (keyed by the handle) at call time.",
     "",
-    "Host doors (ADR-REM-004):",
+    "Host doors:",
     "  'ukp register --url ssh://ali' fetches the door's discovery document",
     "  and imports every endpoint behind it (a door url may also name one",
     "  endpoint: ssh://ali/notes). Import is explicit and idempotent:",
