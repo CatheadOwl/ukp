@@ -215,6 +215,7 @@ and the hardening posture — lives in the
   pinning lifecycle, and the hardening posture.
 - [Contributing](https://github.com/CatheadOwl/ukp/blob/main/CONTRIBUTING.md) — development setup and release packaging.
 - [End-to-end tests](https://github.com/CatheadOwl/ukp/blob/main/test/e2e/README.md) — the closed-chain suite: registration, transport, search, handoff, read-back.
+- [Eval scenarios](https://github.com/CatheadOwl/ukp/blob/main/test/evals/README.md) — black-box evals: spawn the CLI, replay every printed handoff verbatim.
 - [Changelog](https://github.com/CatheadOwl/ukp/blob/main/CHANGELOG.md) — what changed per release.
 - Repository: https://github.com/CatheadOwl/ukp ·
   Issues: https://github.com/CatheadOwl/ukp/issues

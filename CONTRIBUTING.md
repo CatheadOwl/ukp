@@ -15,7 +15,9 @@ npm pack --dry-run --json
 
 The suite splits by scope: unit regression lives at `test/`, closed-chain
 end-to-end scenarios (identity registration, transport, search, handoff,
-read-back) live at [`test/e2e/`](./test/e2e/README.md).
+read-back) live at [`test/e2e/`](./test/e2e/README.md), and black-box eval
+scenarios (spawn-only; every printed handoff must replay verbatim; the
+boundary is guard-enforced) live at [`test/evals/`](./test/evals/README.md).
 
 Release maintainers run a release preflight before publishing: git hygiene,
 the full test suite, typecheck, package metadata and tarball allowlist
