@@ -146,7 +146,7 @@ Registry commands:
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings. `ukp register --url <url>` registers a remote endpoint under a local handle — the declared name by default, or `--name <handle>` when that name is already taken (two hosts both declaring `notes` become your `notes` and `ali-notes`); `--endpoint <name>` stays an expected-name assertion on the declared name. Identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it (`--endpoint` imports one; `--select` narrows; re-running refreshes idempotently). |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings. `ukp register --url <url>` registers a remote endpoint under a local handle — the declared name by default, or `--name <handle>` when that name is already taken (two hosts both declaring `notes` become your `notes` and `ali-notes`); `--endpoint <name>` stays an expected-name assertion on the declared name, and `--token <token>` stores the bearer credential in the binding. Identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it — the `--endpoint` assertion narrows the import to exactly that one endpoint, `--select` narrows to a subset, and re-running refreshes idempotently. |
 | `ukp list` | Lists registered endpoints with their declared capabilities. Door drift shows as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture. |
 
 Operations commands:
@@ -174,15 +174,18 @@ Help commands:
 `ukp serve` exposes an endpoint over HTTP. Authentication is deny-by-default:
 serving with a `--host` beyond loopback requires `UKP_SERVE_TOKEN` (tokenless
 serving needs an explicit `--allow-anonymous` and is refused off loopback).
-The two fastest paths, from the consumer machine:
+The two fastest paths — each block notes where its commands run:
 
 ```bash
-# SSH between two personal machines — the door is woken on demand, nothing
-# to start on the host (prerequisites: ssh reachable + ukp on its PATH):
+# From the consumer machine — SSH between two personal machines; the door is
+# woken on demand, nothing to start on the host (prerequisites: ssh
+# reachable + ukp on its PATH):
 ukp register --url ssh://<host>                        # once; TOFU stored
 ukp read --endpoint <name> notes/x.md                  # just works, like local
 
-# Native TLS on a bare IP — self-signed, pinned automatically at registration:
+# Native TLS on a bare IP — self-signed, pinned automatically at registration.
+# The serve line runs ON THE HOST (keep it under your process manager); the
+# register line runs on the consumer machine:
 UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 --tls
 ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
 # NAT/EIP cloud host (public IP on no NIC)? Name it explicitly — the persisted
@@ -200,8 +203,7 @@ and the hardening posture — lives in the
 
 - remote operation of `update`, and a formally specified network protocol
   beyond the current ukp-remote wire v1;
-- semantic search tier, an HTTP search API, query rewrite, reranking, or
-  deduplication;
+- semantic search tier, query rewrite, reranking, or deduplication;
 - full Client Scope with aliases, visibility, inheritance, or profiles;
 - automatic artifact browsing, cleanup, or "select result N" references;
 - standalone binary distribution.
