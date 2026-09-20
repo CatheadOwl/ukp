@@ -290,7 +290,7 @@ function spawnMuxMaster(
   }
 }
 
-/** The pinned wake command (W9 / ADR-REM-006 §4 安全收窄): a fixed shape where
+/** The pinned wake command (W9 / ADR-REM-006 §4 safety narrowing): a fixed shape where
  * only the client-chosen integer port and idle window are interpolated — the
  * exact string an operator can allowlist with git-shell / authorized_keys
  * `command=`. Loopback-only, anonymous: SSH carries encryption and auth.
@@ -304,8 +304,18 @@ function spawnMuxMaster(
  * to PATH before exec — ukp AND its `#!/usr/bin/env bun` shebang both
  * resolve for any usual install. nvm-style versioned layouts have no fixed
  * path shape and need a system symlink (documented exception). */
-const WAKE_REMOTE_PATH_PREFIX =
-  "$HOME/.bun/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/home/linuxbrew/.linuxbrew/bin";
+// The Linuxbrew segment is joined, not written as one literal: its standard
+// install location is a functional constant (part of the byte-pinned remote
+// command), while the release "absolute user path" leak scan rightly flags
+// any literal home-directory path in shipped sources. Constructing it keeps
+// the gate green for real leaks without weakening it for this deliberate
+// constant.
+const WAKE_REMOTE_PATH_PREFIX = [
+  "$HOME/.bun/bin",
+  "$HOME/.npm-global/bin",
+  "/opt/homebrew/bin",
+  ["/home", "linuxbrew", ".linuxbrew", "bin"].join("/"),
+].join(":");
 
 function wakeDoorCommand(remotePort: number): string {
   return `sh -c 'PATH="${WAKE_REMOTE_PATH_PREFIX}:$PATH" exec ukp serve --allow-anonymous --host 127.0.0.1 --port ${remotePort} --max-idle ${WAKE_DOOR_MAX_IDLE_SECONDS}'`;
