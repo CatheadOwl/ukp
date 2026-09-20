@@ -665,9 +665,21 @@ async function collectDoorDriftNotes(
       const unimported = door.doc.endpoints
         .map((endpoint) => endpoint.name)
         .filter((name) => !group.imported.has(name));
-      if (unimported.length > 0) {
+      if (unimported.length === 0) continue;
+      // A roster name can be unimported because it COLLIDED — the name is
+      // held by another binding, and the plain import remedy would skip it
+      // again. Those names get the single-endpoint --name remedy instead
+      // (W11 / ADR-REM-007).
+      const free = unimported.filter((name) => !endpoints.some((binding) => binding.name === name));
+      const taken = unimported.filter((name) => endpoints.some((binding) => binding.name === name));
+      if (free.length > 0) {
         notes.push(
-          `door ${origin}: ${unimported.length} unimported endpoint(s): ${unimported.join(", ")} — run 'ukp register --url ${origin}' to import`,
+          `door ${origin}: ${free.length} unimported endpoint(s): ${free.join(", ")} — run 'ukp register --url ${origin}' to import`,
+        );
+      }
+      if (taken.length > 0) {
+        notes.push(
+          `door ${origin}: name(s) taken: ${taken.join(", ")} — import under another handle: 'ukp register --url ${origin}/<name> --name <handle>'`,
         );
       }
     } catch {
