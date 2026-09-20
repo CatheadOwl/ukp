@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { isAbsoluteShapedPath, isInsideRealRoot, splitEndpointRelativeSegments } from "../src/path-safety.ts";
 
-// ADR 0023 / D-073, spec product/specs/path-safety-primitives.md §4 T1-T3.
+// ADR 0023 / D-073, path-safety primitives spec §4 T1-T3.
 // Primitives are error-class-neutral: verdicts only, no throwing, no I/O.
 
 describe("isAbsoluteShapedPath (T1)", () => {
