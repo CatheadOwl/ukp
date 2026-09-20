@@ -55,7 +55,8 @@ Name and identity:
 
 Operational note:
 - ssh:// hosts: nothing to manage — ukp wakes and reaps doors itself (on Windows, enabling the built-in OpenSSH Server feature once is the low-burden path). SSH lockdown (login-shell restriction, why a forced authorized_keys command= does not compose) and nvm-style install layouts are deployment-handbook material.
-- https hosts: keep ukp serve under your normal process manager, for example systemd, Task Scheduler, or a terminal multiplexer. Linux can go resident-free (systemd socket activation, deployment handbook); Windows has no systemd equivalent, so a resident door wants a real service wrapper (WinSW-class) — prefer the ssh:// path there unless consumers have no SSH credentials. The CLI does not install or autostart the door.
+- https hosts: keep ukp serve under your normal process manager, for example systemd, Task Scheduler, or a terminal multiplexer. Linux can go resident-free (systemd socket activation, deployment handbook); Windows has no systemd equivalent, so a resident door wants a real service wrapper (WinSW-class) — prefer the ssh:// path there unless consumers have no SSH credentials. The CLI does not install or autostart the door; on Windows, ukp serve --print-task prints the resident-door artifacts (start script, hidden launcher, Task Scheduler command, firewall rule) for you to review and apply yourself — the token stays yours to paste, never printed.
+- The deployment handbook is where those recipes live: it ships with this package (docs/remote-deployment.md) and online (https://github.com/CatheadOwl/ukp/blob/main/docs/remote-deployment.md) — Windows resident door (certificate, start script, Task Scheduler), systemd socket-activation units, Caddy, Tailscale, hardening notes.
 - serve accepts --max-idle <seconds> to self-exit after that long without requests (the same backstop the woken doors use).
 
 Remember:

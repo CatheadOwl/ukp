@@ -48,7 +48,35 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- The Windows resident door no longer shows a console window, in the
+  handbook recipe and in `ukp serve --print-task` alike (owner ruling: a
+  visibly popping cmd box is not an acceptable product form). The
+  generator now prints a hidden launcher (start-door-hidden.vbs) and
+  points the Task Scheduler task at it: the console is hidden at process
+  creation (nothing ever flashes), all output lands in door.log, the
+  door's exit code propagates to the task result, and a crashed door is
+  retried up to 3 times 30s apart. The retry lives in the launcher
+  because Task Scheduler's own restart-on-failure setting does not fire
+  on exit codes (disproven by crash drills on the liku host; zero-flash
+  confirmed at logon there). Machine restart without a logon still
+  leaves the door down — prefer ssh:// or a Linux host for always-on.
+
 ### Fixed
+
+- The Windows certificate command in the deployment handbook carried two
+  literal tab characters where the `.ukp\tls\` paths were meant (the `\t`
+  of `tls` had collapsed into a tab) — copy-pasting the documented openssl
+  command as printed would write the key and certificate to a wrong path.
+  Caught independently by all three agents of a blind raw-operator replay
+  (the liku operator had silently repaired it by hand); fixed before the
+  handbook's first tarball shipment. The same replay family caught two
+  more stale handbook lines: `ukp register <folder>` (the CLI rejects
+  positional arguments — the canonical form is running `ukp register`
+  from inside the folder) and the resident recipe's "set PATH" step
+  (obsolete since the self-locating launcher; `--print-task`'s generated
+  script carries the correct minimal form).
 
 - Door drift notes no longer send taken names down a dead end: `ukp list`
   now separates door endpoints that merely need importing (bulk-import
@@ -68,6 +96,28 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp serve --print-task` (Windows): prints the resident-door process-manager
+  artifacts — start script (`%USERPROFILE%\.ukp\start-door.cmd`, with the
+  token as a paste-in placeholder and a door.log paper trail), the Task
+  Scheduler command, and the firewall rule — from your current flags, for
+  you to review and apply. Print-only by construction: nothing is
+  installed, started, or supervised, the real token is never read or
+  printed (the blind replay that motivated this showed raw operators
+  guessing at exactly these mechanical steps even with the handbook in
+  hand), and off-loopback doors without TLS or with `--allow-anonymous`
+  are refused at print time because serve would refuse them at task
+  start. `--max-idle` and `--systemd-socket` are rejected alongside it;
+  non-Windows hosts are pointed at systemd socket activation instead.
+- The deployment handbook now ships inside the npm package
+  (`docs/remote-deployment.md`), and `ukp guide remote` resolves its own
+  handbook references with the in-package path plus the public URL.
+  Before, the guide pointed at "the deployment handbook" twice without
+  saying where it was, and the tarball excluded it — an operator with only
+  the installed package could not reach the Windows resident-door recipe
+  (certificate, start script, Task Scheduler) or the systemd
+  socket-activation units at all. (Windows host https-path feedback,
+  2026-09-20: the recipe existed but was reachable only from the
+  repository.)
 - Windows hosts on the ssh:// path: the wake now speaks the host's shell.
   The pinned POSIX wake command is unchanged; when the host's default
   shell is cmd.exe (the Windows OpenSSH default — it cannot parse

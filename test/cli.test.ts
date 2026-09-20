@@ -398,6 +398,16 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("enabling the built-in OpenSSH Server feature once is the low-burden path");
     expect(guide).toContain("Windows has no systemd equivalent");
     expect(guide).toContain("--max-idle <seconds>");
+    // W12: the Windows assembly generator is part of the guide's https
+    // story — print-only, token never printed.
+    expect(guide).toContain("ukp serve --print-task");
+    expect(guide).toContain("never printed");
+    // Handbook locator (2026-09-20 raw-acceptance gap, liku Windows https
+    // feedback): the guide must resolve its own handbook references —
+    // in-package path plus public URL — instead of dangling mentions, and
+    // the tarball ships the handbook alongside (package.json files).
+    expect(guide).toContain("docs/remote-deployment.md");
+    expect(guide).toContain("https://github.com/CatheadOwl/ukp/blob/main/docs/remote-deployment.md");
   });
 
   test("register rejects an explicit ssh:// port (dead grammar since the W9 wake, D-089)", async () => {
