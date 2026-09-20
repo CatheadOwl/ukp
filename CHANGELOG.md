@@ -2,7 +2,7 @@
 
 All notable public changes to UKP will be documented in this file.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-20
 
 ### Added
 
@@ -96,6 +96,14 @@ All notable public changes to UKP will be documented in this file.
   pointer; `ukp guide service` states each dependency and
   provider-optionality fact once (Advanced and Remember lost five
   duplicated lines, kinds folded into the Details step).
+- README accuracy pass (release-review replay findings): the remote
+  quickstart intro no longer claims both paths run "from the consumer
+  machine" (the TLS serve line runs on the host — block comments now say
+  where each command runs); the Not Yet list drops "an HTTP search API"
+  (remote search works over the ukp-remote wire — the formally specified
+  protocol item already owns that boundary); the register row connects
+  `--endpoint`'s assertion to door-import narrowing and documents
+  `--token`.
 - Added `ukp guide remote`, covering host-door setup, SSH and LAN HTTPS
   consumption, expected-name assertions during registration, and the current
   operational boundary that UKP does not yet install or autostart the remote
