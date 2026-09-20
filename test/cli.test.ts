@@ -37,6 +37,7 @@ import { READ_SPEC } from "../src/commands/read.ts";
 import { INIT_SPEC } from "../src/commands/init.ts";
 import { GUIDE_SPEC } from "../src/commands/guide.ts";
 import { LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC } from "../src/commands/inventory.ts";
+import { SERVE_SPEC } from "../src/commands/serve.ts";
 import { INIT_SERVICE_SPEC } from "../src/commands/init.ts";
 import { renderKitHelp, type UkpCommandSpec } from "../src/commands/kit.ts";
 
@@ -404,6 +405,34 @@ describe("CLI bootstrap", () => {
     expect(text).toContain("ssh:// urls take no port");
     expect(text).toContain("register 'ssh://ali' instead");
     expect(text).toContain("ssh config Host alias");
+  });
+
+  // Internal tracking IDs (ADR-/RQ- tokens) never appear in user-facing help
+  // — the serve --help leak was fixed for 0.2.0, and the 0.2.0 acceptance
+  // re-verdict caught the same class surviving in register's help. Sweep
+  // every command help so the class stays dead.
+  test("no command help leaks internal tracking IDs", () => {
+    const helps = [
+      renderHelp(),
+      renderGuideHelp(),
+      renderReadHelp(),
+      renderSearchHelp(),
+      renderRgHelp(),
+      renderNavHelp(),
+      renderUpdateHelp(),
+      renderDiagnoseHelp(),
+      renderInspectHelp(),
+      renderInitHelp(),
+      renderInitServiceHelp(),
+      renderKitHelp(REGISTER_SPEC),
+      renderKitHelp(UNREGISTER_SPEC),
+      renderKitHelp(LIST_SPEC),
+      renderKitHelp(SERVE_SPEC),
+      renderProposeHelp(),
+    ];
+    for (const help of helps) {
+      expect(help, help.slice(0, 80)).not.toMatch(/ADR-[A-Z]*-?\d|RQ-\d/);
+    }
   });
 
   test("guide shows help when -h/--help follows a topic or subtopic", () => {
