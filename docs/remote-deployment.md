@@ -52,8 +52,8 @@ Notes:
   command prepends the standard install locations (`~/.bun/bin`,
   `~/.npm-global/bin`, brew prefixes, then `$PATH`) before exec, so both
   `ukp` and its bun shebang resolve even though `ssh host cmd` runs a bare
-  non-interactive PATH. Verified on ali with a user-prefix npm install
-  (ukp + bun both in `~/.npm-global/bin`, invisible to a bare shell):
+  non-interactive PATH. Verified with a user-prefix npm install (ukp + bun
+  both in `~/.npm-global/bin`, invisible to a bare shell):
   wake register 5.2s, day-2 read 4.8s, no orphans. Only exception:
   nvm-style versioned layouts have no fixed path shape — link once with
   `sudo ln -s "$(command -v ukp)" /usr/local/bin/ukp`.
@@ -108,7 +108,7 @@ only grows: the re-sign keeps everything the certificate already carried
 narrower requests reuse the certificate untouched. Explicit `--tls-cert` certificates carry their own SAN, so
 `--tls-san` next to them is a usage error, not a no-op.
 
-## Windows host (https — resident form, machine-verified on the "liku" host)
+## Windows host (https — resident form)
 
 Windows has no socket-activation equivalent, so the https path on a
 Windows host is the resident form: one-time setup, auto-start at logon,
@@ -180,11 +180,10 @@ between uses — the same zero-maintenance posture as the ssh wake, for the
 consumer-facing https door (Cockpit and Ubuntu's own sshd run this way).
 
 Two user-level units (matches a user-local install). Two systemd facts
-learned the hard way on the ali E2E: **`Environment=` does not expand
+learned the hard way: **`Environment=` does not expand
 `%h`/`$HOME`** (specifiers work in `ExecStart=` paths but NOT inside
 `Environment=` — a literal `%h/...` PATH yields 203/EXEC), and **units
-source no profile** (cf. the install-mode table in the repo's
-daemon-ownership knowledge unit) — so write literal paths:
+source no profile** — so write literal paths:
 
 ```ini
 # ~/.config/systemd/user/ukp-door.socket
@@ -234,8 +233,8 @@ Notes:
 ## Host door (one host, many endpoints — one gesture, zero tokens)
 
 Trust's natural unit is the host, not the endpoint: if you can ssh to a
-machine, per-endpoint tokens are ceremony — and since the on-demand wake
-(W9), you don't even run the door yourself: `ukp register --url ssh://<host>`
+machine, per-endpoint tokens are ceremony — and with the on-demand wake you
+don't even run the door yourself: `ukp register --url ssh://<host>`
 wakes a loopback door (`docker DOCKER_HOST=ssh://` posture — SSH carries
 encryption and auth), imports everything behind it, and the door reaps
 itself when idle:
