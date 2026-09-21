@@ -227,7 +227,7 @@ function diagnoseBinding(
   if (isRemoteBinding(binding)) {
     return {
       status: "failed",
-      message: `remote endpoint '${binding.name}' (${binding.url}): diagnose is local-only in ukp_remote W2; reachability shows in 'ukp list'`,
+      message: `remote endpoint '${binding.name}' (${binding.url}): diagnose is local-only for remote endpoints; reachability shows in 'ukp list'`,
     };
   }
   try {

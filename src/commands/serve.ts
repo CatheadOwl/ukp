@@ -83,7 +83,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "  'ukp register --url ssh://<host>' — zero tokens, docker",
     "  DOCKER_HOST=ssh:// posture). It is not the way to consume a",
     "  same-machine endpoint — register its local path instead.",
-    "  TLS (W5'): pass --tls to serve HTTPS with a self-signed identity",
+    "  TLS: pass --tls to serve HTTPS with a self-signed identity",
     "  (generated under .ukp/tls/ — under the registry directory in door",
     "  mode —, SAN covers this host's addresses; remote clients TOFU-pin it",
     "  at registration and refresh by re-registering), or --tls-cert/--tls-key",

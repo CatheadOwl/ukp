@@ -421,10 +421,12 @@ describe("CLI bootstrap", () => {
     expect(text).toContain("ssh config Host alias");
   });
 
-  // Internal tracking IDs (ADR-/RQ- tokens) never appear in user-facing help
-  // — the serve --help leak was fixed for 0.2.0, and the 0.2.0 acceptance
-  // re-verdict caught the same class surviving in register's help. Sweep
-  // every command help so the class stays dead.
+  // Internal tracking IDs (ADR-/RQ- tokens, workline W-labels) never appear
+  // in user-facing help — the serve --help leak was fixed for 0.2.0, the
+  // 0.2.0 acceptance re-verdict caught the same class surviving in
+  // register's help, and the 0.2.3 first-impression replay caught a W5'
+  // label back in serve's help. Sweep every command help so the class
+  // stays dead.
   test("no command help leaks internal tracking IDs", () => {
     const helps = [
       renderHelp(),
@@ -445,7 +447,7 @@ describe("CLI bootstrap", () => {
       renderProposeHelp(),
     ];
     for (const help of helps) {
-      expect(help, help.slice(0, 80)).not.toMatch(/ADR-[A-Z]*-?\d|RQ-\d/);
+      expect(help, help.slice(0, 80)).not.toMatch(/ADR-[A-Z]*-?\d|RQ-\d|\bW\d+\b/);
     }
   });
 

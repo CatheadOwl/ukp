@@ -66,7 +66,7 @@ function inspectBinding(
   if (isRemoteBinding(binding)) {
     return {
       status: "failed",
-      message: `remote endpoint '${binding.name}' (${binding.url}): inspect deep-dive is local-only in ukp_remote W2; capabilities show in 'ukp list'`,
+      message: `remote endpoint '${binding.name}' (${binding.url}): inspect deep-dive is local-only for remote endpoints; capabilities show in 'ukp list'`,
     };
   }
   try {
