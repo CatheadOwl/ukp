@@ -189,7 +189,7 @@ function executeInitServiceCommand(args: readonly string[], context: InitCommand
         `location: ${result.folder}`,
         "declared_capabilities: -",
         "derived_capabilities: read, nav",
-        "provider_free: rg (if rg is installed)",
+        "base_tier: rg (external tool; active when ripgrep is installed)",
         // Folder-existence probe only (no provider state read): an existing
         // provider index means collections may already be registered — route
         // to the provider-scoped topic instead of naming provider commands

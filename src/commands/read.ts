@@ -66,7 +66,7 @@ const READ_EXIT_BY_ERROR_CLASS: Record<ReadErrorClass, number> = {
  * dispatch and its precedence stay command-side. */
 export const READ_SPEC: UkpCommandSpec = {
   name: "read",
-  summary: "read an endpoint-scoped resource (exact path, ukp:// URI, or docid handoff key)",
+  summary: "read an endpoint-scoped resource (exact path, ukp:// URI, or a docid from search results)",
   group: "endpoint",
   description:
     "Read an endpoint-scoped resource reference from one Service endpoint (endpoint names come from 'ukp list'). "

@@ -34,7 +34,7 @@ function parseServeTokens(raw: string | undefined): string[] {
  * over `/e/<name>/` routing. */
 export const SERVE_SPEC: UkpCommandSpec = {
   name: "serve",
-  summary: "serve one endpoint — or the whole registry as a host door — over HTTP for remote UKP clients",
+  summary: "serve one endpoint — or the whole registry as a host door, one HTTP server for every endpoint — for remote UKP clients",
   group: "operations",
   description:
     "Expose a registered endpoint over HTTP using the ukp-remote wire, or — without --endpoint — serve every local endpoint as one host door routed by name.",

@@ -117,23 +117,23 @@ describe("CLI bootstrap", () => {
   // criteria verbatim.
   test("root help carries the provider gloss and command-role criteria", () => {
     const help = renderHelp();
-    expect(help).toContain("A Service's declared capabilities are backed by a provider (QMD backs search and update today); rg and nav work on endpoint files directly, no provider needed.");
+    expect(help).toContain("A Service's declared capabilities are backed by a provider (QMD, an external tool, backs search and update today); rg and nav work on endpoint files directly, no provider needed.");
     expect(help).toContain("check a Service or endpoints for wiring problems (manifest, provider setup)");
     expect(help).toContain("show which endpoints the current scope selects and their capabilities");
     expect(help).toContain("submit an idempotent change proposal (the write path into a Service)");
   });
 
   // Probe 20260912-root-terminology-gloss (promoted): the second gloss line
-  // defines Service / endpoint / scope. The "-g (every registered endpoint)"
-  // parenthetical was added at ship time in response to the cross-arm finding
-  // that -g was never defined in root help — implicitly verified by the
-  // 2026-09-12 targeted follow-up batch (sweep doc third batch). The scope
-  // gloss now also points at guide client for changing the default
-  // (registered round-3 candidate: "scope how to set, not just what").
+  // defines Service / endpoint / scope. -g is defined in its own clause
+  // (reworded in the 0.2.3 release-face pass — the old "-g (every
+  // registered endpoint)" parenthetical read as garbled to the
+  // first-impression replay). The scope gloss now also points at guide
+  // client for changing the default (registered round-3 candidate: "scope
+  // how to set, not just what").
   test("root help defines Service, endpoint, and scope (with the change pointer)", () => {
     const help = renderHelp();
     expect(help).toContain("A Service is a folder with a manifest (a name plus optional declared capabilities); registering it binds that name as an endpoint you address with --endpoint.");
-    expect(help).toContain("The scope is which endpoints commands use when no --endpoint or -g (every registered endpoint) is given; 'ukp guide client' shows how to set the workspace default.");
+    expect(help).toContain("The scope is which endpoints commands use when no --endpoint is given; -g widens a command to every registered endpoint; 'ukp guide client' shows how to set the workspace default.");
     expect(help).toContain("set your default scope here");
   });
 
@@ -618,7 +618,7 @@ describe("CLI bootstrap", () => {
       expect(output.join("\n")).toContain("name_source: folder-name");
       expect(output.join("\n")).toContain("declared_capabilities: -");
       expect(output.join("\n")).toContain("derived_capabilities: read, nav");
-      expect(output.join("\n")).toContain("provider_free: rg");
+      expect(output.join("\n")).toContain("base_tier: rg");
       expect(output.join("\n")).toContain("next: ukp diagnose");
       expect(output.join("\n")).toContain("next: ukp register");
       expect(output.join("\n")).toContain("optional: ukp guide service qmd");
@@ -1415,10 +1415,38 @@ describe("CLI bootstrap", () => {
     expect(output.join("\n")).toContain("fixture-qmd");
     expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
     expect(output.join("\n")).toContain("capabilities on every endpoint: nav, read");
-    expect(output.join("\n")).toMatch(/fixture-qmd\t.*\tsearch,update/);
+    // Column-aligned rows: two-space gutters, no tab dependence (the single
+    // row pads to its own widths, so name and location end in exactly two
+    // spaces before the next cell).
+    expect(output.join("\n")).toMatch(/fixture-qmd  \S.*  search,update/);
     expect(readFileSync(registryPath, "utf8")).not.toContain("description");
     expect(runCli(["unregister", "fixture-qmd"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(output.at(-1)).toBe("No endpoints registered.");
+  });
+
+  test("list aligns columns by cell width, not terminal tab stops", () => {
+    const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-align-")), "registry.toml");
+    const context = {
+      currentDirectory: fixture,
+      registryPath,
+      resolveProvider: () => ({ supported: true }),
+    };
+    const output: string[] = [];
+    // A no-manifest folder keeps the second row local and degraded — name,
+    // location and capabilities widths all differ from the first row.
+    registerAt(registryPath, "fixture-qmd", fixture);
+    registerAt(registryPath, "ab", mkdtempSync(join(tmpdir(), "ukp-cli-align-b-")));
+    expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
+    const rows = output.join("\n").split("\n").slice(1);
+    expect(rows.length).toBe(2);
+    // Column geometry comes from the widest cell in the column: the location
+    // cell and the (unpadded) capabilities cell start at the same offset on
+    // every row, and no row carries tabs or trailing whitespace.
+    const locationStartAt = rows.map((row) => row.length - row.replace(/^\S+ +/, "").length);
+    const capsStartAt = rows.map((row) => row.lastIndexOf("  ") + 2);
+    expect(new Set(locationStartAt).size).toBe(1);
+    expect(new Set(capsStartAt).size).toBe(1);
+    expect(rows.every((row) => !row.includes("\t") && !/[ \t]+$/.test(row))).toBe(true);
   });
 });
