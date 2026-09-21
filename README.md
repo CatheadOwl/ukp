@@ -27,7 +27,8 @@ $ ukp read ukp://notes/2026/q3-plan.md      # read straight from the reference
 # Q3 Plan
 Goals for Q3: ship the knowledge plane.
 
-$ ukp propose --endpoint notes --id typo-fix --file typo-fix.md   # the write face: declare propose first
+$ echo '[capabilities.propose]' >> .ukp/service.toml   # the write face is opt-in: declare propose
+$ ukp propose --endpoint notes --id typo-fix --file typo-fix.md
 proposal typo-fix created (revision 1)
 ```
 
@@ -53,16 +54,17 @@ predictable scope, and a single command surface. Use UKP when:
   command will touch before running it.
 - Navigate the Markdown structure of an endpoint — folders, descriptions,
   depth — with zero provider dependency.
-- Read endpoint-scoped references through `read/file` — if a file moves,
-  reference recovery re-finds it (git history first, then search). The
+- Read endpoint files through the built-in `read/file` capability — if a
+  file moves, reference recovery re-finds it (git history first, then
+  search). The
   optional `read/qmd` goes through QMD (an external tool — see
   Requirements). `read` and `nav` are derived defaults of every local
   Service.
 - Run base lexical search with `rg` across endpoint files — provider-free
   and on by default, shaped into `read`-ready references.
 - Search one endpoint, a workspace default scope, the whole local Registry,
-  or endpoints you have explicitly declared as its dependencies
-  (authority/context links), with explicit recursion (QMD-backed).
+  or the endpoints a Service lists in its manifest `dependencies` (the
+  `authority` and `context` kinds; recursion is explicit), QMD-backed.
 - Propose changes as an idempotent, reviewable suggestion — the proposal
   lands in the endpoint's inbox and the verdict stays with its owner.
 - Update provider-owned indexes through a stable UKP command (QMD-backed).
@@ -83,8 +85,9 @@ it does not rewrite provider config for you.
 
 Requirements:
 
-- Bun `1.3.14` or newer — npm installs the `ukp` command, but the CLI runs
-  on Bun.
+- Bun `1.3.14` or newer, installed by you — the npm package installs the
+  `ukp` command, but the CLI runs on Bun; when `bun` is missing the command
+  says how to install it instead of showing a stack trace.
 - QMD on `PATH` only for the QMD-backed capabilities (`search/qmd`,
   `read/qmd`, `update/qmd`). QMD is an external tool maintained as a
   separate project; see its own release channel for installation. UKP
@@ -125,8 +128,8 @@ For workspace defaults, use `ukp guide client` and `.ukp/client.toml`.
 
 Grouping below follows `ukp --help`; every command stays a flat
 `ukp <verb>`. `--endpoint <name>` is the canonical endpoint selector
-(`-c` is a compatibility alias); `-g` selects the full local Host Registry
-where supported.
+(`ukp unregister <name>` still takes the endpoint as a positional legacy
+form); `-g` selects the full local Host Registry where supported.
 
 The same five commands work on local and remote endpoints — consuming a
 remote endpoint is a one-command gesture (see below).
@@ -135,8 +138,8 @@ Endpoint commands:
 
 | Command | What it does |
 |---|---|
-| `ukp search` | Indexed search through the endpoint's provider (QMD today); `--recursive` expands endpoints explicitly declared as dependencies (authority/context). Results hand off via `ukp://` references. |
-| `ukp read` | Reads an endpoint-scoped resource — exact path, `ukp://` URI, or `docid` handoff key. |
+| `ukp search` | Indexed search through the endpoint's provider (QMD today); `--recursive` expands the manifest's declared `dependencies` of the `authority` and `context` kinds. Results hand off via `ukp://` references. |
+| `ukp read` | Reads an endpoint-scoped resource — exact path, `ukp://` URI, or a `docid` handed off by search results. |
 | `ukp nav` | Markdown outline of an endpoint (`--depth`, respects `.gitignore`); on by default, configurable via `[capabilities.nav]`. |
 | `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; results become `read`-ready `ukp://` references. A missing rg binary skips the endpoint with a warning (a single-endpoint run exits non-zero). |
 | `ukp propose` | Submits an idempotent change proposal (suggestion box — the owner decides what happens next). Created/unchanged/updated; the revision bumps only on `updated`. |
@@ -146,8 +149,15 @@ Registry commands:
 | Command | What it does |
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings. `ukp register --url <url>` registers a remote endpoint under a local handle — the declared name by default, or `--name <handle>` when that name is already taken (two hosts both declaring `notes` become your `notes` and `ali-notes`); `--endpoint <name>` stays an expected-name assertion on the declared name, and `--token <token>` stores the bearer credential in the binding. Identity is pinned TOFU-style (trust on first use), and self-signed certificates are pinned automatically. A **host door** url imports every endpoint behind it — the `--endpoint` assertion narrows the import to exactly that one endpoint, `--select` narrows to a subset, and re-running refreshes idempotently. |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings — local folders and remote endpoints alike (`ukp register --url`, see Remote in 60 seconds). |
 | `ukp list` | Lists registered endpoints with their declared capabilities. Door drift shows as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture. |
+
+Remote name collisions get a local handle (`--name <handle>` — two hosts both
+declaring `notes` become your `notes` and `ali-notes`); `--endpoint <name>`
+stays an expected-name assertion, `--token` is stored with the binding, and a
+**host door** url imports every endpoint behind it — `--endpoint` narrows
+the import to one, `--select` to a subset, and re-running refreshes
+idempotently.
 
 Operations commands:
 

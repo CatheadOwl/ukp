@@ -52,6 +52,18 @@ All notable public changes to UKP will be documented in this file.
   user. Caught by the 0.2.3 first-impression blind replay; the help guard
   test now sweeps workline labels alongside ADR-/RQ- tokens so the class
   stays dead.
+- Release-face wording pass (0.2.3 homepage and first-impression blind
+  replays): the opening demo shows the declare-propose step before
+  `ukp propose`; the search-scope bullet names the manifest `dependencies`
+  kinds instead of the floating "authority/context links" phrase; the Bun
+  requirement says you install Bun yourself and what a missing `bun`
+  produces; `read/file` is glossed as the built-in file capability; the
+  README's `-c` claim (a flag that never existed) is replaced by the real
+  legacy surface — `ukp unregister <name>`'s positional form; root help
+  glosses QMD as an external tool and gives `-g` its own clause; `serve`'s
+  summary glosses "host door"; `read`'s summary says where a docid comes
+  from; `ukp init service` now calls rg what `ukp diagnose` calls it (the
+  external-tool base tier).
 - The Windows certificate command in the deployment handbook carried two
   literal tab characters where the `.ukp\tls\` paths were meant (the `\t`
   of `tls` had collapsed into a tab) — copy-pasting the documented openssl
