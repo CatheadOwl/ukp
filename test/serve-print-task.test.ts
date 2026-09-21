@@ -196,6 +196,6 @@ describe("serve --print-task guards", () => {
   test("help declares the flag without leaking internal tracking IDs", () => {
     const help = renderServeHelp();
     expect(help).toContain("--print-task");
-    expect(help).not.toMatch(/ADR-|RQ-\d/);
+    expect(help).not.toMatch(/ADR-|RQ-\d|\bW\d+\b/);
   });
 });
