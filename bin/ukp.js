@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cli = join(here, "..", "src", "cli.ts");
@@ -68,15 +68,35 @@ function fail(detail) {
 
 const bunPath = bunCandidates().find((candidate) => existsSync(candidate));
 if (bunPath === undefined) {
-  fail("looked for UKP_BUN, the standard install locations, and PATH");
+  fail("looked at UKP_BUN, the standard install locations, and PATH");
 }
-const result = spawnSync(bunPath, [cli, ...process.argv.slice(2)], {
-  stdio: "inherit",
-  env: process.env,
-});
-if (result.error) {
-  // bunPath existed on disk a moment ago; a spawn failure here is exotic,
-  // but it must still land in the remedy, never a stack trace.
-  fail(`spawning '${bunPath}' failed: ${String(result.error.message ?? result.error)}`);
+
+// In-process handoff when this launcher already runs under bun (bun's own
+// bin links and `bunx`): importing the CLI keeps it in THIS process, where
+// stdout/stderr keep their real TTY identity (columns, isTTY) — a spawnSync
+// grandchild re-inherits duplicated handles, and on some hosts that layer
+// degraded TTY detection (the third dogfood round: progress/wrap silently
+// skipped while a direct run on the same console had both). One process
+// also starts faster. The node-interpreted path (npm shims) keeps spawning.
+if (runningUnderBun) {
+  const { runCli } = await import(pathToFileURL(cli).href);
+  const exit = runCli(process.argv.slice(2));
+  if (exit instanceof Promise) {
+    exit.then((code) => {
+      process.exitCode = code;
+    });
+  } else {
+    process.exitCode = exit;
+  }
+} else {
+  const result = spawnSync(bunPath, [cli, ...process.argv.slice(2)], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (result.error) {
+    // bunPath existed on disk a moment ago; a spawn failure here is exotic,
+    // but it must still land in the remedy, never a stack trace.
+    fail(`spawning '${bunPath}' failed: ${String(result.error.message ?? result.error)}`);
+  }
+  process.exit(result.status === null ? (result.signal !== null ? 130 : 1) : result.status);
 }
-process.exit(result.status === null ? (result.signal !== null ? 130 : 1) : result.status);

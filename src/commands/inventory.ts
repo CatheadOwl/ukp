@@ -36,6 +36,22 @@ export interface InventoryCommandContext {
   resolveProvider?: ProviderResolver;
   /** Test injection point for the ssh binary behind ssh:// transports. */
   sshCommand?: readonly string[];
+  /** Streaming seam (ukp_list W2 / ADR 0026 rule 3): when present, the
+   * remote-mixed branch delivers stdout line-by-line through it — the header
+   * and every local row flush synchronously before any network work starts,
+   * remote rows append in registry order as they resolve — and the returned
+   * result carries an empty stdout (the output already went out on this
+   * channel; writeCommandResult's falsy check skips the final print).
+   * Absent, the full text returns in result.stdout unchanged. The all-local
+   * path never streams: it stays synchronous and byte-identical either
+   * way. */
+  emitStdout?: (line: string) => void;
+  /** Progress seam (ukp_list W2 / ADR 0026 rule 3): self-contained stderr
+   * frames for the remote fetch — the first frame is plain text, updates
+   * carry a leading \r, the final frame clears the line. The wiring layer
+   * injects it only when stderr is a TTY, so piped runs stay silent and
+   * stdout never gains a control character. */
+  emitProgress?: (frame: string) => void;
 }
 
 export interface InventoryCommandResult {
@@ -154,7 +170,7 @@ function renderLocalListRow(endpoint: { name: string; path: string }): Inventory
       name: endpoint.name,
       location: endpoint.path,
       capabilities: "(unavailable)",
-      warning: `endpoint '${endpoint.name}' capabilities unavailable: ${headline}`,
+      warning: `endpoint '${endpoint.name}' declared capabilities unavailable: ${headline}`,
     };
   }
   const extras = Object.keys(service.manifest.capabilities)
@@ -369,6 +385,7 @@ async function executeRegisterRemote(
     const wellKnown = await fetchRegistrationDocument(transport.base, {
       ...(token !== undefined ? { token } : {}),
       ...(pinSelfSigned && tlsProbe !== undefined ? { tlsAnchor: { ca: tlsProbe.certPem } } : {}),
+      displayUrl: parts.origin,
     });
 
     if (wellKnown.kind === "door") {
@@ -538,22 +555,97 @@ export function executeListCommand(
     // byte-identical and synchronous. One transport pool serves the whole
     // invocation (O-5): same-origin door bindings — and their drift check —
     // share a single ssh tunnel.
+    //
+    // Fan-out + streaming (ukp_list W1/W2 / ADR 0026 rules 1 and 3): local
+    // rows flush first — they are registry data in memory, so first output
+    // needs no network at all — then every remote fetch and the drift check
+    // start together (wall clock = max over origins, not the sum;
+    // same-origin acquires converge on the pool's single open promise), and
+    // remote rows append in registry order as they resolve, never rewriting
+    // an already-emitted line. Row order is W2's one agent-visible change:
+    // locals first, then remotes, each group in registry (name-sorted)
+    // order.
     return (async () => {
       const pool = createTransportPool({
         registryPath: context.registryPath,
         ...(context.sshCommand === undefined ? {} : { sshCommand: context.sshCommand }),
       });
       try {
-        const rendered: InventoryListRow[] = [];
-        for (const endpoint of endpoints) {
-          if (!isRemoteBinding(endpoint)) {
-            rendered.push(renderLocalListRow({ name: endpoint.name, path: endpoint.path! }));
-            continue;
-          }
-          rendered.push(await renderRemoteListRow(endpoint, pool));
+        const localRows = endpoints
+          .filter((endpoint) => !isRemoteBinding(endpoint))
+          .map((endpoint) => renderLocalListRow({ name: endpoint.name, path: endpoint.path! }));
+        // Column geometry is decided once, before the first flush, from
+        // every row's registry-known leading cells (ADR 0026 rule 4): only
+        // the last cell depends on the network, so streaming never shifts a
+        // column width.
+        const geometry = listRowGeometry([
+          ...localRows,
+          ...remotes.map((endpoint) => ({ name: remoteRowName(endpoint), location: endpoint.url! })),
+        ]);
+        const lines: string[] = [];
+        // The progress line and the streamed rows share one terminal: a
+        // frame never ends with \n, so the cursor parks at its end — the
+        // next row would print BESIDE the frame and the following \r would
+        // overwrite the row's head (Windows Terminal dogfood finding). The
+        // interlock: every row flush clears the frame first, owns its line,
+        // and lets the next drawProgress redraw on the fresh bottom row.
+        // With no progress channel (piped runs) the clear is a no-op and
+        // the stream is untouched.
+        const progress = context.emitProgress;
+        let progressWidth = 0;
+        const drawProgress = (frame: string) => {
+          if (progress === undefined) return;
+          progress(frame);
+          progressWidth = frame.length;
+        };
+        const clearProgress = () => {
+          if (progress === undefined || progressWidth === 0) return;
+          progress(`\r${" ".repeat(progressWidth)}\r`);
+          progressWidth = 0;
+        };
+        const flush = (line: string) => {
+          clearProgress();
+          lines.push(line);
+          context.emitStdout?.(line);
+        };
+
+        flush(listHeaderLine());
+        for (const row of localRows) flush(renderListLine(row, geometry));
+
+        // Everything network-facing starts only after the local flush — and
+        // the progress line goes out first, so the user never watches a
+        // spinner-less wait. Frames must stay ASCII/narrow and each update
+        // at least as wide as its predecessor: the clear blanks
+        // progressWidth columns, so a wider glyph than code units (or a
+        // shorter update) would leave stale tail cells on a real terminal.
+        drawProgress(`fetching ${remotes.length} remote endpoint(s)...`);
+        const remoteRows = remotes.map((endpoint) => renderRemoteListRow(endpoint, pool));
+        const drift = collectDoorDriftNotes(endpoints, pool);
+
+        const warnings = localRows.flatMap((row) => (row.warning !== undefined ? [row.warning] : []));
+        let done = 0;
+        // Head-of-line emission: the fetches already run concurrently; rows
+        // print in registry order as their predecessors resolve. Each flush
+        // cleared the frame; the update redraws it on the fresh bottom row.
+        for (const row of remoteRows) {
+          const resolved = await row;
+          flush(renderListLine(resolved, geometry));
+          if (resolved.warning !== undefined) warnings.push(resolved.warning);
+          done += 1;
+          if (done < remotes.length) drawProgress(`\rfetching remote endpoint(s): ${done}/${remotes.length}`);
         }
-        const drift = await collectDoorDriftNotes(endpoints, pool);
-        return renderListOutput(rendered, [...collectSameInstanceNotes(endpoints), ...drift]);
+        // Cleared before the drift await (the last row's flush already
+        // blanked the frame): every row is on screen, so the table reads
+        // complete while the stderr footnotes gather — an https door's
+        // drift fetch may be the slowest leg and a spinner under a finished
+        // table would be noise.
+        clearProgress();
+        const stderrLines = [...warnings, ...collectSameInstanceNotes(endpoints), ...(await drift)];
+        return {
+          exitCode: 0,
+          stdout: context.emitStdout === undefined ? lines.join("\n") : "",
+          stderr: stderrLines.length > 0 ? `${stderrLines.join("\n")}\n` : "",
+        };
       } finally {
         pool.close();
       }
@@ -574,20 +666,7 @@ function renderListOutput(
   extraNotes: readonly string[] = [],
 ): InventoryCommandResult {
   const warnings = [...rows.flatMap((row) => (row.warning !== undefined ? [row.warning] : [])), ...extraNotes];
-  // Space-padded columns: each cell pads to the widest same-column cell plus a
-  // two-space gutter (the guide topic list's idiom), last column unpadded so
-  // no line carries trailing whitespace. Tab-separated rows rendered ragged
-  // whenever name/location widths straddled the terminal's tab stops. The
-  // padded columns are registry-known strings (ADR 0026 rule 4): only the
-  // last, unpadded cell depends on the remote fetch.
-  const nameWidth = Math.max(...rows.map((row) => row.name.length));
-  const locationWidth = Math.max(...rows.map((row) => row.location.length));
-  const stdout = [
-    `capabilities on every endpoint: ${DEFAULT_CAPABILITIES.join(", ")} (derived file-native); additional declared capabilities per endpoint:`,
-    ...rows.map((row) =>
-      `${row.name.padEnd(nameWidth)}  ${row.location.padEnd(locationWidth)}  ${row.capabilities}`
-    ),
-  ].join("\n");
+  const stdout = [listHeaderLine(), ...rows.map((row) => renderListLine(row, listRowGeometry(rows)))].join("\n");
   return {
     exitCode: 0,
     stdout,
@@ -595,20 +674,57 @@ function renderListOutput(
   };
 }
 
+function listHeaderLine(): string {
+  // The parenthetical is plain-language by probe verdict (20260921-list-wording):
+  // blank readers parsed "(built-in, from the folder itself)" directly, while
+  // "(derived file-native)" read as undefined jargon.
+  return `capabilities on every endpoint: ${DEFAULT_CAPABILITIES.join(", ")} (built-in, from the folder itself); additional declared capabilities per endpoint:`;
+}
+
+/** Space-padded columns: each cell pads to the widest same-column cell plus
+ * a two-space gutter (the guide topic list's idiom), last column unpadded so
+ * no line carries trailing whitespace. Tab-separated rows rendered ragged
+ * whenever name/location widths straddled the terminal's tab stops. The
+ * padded columns are registry-known strings (ADR 0026 rule 4): only the
+ * last, unpadded cell depends on the remote fetch — so geometry can be
+ * computed before the first flush and streaming never shifts a width. */
+interface ListRowGeometry {
+  nameWidth: number;
+  locationWidth: number;
+}
+
+function listRowGeometry(rows: ReadonlyArray<Pick<InventoryListRow, "name" | "location">>): ListRowGeometry {
+  return {
+    nameWidth: Math.max(...rows.map((row) => row.name.length)),
+    locationWidth: Math.max(...rows.map((row) => row.location.length)),
+  };
+}
+
+function renderListLine(row: InventoryListRow, geometry: ListRowGeometry): string {
+  return `${row.name.padEnd(geometry.nameWidth)}  ${row.location.padEnd(geometry.locationWidth)}  ${row.capabilities}`;
+}
+
+/** The name cell of a remote row — registry-known without any network, so
+ * column geometry and the streamed local flush can lay out before any
+ * fetch resolves. A handle that differs from the declared name
+ * (ADR-REM-007) carries the declaration inline for audit. */
+function remoteRowName(endpoint: RegistryBinding): string {
+  return endpoint.declared_name !== undefined && endpoint.declared_name !== endpoint.name
+    ? `${endpoint.name} (declares ${endpoint.declared_name})`
+    : endpoint.name;
+}
+
 /** Remote row: capabilities from the discovery document; unreachable
  * endpoints degrade to `(unavailable)` + one stderr warning — the same
  * inventory semantics as an unreadable local manifest. Door-form bindings
  * (`ssh://ali/notes`) fetch their per-endpoint document through the shared
- * pool's tunnel. A handle that differs from the declared name (ADR-REM-007)
- * carries the declaration inline for audit. */
+ * pool's tunnel. */
 async function renderRemoteListRow(
   endpoint: RegistryBinding,
   pool: RemoteTransportPool,
 ): Promise<InventoryListRow> {
   const url = endpoint.url!;
-  const name = endpoint.declared_name !== undefined && endpoint.declared_name !== endpoint.name
-    ? `${endpoint.name} (declares ${endpoint.declared_name})`
-    : endpoint.name;
+  const name = remoteRowName(endpoint);
   try {
     const transport = await pool.acquire(endpoint);
     const discovery = await fetchDiscoveryDocument(endpoint, transport, resolveRemoteToken(endpoint));
@@ -624,7 +740,7 @@ async function renderRemoteListRow(
       name,
       location: url,
       capabilities: "(unavailable)",
-      warning: `endpoint '${endpoint.name}' capabilities unavailable: ${headline}`,
+      warning: `endpoint '${endpoint.name}' declared capabilities unavailable: ${headline}`,
     };
   }
 }
@@ -646,7 +762,7 @@ function collectSameInstanceNotes(endpoints: readonly RegistryBinding[]): string
   for (const [uid, handles] of byUid) {
     if (handles.length > 1) {
       notes.push(
-        `note: ${[...handles].sort().map((handle) => `'${handle}'`).join(" and ")} pin the same instance_uid ${uid} — one service under two handles`,
+        `note: ${[...handles].sort().map((handle) => `'${handle}'`).join(" and ")} pin the same instance_uid ${uid} - one service under two handles`,
       );
     }
   }
@@ -691,7 +807,7 @@ async function collectDoorDriftNotes(
         url: origin,
         ...(anchor.tls_cert !== undefined ? { tls_cert: anchor.tls_cert, tls_pin: anchor.tls_pin } : {}),
       });
-      const door = await fetchDoorDocument(transport.base, {});
+      const door = await fetchDoorDocument(transport.base, { displayUrl: transport.displayUrl });
       const unimported = door.doc.endpoints
         .map((endpoint) => endpoint.name)
         .filter((name) => !group.imported.has(name));
@@ -704,12 +820,12 @@ async function collectDoorDriftNotes(
       const taken = unimported.filter((name) => endpoints.some((binding) => binding.name === name));
       if (free.length > 0) {
         notes.push(
-          `door ${origin}: ${free.length} unimported endpoint(s): ${free.join(", ")} — run 'ukp register --url ${origin}' to import`,
+          `door ${origin}: ${free.length} unimported endpoint(s): ${free.join(", ")} - run 'ukp register --url ${origin}' to import`,
         );
       }
       if (taken.length > 0) {
         notes.push(
-          `door ${origin}: name(s) taken: ${taken.join(", ")} — import under another handle: 'ukp register --url ${origin}/<name> --name <handle>'`,
+          `door ${origin}: name(s) taken: ${taken.join(", ")} - import under another handle: 'ukp register --url ${origin}/<name> --name <handle>'`,
         );
       }
     } catch {

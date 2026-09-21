@@ -1,6 +1,9 @@
 import { isIP } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { X509Certificate } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
   DISCOVERY_PATH,
   PROTOCOL_NAME,
@@ -54,6 +57,25 @@ function remoteTimeoutMs(): number {
   return Number.isSafeInteger(value) && value >= 1000 ? value : 60_000;
 }
 
+/** Connection-establishment bound (ADR 0026 rule 2 / D-091): every ssh
+ * process UKP spawns carries ConnectTimeout, so an unreachable host fails
+ * in seconds instead of waiting out the OS TCP timeout — which then
+ * multiplied through the wake ladder's attempts and the serial origin
+ * chain. Default 10s (the Ansible baseline); `UKP_SSH_CONNECT_TIMEOUT_MS`
+ * overrides, mirroring UKP_REMOTE_TIMEOUT_MS. ssh takes whole seconds, so
+ * an integer ms value ≥1000 floors (1500 → 1s); anything else — non-numeric,
+ * fractional, below 1000 — keeps the default. */
+function sshConnectTimeoutSeconds(): number {
+  const raw = process.env.UKP_SSH_CONNECT_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return 10;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= 1000 ? Math.floor(value / 1000) : 10;
+}
+
+function connectTimeoutOptions(): string[] {
+  return ["-o", `ConnectTimeout=${sshConnectTimeoutSeconds()}`];
+}
+
 /** TOFU mismatch policy (RQ-17): `warn` (default) appends a warning and
  * continues; `block` refuses the endpoint until it is explicitly
  * re-registered. */
@@ -64,6 +86,11 @@ function tofuMode(): "warn" | "block" {
 export interface RemoteTransportHandle {
   /** Wire base the client actually fetches (tunnel endpoint or the url itself). */
   base: string;
+  /** The url the caller knows — the registered binding url. Error and remedy
+   * text quotes THIS, never the wire base: a door-endpoint binding's wire
+   * base carries the `/e/<name>` route prefix (and, over ssh, a loopback
+   * tunnel port) that no user ever typed or could act on. */
+  displayUrl: string;
   /** Releases per-invocation resources (kills an ephemeral tunnel); noop for
    * direct connections. */
   close: () => void;
@@ -178,12 +205,13 @@ function tlsAnchorOf(binding: RegistryBinding, options: { registryPath?: string 
 }
 
 function directTransportHandle(
-  binding: RegistryBinding,
+  binding: RegistryBinding & { url: string },
   parts: RemoteUrlParts,
   options: { registryPath?: string },
 ): RemoteTransportHandle {
   return {
     base: parts.origin + wirePrefix(parts.endpointName),
+    displayUrl: binding.url,
     close: () => {},
     ...(tlsAnchorOf(binding, options) !== undefined ? { tls: tlsAnchorOf(binding, options)! } : {}),
   };
@@ -276,6 +304,7 @@ function spawnMuxMaster(
     ...(sshCommand ?? ["ssh"]),
     "-N",
     "-o", "BatchMode=yes",
+    ...connectTimeoutOptions(),
     ...muxCandidateOptions(),
     target,
   ];
@@ -352,6 +381,51 @@ function wrongShellSignature(form: WakeShellForm, diagnostics: string): boolean 
   return /['"]cmd['"]|cmd: (?:command )?not found/i.test(diagnostics);
 }
 
+/** Cross-invocation shell-family cache (ukp_list W1 / L-1, ADR 0026's
+ * implementation-time note): a host's shell family is a static fact, but
+ * learning it costs a full ssh roundtrip per origin per invocation — on
+ * win32 (no ControlMaster) a full TCP+key handshake. Cached beside the
+ * registry (`<registry dir>/wake-shell.toml`, keyed by ssh target), the
+ * probe is skipped when an entry exists. The wake ladder stays the
+ * backstop: a stale entry (host reinstalled under a different shell) costs
+ * one wrong-shell retry, and the successful form is written back — the
+ * cache can only lose time, never correctness. Best-effort by design:
+ * missing/corrupt/unwritable ⇒ re-probe or run uncached. */
+function shellFamilyCachePath(options: { registryPath?: string }): string | undefined {
+  return options.registryPath === undefined ? undefined : join(dirname(options.registryPath), "wake-shell.toml");
+}
+
+function readCachedShellFamily(cachePath: string | undefined, target: string): WakeShellForm | undefined {
+  if (cachePath === undefined) return undefined;
+  try {
+    const parsed = parseToml(readFileSync(cachePath, "utf8")) as { shells?: Record<string, unknown> };
+    const value = parsed.shells?.[target];
+    return value === "posix" || value === "cmd" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistShellFamily(cachePath: string | undefined, target: string, form: WakeShellForm): void {
+  if (cachePath === undefined) return;
+  try {
+    let shells: Record<string, unknown> = {};
+    try {
+      const parsed = parseToml(readFileSync(cachePath, "utf8")) as { shells?: Record<string, unknown> };
+      if (parsed.shells !== undefined && typeof parsed.shells === "object") shells = parsed.shells;
+    } catch {
+      // corrupt or absent: a fresh map replaces whatever was there
+    }
+    // Unchanged value: no write — a per-origin-per-invocation rewrite would
+    // only amplify disk churn and widen the concurrent-writer window.
+    if (shells[target] === form) return;
+    shells[target] = form;
+    writeFileSync(cachePath, stringifyToml({ shells }), { mode: 0o600 });
+  } catch {
+    // unwritable (read-only dir, concurrent writer): run without cache
+  }
+}
+
 /** One cheap, language-independent roundtrip to learn the host shell family
  * BEFORE the first wake attempt (2026-09-20, liku 9.5 finding): cmd.exe
  * expands `%OS%` to `Windows_NT`; a POSIX shell echoes the literal token.
@@ -368,7 +442,7 @@ async function probeHostShellFamily(
   target: string,
 ): Promise<WakeShellForm> {
   const proc = Bun.spawn(
-    [...(options.sshCommand ?? ["ssh"]), "-o", "BatchMode=yes", target, "echo %OS%"],
+    [...(options.sshCommand ?? ["ssh"]), "-o", "BatchMode=yes", ...connectTimeoutOptions(), target, "echo %OS%"],
     { stdout: "pipe", stderr: "pipe", stdin: "ignore" },
   );
   const output = await Promise.race([
@@ -430,7 +504,7 @@ function drainStderrTail(streams: readonly ReadableStream<Uint8Array>[], keep = 
     streams.map((stream) => new Response(stream).text().catch(() => "")),
   ).then((texts) => {
     const text = texts.join("").trim();
-    return text.length > keep ? `…${text.slice(-keep)}` : text;
+    return text.length > keep ? `...${text.slice(-keep)}` : text;
   });
 }
 
@@ -441,11 +515,16 @@ function drainStderrTail(streams: readonly ReadableStream<Uint8Array>[], keep = 
  * abrupt-disconnect orphan). Encryption + host/user auth come from the user's
  * SSH config/keys. `sshCommand` is a test injection point for the ssh binary.
  * Bounded retries absorb a client-chosen remote port colliding with an
- * in-use one (the door fails to bind and the command exits). */
+ * in-use one (the door fails to bind and the command exits).
+ *
+ * Failure messages name the TARGET (an origin-level fact), never an endpoint
+ * label: under fan-out (ADR 0026 rule 1) every same-origin binding shares
+ * this one ladder and its one rejection — the per-endpoint identity belongs
+ * to the caller's row warning ("endpoint '<name>' capabilities unavailable:
+ * …"), which each row supplies itself. */
 async function openSshTunnel(
   parts: { user?: string; host: string },
-  options: { sshCommand?: readonly string[] },
-  endpointLabel: string,
+  options: { sshCommand?: readonly string[]; registryPath?: string },
 ): Promise<{ proc: ReturnType<typeof Bun.spawn>; base: string }> {
   const target = parts.user !== undefined ? `${parts.user}@${parts.host}` : parts.host;
   // Tier 1 first: a detached mux master per origin (no-op when one already
@@ -460,7 +539,8 @@ async function openSshTunnel(
   // Shell form (2026-09-20): probed up front via `echo %OS%` (language-
   // independent — see probeHostShellFamily), POSIX by default; the wrong-
   // shell ladder below remains the backstop for a lying or timed-out probe.
-  let form: WakeShellForm = await probeHostShellFamily(options, target);
+  let form: WakeShellForm = readCachedShellFamily(shellFamilyCachePath(options), target)
+    ?? await probeHostShellFamily(options, target);
   const attempts = 3;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const localPort = await freePort();
@@ -478,6 +558,7 @@ async function openSshTunnel(
       ...(form === "posix" ? ["-tt"] : []),
       "-o", "ExitOnForwardFailure=yes",
       "-o", "BatchMode=yes",
+      ...connectTimeoutOptions(),
       ...(muxDisabled ? [] : muxClientOptions()),
       "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
       target,
@@ -486,6 +567,10 @@ async function openSshTunnel(
     const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
     const stderrTail = drainStderrTail([proc.stdout, proc.stderr]);
     if (await probeWakeReady(`http://127.0.0.1:${localPort}`, WAKE_READY_TIMEOUT_MS, proc)) {
+      // Ground truth for the shell-family cache: the form that actually woke
+      // the door — a probe's first guess, or the ladder's flip past a stale
+      // cache entry, both converge here.
+      persistShellFamily(shellFamilyCachePath(options), target, form);
       return { proc, base: `http://127.0.0.1:${localPort}` };
     }
     proc.kill();
@@ -505,21 +590,21 @@ async function openSshTunnel(
       // Both forms rejected: this is a shell mismatch, not a missing-ukp
       // failure — say so instead of falling into the missing-ukp wording.
       throw new RemoteTransportError(
-        `waking the ukp door on '${target}' (endpoint '${endpointLabel}') failed — the remote shell rejected both wake command forms (POSIX and cmd.exe): ${diagnostics}. Supported host shells: POSIX login shells, cmd.exe default, Git-Bash-style DefaultShell; a powershell DefaultShell is not supported`,
+        `waking the ukp door on '${target}' failed - the remote shell rejected both wake command forms (POSIX and cmd.exe): ${diagnostics}. Supported host shells: POSIX login shells, cmd.exe default, Git-Bash-style DefaultShell; a powershell DefaultShell is not supported`,
       );
     }
     // POSIX login shells print "…: ukp: command not found" (exit 127); Windows
     // OpenSSH under cmd prints "'ukp' is not recognized…" (exit 9009).
     if (exited && /not found|not recognized|exit status 127|status 9009/i.test(diagnostics)) {
       throw new RemoteTransportError(
-        `waking the ukp door on '${target}' (endpoint '${endpointLabel}') failed — the remote shell cannot find 'ukp': ${diagnostics}. Host prerequisite (W9): ssh reachable AND ukp on the remote PATH`,
+        `waking the ukp door on '${target}' failed - the remote shell cannot find 'ukp': ${diagnostics}. Host prerequisite (W9): ssh reachable AND ukp on the remote PATH`,
       );
     }
     if (attempt === attempts) {
       throw new RemoteTransportError(
         exited
-          ? `waking the ukp door on '${target}' (endpoint '${endpointLabel}') failed: ${diagnostics}`
-          : `the ukp door on '${target}' (endpoint '${endpointLabel}') did not become ready within ${WAKE_READY_TIMEOUT_MS / 1000}s; check the host alias and key auth (BatchMode)`,
+          ? `waking the ukp door on '${target}' failed: ${diagnostics}`
+          : `the ukp door on '${target}' did not become ready within ${WAKE_READY_TIMEOUT_MS / 1000}s; check the host alias and key auth (BatchMode)`,
       );
     }
   }
@@ -550,11 +635,12 @@ export async function openRemoteTransport(
     throw new RemoteTransportError(`remote endpoint url is not admissible: ${binding.url}`);
   }
   if (parts.scheme !== "ssh") {
-    return directTransportHandle(binding, parts, options);
+    return directTransportHandle({ ...binding, url: binding.url }, parts, options);
   }
-  const tunnel = await openSshTunnel(parts, options, binding.name);
+  const tunnel = await openSshTunnel(parts, options);
   return {
     base: tunnel.base + wirePrefix(parts.endpointName),
+    displayUrl: binding.url,
     close: () => tunnel.proc.kill(),
   };
 }
@@ -588,13 +674,13 @@ export function createTransportPool(
         throw new RemoteTransportError(`remote endpoint url is not admissible: ${binding.url}`);
       }
       if (parts.scheme !== "ssh") {
-        return directTransportHandle(binding, parts, options);
+        return directTransportHandle({ ...binding, url: binding.url }, parts, options);
       }
       let tunnel = tunnels.get(parts.origin);
       if (tunnel === undefined) {
         // Drop the entry on failure so a retry inside the same invocation
         // spawns fresh instead of re-throwing a stale rejected promise.
-        tunnel = openSshTunnel(parts, options, binding.name).catch((error: unknown) => {
+        tunnel = openSshTunnel(parts, options).catch((error: unknown) => {
           tunnels.delete(parts.origin);
           throw error;
         });
@@ -603,6 +689,7 @@ export function createTransportPool(
       const acquired = await tunnel;
       return {
         base: acquired.base + wirePrefix(parts.endpointName),
+        displayUrl: binding.url,
         close: () => {},
       };
     },
@@ -621,11 +708,11 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
-function unreachableError(url: string, error: unknown): RemoteTransportError {
+function unreachableError(displayUrl: string, error: unknown): RemoteTransportError {
   const code = (error as { code?: unknown }).code;
   const detail = error instanceof Error ? error.message : String(error);
   return new RemoteTransportError(
-    `remote endpoint unreachable: ${url} (${detail}${typeof code === "string" && code !== "" ? ` [${code}]` : ""})`,
+    `remote endpoint unreachable: ${displayUrl} (${detail}${typeof code === "string" && code !== "" ? ` [${code}]` : ""})`,
   );
 }
 
@@ -640,7 +727,7 @@ async function reanchorFromProbe(url: string, anchor: RemoteTlsAnchor): Promise<
   if (probe === undefined) return false;
   if (anchor.pin !== undefined && probe.spkiPin !== anchor.pin) {
     throw new RemoteTransportError(
-      `remote '${anchor.name ?? "endpoint"}' TLS identity changed — pinned ${anchor.pin}, got ${probe.spkiPin}; if the server was reinstalled this is expected: refresh trust with 'ukp register --url <url> --token <token>'`,
+      `remote '${anchor.name ?? "endpoint"}' TLS identity changed - pinned ${anchor.pin}, got ${probe.spkiPin}; if the server was reinstalled this is expected: refresh trust with 'ukp register --url <url> --token <token>'`,
     );
   }
   anchor.ca = probe.certPem;
@@ -657,12 +744,16 @@ async function reanchorFromProbe(url: string, anchor: RemoteTlsAnchor): Promise<
 
 /** Fetch + JSON-decode with one transparent renewal re-anchor: a pinned
  * https anchor turns a certificate-verification fetch failure into a probe —
- * same SPKI keeps going (anchor swapped in place), a different SPKI blocks. */
+ * same SPKI keeps going (anchor swapped in place), a different SPKI blocks.
+ * `displayUrl` (the url the caller knows) replaces the wire url in error
+ * text; without one the wire url itself is the best available label. */
 async function fetchJson(
   url: string,
   init: RequestInit,
   anchor?: RemoteTlsAnchor,
+  displayUrl?: string,
 ): Promise<{ status: number; body: unknown }> {
+  const label = displayUrl ?? url;
   const attempt = async (ca?: string, wrap = true): Promise<{ status: number; body: unknown }> => {
     let response: Response;
     try {
@@ -675,13 +766,13 @@ async function fetchJson(
       // wrap=false keeps the raw error so the anchored caller can classify
       // it (TLS verification failure → re-anchor probe) before wrapping.
       if (!wrap) throw error;
-      throw unreachableError(url, error);
+      throw unreachableError(label, error);
     }
     let body: unknown;
     try {
       body = await response.json();
     } catch {
-      throw new RemoteTransportError(`remote endpoint returned a non-JSON body (status ${response.status}): ${url}`);
+      throw new RemoteTransportError(`remote endpoint returned a non-JSON body (status ${response.status}): ${label}`);
     }
     return { status: response.status, body };
   };
@@ -691,17 +782,17 @@ async function fetchJson(
     return await attempt(anchor.ca, false);
   } catch (error) {
     if (error instanceof RemoteTransportError) throw error; // non-JSON body: not a TLS event
-    if (isTimeoutError(error)) throw unreachableError(url, error);
+    if (isTimeoutError(error)) throw unreachableError(label, error);
     // Re-anchoring needs a pinned identity: only the SPKI pin distinguishes
     // "renewed certificate, same key" from "different identity".
     if (anchor.pin !== undefined && await reanchorFromProbe(url, anchor)) return await attempt(anchor.ca);
-    throw unreachableError(url, error);
+    throw unreachableError(label, error);
   }
 }
 
-function asRecord(body: unknown, url: string): Record<string, unknown> {
+function asRecord(body: unknown, displayUrl: string): Record<string, unknown> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    throw new RemoteTransportError(`remote endpoint returned an unexpected payload shape: ${url}`);
+    throw new RemoteTransportError(`remote endpoint returned an unexpected payload shape: ${displayUrl}`);
   }
   return body as Record<string, unknown>;
 }
@@ -720,6 +811,7 @@ export async function fetchDiscoveryDocument(
   token?: string,
 ): Promise<DiscoveryFetch> {
   return fetchDiscoveryDocumentAt(transport.base, {
+    displayUrl: transport.displayUrl,
     name: binding.name,
     ...(binding.instance_uid !== undefined ? { pinnedUid: binding.instance_uid } : {}),
     ...(token !== undefined ? { token } : {}),
@@ -734,16 +826,17 @@ export async function fetchDiscoveryDocument(
  * (ADR-REM-004 / O-1). */
 async function fetchWellKnownRecord(
   base: string,
-  options: { token?: string; tlsAnchor?: RemoteTlsAnchor },
+  options: { token?: string; tlsAnchor?: RemoteTlsAnchor; displayUrl?: string },
 ): Promise<{ record: Record<string, unknown>; bearerRequired: boolean }> {
   const url = `${base}${DISCOVERY_PATH}`;
-  const { body } = await fetchJson(url, { headers: authorizationHeaders(options.token) }, options.tlsAnchor);
-  const record = asRecord(body, url);
+  const display = options.displayUrl ?? base;
+  const { body } = await fetchJson(url, { headers: authorizationHeaders(options.token) }, options.tlsAnchor, display);
+  const record = asRecord(body, display);
   if (record.protocol !== PROTOCOL_NAME) {
-    throw new RemoteTransportError(`service at ${base} is not a ukp-remote service (protocol: ${String(record.protocol)})`);
+    throw new RemoteTransportError(`service at ${display} is not a ukp-remote service (protocol: ${String(record.protocol)})`);
   }
   if (record.protocol_version !== "1") {
-    throw new RemoteTransportError(`service at ${base} speaks ukp-remote protocol version ${String(record.protocol_version)}; this client supports 1`);
+    throw new RemoteTransportError(`service at ${display} speaks ukp-remote protocol version ${String(record.protocol_version)}; this client supports 1`);
   }
   const schemes = (record.security as { schemes?: unknown } | undefined)?.schemes;
   return { record, bearerRequired: Array.isArray(schemes) && schemes.includes("bearer") };
@@ -756,14 +849,22 @@ async function fetchWellKnownRecord(
  * documents; doors go through `fetchRegistrationDocument`. */
 export async function fetchDiscoveryDocumentAt(
   url: string,
-  options: { name?: string; pinnedUid?: string; token?: string; tlsAnchor?: RemoteTlsAnchor } = {},
+  options: { name?: string; pinnedUid?: string; token?: string; tlsAnchor?: RemoteTlsAnchor; displayUrl?: string } = {},
 ): Promise<DiscoveryFetch> {
   const base = url.replace(/\/+$/, "");
-  const label = options.name ?? base;
-  const { record, bearerRequired } = await fetchWellKnownRecord(base, options);
+  const display = options.displayUrl ?? base;
+  const label = options.name ?? display;
+  const { record, bearerRequired } = await fetchWellKnownRecord(base, {
+    token: options.token,
+    tlsAnchor: options.tlsAnchor,
+    displayUrl: display,
+  });
   if (record.scope === "host") {
+    // The remedy registers the DOOR, not the endpoint path the wire base
+    // carries: derive the origin from the url the caller knows.
+    const doorOrigin = parseRemoteUrl(display)?.origin ?? display;
     throw new RemoteTransportError(
-      `service at ${base} is a host door (scope:"host"); register it with 'ukp register --url ${base}' to import its endpoints`,
+      `service at ${display} is a host door (scope:"host"); register it with 'ukp register --url ${doorOrigin}' to import its endpoints`,
     );
   }
   const warnings: string[] = [];
@@ -815,15 +916,20 @@ export interface DoorFetch {
  * itself carries no identity. */
 export async function fetchDoorDocument(
   url: string,
-  options: { token?: string; tlsAnchor?: RemoteTlsAnchor } = {},
+  options: { token?: string; tlsAnchor?: RemoteTlsAnchor; displayUrl?: string } = {},
 ): Promise<DoorFetch> {
   const base = url.replace(/\/+$/, "");
-  const { record, bearerRequired } = await fetchWellKnownRecord(base, options);
+  const display = options.displayUrl ?? base;
+  const { record, bearerRequired } = await fetchWellKnownRecord(base, {
+    token: options.token,
+    tlsAnchor: options.tlsAnchor,
+    displayUrl: display,
+  });
   if (record.scope !== "host") {
-    throw new RemoteTransportError(`service at ${base} is not a host door (scope: ${String(record.scope)}); register it directly with 'ukp register --url ${base}'`);
+    throw new RemoteTransportError(`service at ${display} is not a host door (scope: ${String(record.scope)}); register it directly with 'ukp register --url ${display}'`);
   }
   return {
-    doc: { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, base) },
+    doc: { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, display) },
     bearerRequired,
   };
 }
@@ -838,15 +944,20 @@ export type RegistrationFetch =
 
 export async function fetchRegistrationDocument(
   url: string,
-  options: { token?: string; tlsAnchor?: RemoteTlsAnchor } = {},
+  options: { token?: string; tlsAnchor?: RemoteTlsAnchor; displayUrl?: string } = {},
 ): Promise<RegistrationFetch> {
   const base = url.replace(/\/+$/, "");
-  const { record, bearerRequired } = await fetchWellKnownRecord(base, options);
+  const display = options.displayUrl ?? base;
+  const { record, bearerRequired } = await fetchWellKnownRecord(base, {
+    token: options.token,
+    tlsAnchor: options.tlsAnchor,
+    displayUrl: display,
+  });
   if (record.scope === "host") {
     return {
       kind: "door",
       door: {
-        doc: { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, base) },
+        doc: { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, display) },
         bearerRequired,
       },
     };
@@ -892,8 +1003,8 @@ export async function remoteSearch(
     method: "POST",
     headers: { "content-type": "application/json", ...authorizationHeaders(token) },
     body: JSON.stringify({ query, limit }),
-  }, transport.tls);
-  const record = asRecord(body, `${base}/v1/search`);
+  }, transport.tls, transport.displayUrl);
+  const record = asRecord(body, transport.displayUrl);
   const envelope = record.endpoints as Array<Record<string, unknown>> | undefined;
   const entry = Array.isArray(envelope) ? envelope[0] : undefined;
 
@@ -969,8 +1080,8 @@ export async function remoteRead(
   if (params.pin !== undefined) search.set("pin", params.pin);
   const { status, body } = await fetchJson(`${base}/v1/read?${search.toString()}`, {
     headers: authorizationHeaders(token),
-  }, transport.tls);
-  const record = asRecord(body, `${base}/v1/read`);
+  }, transport.tls, transport.displayUrl);
+  const record = asRecord(body, transport.displayUrl);
   const error = record.error as { class?: unknown; message?: unknown } | undefined;
   return {
     status,
@@ -1007,8 +1118,8 @@ export async function remoteNav(
   const query = search.size > 0 ? `?${search.toString()}` : "";
   const { status, body } = await fetchJson(`${base}/v1/nav${query}`, {
     headers: authorizationHeaders(token),
-  }, transport.tls);
-  const record = asRecord(body, `${base}/v1/nav`);
+  }, transport.tls, transport.displayUrl);
+  const record = asRecord(body, transport.displayUrl);
   const error = record.error as { class?: unknown; message?: unknown } | undefined;
   // Shape gate (read precedent validates what it consumes): a body claiming
   // the schema but missing the rendered fields would crash the shared
@@ -1084,8 +1195,8 @@ export async function remoteRg(
   for (const arg of params.passthrough) search.append("passthrough", arg);
   const { status, body } = await fetchJson(`${base}/v1/rg?${search.toString()}`, {
     headers: authorizationHeaders(token),
-  }, transport.tls);
-  const record = asRecord(body, `${base}/v1/rg`);
+  }, transport.tls, transport.displayUrl);
+  const record = asRecord(body, transport.displayUrl);
   const error = record.error as { class?: unknown; message?: unknown } | undefined;
 
   if (status === 401) {
@@ -1156,8 +1267,8 @@ export async function remotePropose(
     method: "PUT",
     headers: { "content-type": "text/plain; charset=utf-8", ...authorizationHeaders(token) },
     body: content,
-  }, transport.tls);
-  const record = asRecord(body, url);
+  }, transport.tls, transport.displayUrl);
+  const record = asRecord(body, transport.displayUrl);
   const error = record.error as { class?: unknown; message?: unknown } | undefined;
   const ok = record.schema === "ukp.propose.v1"
     && typeof record.id === "string"

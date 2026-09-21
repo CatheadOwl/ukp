@@ -2,6 +2,7 @@ import { describe, expect, test, afterAll, afterEach, beforeEach } from "bun:tes
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
   assertRemoteUrlAllowed,
   parseRemoteUrl,
@@ -388,7 +389,7 @@ describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
     // endpoint --name form is the remedy. (The shared server registry may
     // serve extra endpoints; only `notes`'s classification matters here.)
     expect(list.stderr).toContain(
-      `door ${info.url}: name(s) taken: notes — import under another handle: 'ukp register --url ${info.url}/<name> --name <handle>'`,
+      `door ${info.url}: name(s) taken: notes - import under another handle: 'ukp register --url ${info.url}/<name> --name <handle>'`,
     );
     expect(list.stderr).not.toContain("unimported endpoint(s): notes");
   });
@@ -458,7 +459,7 @@ describe("door drift notes (view dynamic, ledger static)", () => {
     const drifted = await asResult(executeListCommand([], context));
     expect(drifted.exitCode).toBe(0);
     expect(drifted.stderr).toContain(
-      `door ${info.url}: 1 unimported endpoint(s): pi-dev — run 'ukp register --url ${info.url}' to import`,
+      `door ${info.url}: 1 unimported endpoint(s): pi-dev - run 'ukp register --url ${info.url}' to import`,
     );
     // Rows keep the flat shape; nothing about the registered rows changed.
     expect(drifted.stdout).toMatch(new RegExp(`^notes[ ]{2,}${info.url}/notes[ ]{2,}search$`, "m"));
@@ -651,7 +652,7 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     expect(wakeClient).not.toContain("ControlMaster=auto");
     expect(wakeClient).toContain("ControlPath=~/.ssh/ukp-cm-%r@%h-%p");
     expect(wakeClient!.some((arg) => arg.startsWith("127.0.0.1:"))).toBe(true);
-  });
+  }, 20_000);
 
   test("Tier 1 on win32: no master spawn, no mux options in the wake client", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
@@ -693,4 +694,366 @@ describe("on-demand wake (W9 / ADR-REM-006, Tier 0)", () => {
     // here, not in per-test finally — a test timeout must not leak the spoof.
     Object.defineProperty(process, "platform", { value: originalPlatform });
   });
+});
+
+describe("W1 responsiveness (ukp_list / ADR 0026 rules 1-2): fan-out, bounded connect, shell cache", () => {
+  test("fan-out: origins start together — overlapped probe journals, one tunnel per origin, stdout keeps registry order", async () => {
+    // Two doors on two origins, one endpoint each. The journal shim
+    // (helpers/journal-ssh.mjs) wraps the fake ssh and records every
+    // invocation's start/end in real time; its configuration rides in its
+    // own argv (own-flags idiom), not env — on win32 Bun.spawn children do
+    // not inherit runtime process.env mutations, verified live while
+    // writing this test.
+    const serverA = join(root, "fanout-a-server-registry.toml");
+    const serverB = join(root, "fanout-b-server-registry.toml");
+    registerAt(serverA, "delta", createService("fanout-delta-svc", "delta"));
+    registerAt(serverB, "gamma", createService("fanout-gamma-svc", "gamma"));
+    const clientRegistry = join(root, "fanout-client-registry.toml");
+    const journalPath = join(root, "fanout-journal.jsonl");
+    const logA = join(root, "fanout-a.log");
+    const logB = join(root, "fanout-b.log");
+    const inner = (registry: string, log: string): string[] => [
+      process.execPath,
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
+      "--registry", registry,
+      "--log", log,
+    ];
+    const sshCommand = [
+      process.execPath,
+      join(import.meta.dir, "..", "helpers", "journal-ssh.mjs"),
+      "--journal", journalPath,
+      "--inner", JSON.stringify({
+        "fanout-a-host": inner(serverA, logA),
+        "fanout-b-host": inner(serverB, logB),
+      }),
+    ];
+
+    // Interleaved ledger — locals alpha/zeta around the remotes delta/gamma
+    // in the file; since W2 the printed order is locals-first (each group in
+    // name-sorted registry order), so the assertion pins exactly that split.
+    // Bindings land via direct writes (register --url would spend two full
+    // door-wake cycles on machine-warming this ledger and the budget
+    // belongs to the list).
+    registerAt(clientRegistry, "alpha", createService("fanout-alpha-svc", "alpha"));
+    registerRemoteAt(clientRegistry, { name: "delta", url: "ssh://fanout-a-host/delta", instance_uid: "fanout-delta-uid" });
+    registerAt(clientRegistry, "zeta", createService("fanout-zeta-svc", "zeta"));
+    registerRemoteAt(clientRegistry, { name: "gamma", url: "ssh://fanout-b-host/gamma", instance_uid: "fanout-gamma-uid" });
+
+    // A fresh journal, per-origin logs, and no shell-family cache: the list
+    // must probe each origin once, and those probes are the overlap anchor.
+    for (const file of [journalPath, logA, logB, join(root, "wake-shell.toml")]) rmSync(file, { force: true });
+    const listed = await asResult(executeListCommand([], {
+      currentDirectory: root,
+      registryPath: clientRegistry,
+      sshCommand,
+    }));
+    expect(listed.exitCode).toBe(0);
+    // Locals-first is the printed order since W2 (the one agent-visible
+    // change of that slice); each group keeps registry (name-sorted) order.
+    const handles = listed.stdout.split("\n").slice(1).map((line) => line.trim().split(/\s{2,}/)[0]);
+    expect([...handles].sort()).toEqual(readRegistry(clientRegistry).map((binding) => binding.name).sort());
+    expect(handles).toEqual(["alpha", "zeta", "delta", "gamma"]);
+    // One spawned tunnel per origin (each row + that origin's drift check
+    // converged on the pool's single open promise).
+    expect(readFileSync(logA, "utf8").trim().split("\n").length).toBe(1);
+    expect(readFileSync(logB, "utf8").trim().split("\n").length).toBe(1);
+
+    // THE fan-out anchor, from start lines only (end lines are racy: a
+    // killed wrapper never writes one): both origins' probes started before
+    // EITHER origin's wake began. A serial caller cannot produce this — it
+    // finishes origin A entirely (probe, wake, door ready) before origin B's
+    // first ssh ever spawns, so B's probe would land after A's wake.
+    interface JournalEntry { pid: number; phase: string; argv?: string[] }
+    const journal = readFileSync(journalPath, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as JournalEntry);
+    const isProbeStart = (entry: JournalEntry) =>
+      entry.phase === "start" && entry.argv !== undefined && entry.argv.includes("echo %OS%");
+    const isWakeStart = (entry: JournalEntry) =>
+      entry.phase === "start" && entry.argv !== undefined && entry.argv.some((arg) => arg.includes("ukp serve"));
+    expect(journal.filter(isProbeStart).length).toBe(2);
+    expect(journal.filter(isWakeStart).length).toBe(2);
+    const lastProbeStart = Math.max(...journal.map((entry, index) => isProbeStart(entry) ? index : -1));
+    const firstWakeStart = Math.min(...journal.map((entry, index) => isWakeStart(entry) ? index : journal.length));
+    expect(lastProbeStart).toBeLessThan(firstWakeStart);
+  }, 40_000);
+
+  test("bounded connect: every spawned ssh carries ConnectTimeout (default 10s; UKP_SSH_CONNECT_TIMEOUT_MS overrides)", async () => {
+    const boundServerRegistry = join(root, "bound-server-registry.toml");
+    registerAt(boundServerRegistry, "notes", createService("bound-notes-svc", "notes"));
+    const clientRegistry = join(root, "bound-client-registry.toml");
+    const dumpPath = join(root, "bound-fake-ssh.jsonl");
+    rmSync(dumpPath, { force: true });
+    const sshCommand = [
+      process.execPath,
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
+      "--dump", dumpPath,
+      "--registry", boundServerRegistry,
+    ];
+    const binding = { name: "notes", kind: "remote" as const, url: "ssh://bound-host/notes" };
+
+    const transport = await openRemoteTransport(binding, { sshCommand, registryPath: clientRegistry });
+    try {
+      const fetched = await fetchDiscoveryDocument(binding, transport);
+      expect(fetched.doc.name).toBe("notes");
+    } finally {
+      transport.close();
+    }
+    // Every spawn site (shell probe, wake client, and the Tier-1 mux master
+    // where the platform allows it) carries the bound — that is the whole
+    // point: no UKP-spawned ssh may wait out the OS TCP timeout. The dump
+    // lines are raw argv JSON, so assert the exact element: a substring
+    // check would let "ConnectTimeout=1" hide inside "ConnectTimeout=10".
+    let argvs = readFileSync(dumpPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    expect(argvs.length).toBeGreaterThan(0);
+    for (const argv of argvs) expect(argv).toContain("ConnectTimeout=10");
+
+    const dumpPathOverride = join(root, "bound-fake-ssh-override.jsonl");
+    rmSync(dumpPathOverride, { force: true });
+    const sshCommandOverride = [
+      process.execPath,
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
+      "--dump", dumpPathOverride,
+      "--registry", boundServerRegistry,
+    ];
+    const previous = process.env.UKP_SSH_CONNECT_TIMEOUT_MS;
+    process.env.UKP_SSH_CONNECT_TIMEOUT_MS = "1500";
+    try {
+      const second = await openRemoteTransport(binding, { sshCommand: sshCommandOverride, registryPath: clientRegistry });
+      try {
+        const fetched = await fetchDiscoveryDocument(binding, second);
+        expect(fetched.doc.name).toBe("notes");
+      } finally {
+        second.close();
+      }
+    } finally {
+      if (previous === undefined) delete process.env.UKP_SSH_CONNECT_TIMEOUT_MS;
+      else process.env.UKP_SSH_CONNECT_TIMEOUT_MS = previous;
+    }
+    const overrideLines = readFileSync(dumpPathOverride, "utf8").trim().split("\n");
+    expect(overrideLines.length).toBeGreaterThan(0);
+    const overrideArgvs = overrideLines.map((line) => JSON.parse(line) as string[]);
+    for (const argv of overrideArgvs) expect(argv).toContain("ConnectTimeout=1");
+  }, 30_000);
+
+  test("shell-family cache (L-1): the second invocation skips the %OS% probe; a stale entry costs one ladder attempt and self-heals", async () => {
+    const cacheServerRegistry = join(root, "shell-cache-server-registry.toml");
+    registerAt(cacheServerRegistry, "notes", createService("shell-cache-notes-svc", "notes"));
+    const clientRegistry = join(root, "shell-cache-client-registry.toml");
+    const dumpPath = join(root, "shell-cache-fake-ssh.jsonl");
+    rmSync(dumpPath, { force: true });
+    const sshCommand = [
+      process.execPath,
+      join(import.meta.dir, "..", "helpers", "fake-ssh.mjs"),
+      "--dump", dumpPath,
+      "--registry", cacheServerRegistry,
+    ];
+    const binding = { name: "notes", kind: "remote" as const, url: "ssh://cache-host/notes" };
+    // The cache lives beside whatever registry the caller carries — all test
+    // registries share one temp dir, so assert by key, never by whole-file
+    // equality (other tests' targets may ride in the same file).
+    const cachePath = join(root, "wake-shell.toml");
+    const probeLines = () => readFileSync(dumpPath, "utf8").split("\n").filter((line) => line.includes("echo %OS%")).length;
+    const wakeLines = () => readFileSync(dumpPath, "utf8").split("\n").filter((line) => line.includes("ukp serve")).length;
+    const cachedForm = () =>
+      (parseToml(readFileSync(cachePath, "utf8")) as { shells?: Record<string, unknown> }).shells?.["cache-host"];
+
+    // First invocation: no cache — one probe, one wake, the form persists.
+    const first = await openRemoteTransport(binding, { sshCommand, registryPath: clientRegistry });
+    try {
+      await fetchDiscoveryDocument(binding, first);
+    } finally {
+      first.close();
+    }
+    expect(probeLines()).toBe(1);
+    expect(wakeLines()).toBe(1);
+    expect(cachedForm()).toBe("posix");
+
+    // Second invocation: cache hit — the probe never runs, the wake works.
+    const second = await openRemoteTransport(binding, { sshCommand, registryPath: clientRegistry });
+    try {
+      await fetchDiscoveryDocument(binding, second);
+    } finally {
+      second.close();
+    }
+    expect(probeLines()).toBe(1);
+    expect(wakeLines()).toBe(2);
+
+    // Stale entry (host reinstalled under a different shell): the cache's
+    // lie is used without a probe, the first wake is rejected, the ladder
+    // flips, and the WORKING form is written back — cache loses time,
+    // never correctness.
+    const current = parseToml(readFileSync(cachePath, "utf8")) as { shells?: Record<string, unknown> };
+    writeFileSync(
+      cachePath,
+      stringifyToml({ shells: { ...current.shells, "cache-host": "cmd" } }),
+      "utf8",
+    );
+    const third = await openRemoteTransport(binding, { sshCommand, registryPath: clientRegistry });
+    try {
+      await fetchDiscoveryDocument(binding, third);
+    } finally {
+      third.close();
+    }
+    expect(probeLines()).toBe(1);
+    expect(wakeLines()).toBe(4);
+    expect(cachedForm()).toBe("posix");
+  }, 40_000);
+
+  test("dead origin: each row degrades under its own name (no sibling leak through the shared ladder), exit stays 0", async () => {
+    // An ssh that dies instantly, like a real ssh against an unreachable
+    // host after ConnectTimeout: no forward, no diagnostics of any
+    // recognized class — the ladder exhausts quickly and the origin
+    // degrades. Two same-origin bindings pin the fan-out failure shape:
+    // both rows share the origin's ONE rejected ladder, so a warning that
+    // embedded the first acquirer's endpoint label would leak it into the
+    // sibling's warning (the review finding that removed endpoint labels
+    // from transport messages — the target is origin-level fact).
+    const deadSsh = join(root, "fake-ssh-dead.mjs");
+    writeFileSync(
+      deadSsh,
+      `console.error("ssh: connect to host 'dead-host' port 22: Connection timed out");\nprocess.exit(255);\n`,
+      "utf8",
+    );
+    const clientRegistry = join(root, "dead-client-registry.toml");
+    registerAt(clientRegistry, "alpha", createService("dead-alpha-svc", "alpha"));
+    registerRemoteAt(clientRegistry, { name: "delta", url: "ssh://dead-host/delta", instance_uid: "dead-delta-uid" });
+    registerRemoteAt(clientRegistry, { name: "gamma", url: "ssh://dead-host/gamma", instance_uid: "dead-gamma-uid" });
+
+    const listed = await asResult(executeListCommand([], {
+      currentDirectory: root,
+      registryPath: clientRegistry,
+      sshCommand: [process.execPath, deadSsh],
+    }));
+    expect(listed.exitCode).toBe(0);
+    const handles = listed.stdout.split("\n").slice(1).map((line) => line.trim().split(/\s{2,}/)[0]);
+    expect(handles).toEqual(["alpha", "delta", "gamma"]);
+    expect(listed.stdout).toMatch(/^delta\s+ssh:\/\/dead-host\/delta\s+\(unavailable\)$/m);
+    expect(listed.stdout).toMatch(/^gamma\s+ssh:\/\/dead-host\/gamma\s+\(unavailable\)$/m);
+    const warnings = listed.stderr.split("\n");
+    const deltaWarning = warnings.find((line) => line.startsWith("endpoint 'delta'"));
+    const gammaWarning = warnings.find((line) => line.startsWith("endpoint 'gamma'"));
+    expect(deltaWarning).toContain("waking the ukp door on 'dead-host' failed");
+    expect(gammaWarning).toContain("waking the ukp door on 'dead-host' failed");
+    expect(deltaWarning).not.toContain("gamma");
+    expect(gammaWarning).not.toContain("delta");
+  }, 20_000);
+});
+
+describe("W2 streaming (ukp_list / ADR 0026 rule 3): locals-first, line-by-line, TTY-gated progress", () => {
+  test("header + local rows flush before any network; remote rows append in order; streamed text equals the returned text", async () => {
+    // A loopback door on its OWN server registry (the shared one grows as
+    // other tests exercise door drift) — no ssh, fetches are fast, so
+    // ordering is asserted from the emission sequence, not the wall clock.
+    const streamServerRegistry = join(root, "stream-server-registry.toml");
+    registerAt(streamServerRegistry, "notes", createService("stream-notes-svc", "notes"));
+    registerAt(streamServerRegistry, "archive", createService("stream-archive-svc", "archive"));
+    const { info } = startDoor({ registryPath: streamServerRegistry });
+    const clientRegistry = join(root, "stream-client-registry.toml");
+    registerAt(clientRegistry, "alpha", createService("stream-alpha-svc", "alpha"));
+    registerAt(clientRegistry, "zeta", createService("stream-zeta-svc", "zeta"));
+    const registered = await asResult(executeRegisterCommand(["--url", info.url], { currentDirectory: root, registryPath: clientRegistry }));
+    expect(registered.exitCode).toBe(0);
+    // A dead loopback binding rides along (connection refused, instant): the
+    // streaming path must also carry degraded remotes — `(unavailable)` row
+    // in order plus its stderr warning after the table.
+    registerRemoteAt(clientRegistry, { name: "a-dead", url: "http://127.0.0.1:1/a-dead", instance_uid: "stream-dead-uid" });
+
+    const emitted: string[] = [];
+    const progressFrames: string[] = [];
+    const pending = executeListCommand([], {
+      currentDirectory: root,
+      registryPath: clientRegistry,
+      emitStdout: (line) => { emitted.push(line); },
+      emitProgress: (frame) => { progressFrames.push(frame); },
+    });
+    // THE streaming contract, deterministic without any sleep: the command
+    // runs synchronously up to its first await, and by design that point
+    // sits AFTER the local flush and BEFORE any network work — remote rows
+    // cannot have been emitted yet, and the first progress frame is out.
+    expect(emitted[0]).toContain("capabilities on every endpoint:");
+    const localFlush = emitted.join("\n");
+    expect(localFlush).toContain("alpha");
+    expect(localFlush).toContain("zeta");
+    expect(localFlush).not.toContain("archive");
+    expect(localFlush).not.toContain("notes");
+    expect(localFlush).not.toContain("a-dead");
+    expect(progressFrames).toEqual(["fetching 3 remote endpoint(s)..."]);
+
+    const listed = await asResult(pending);
+    expect(listed.exitCode).toBe(0);
+    // Streamed delivery: the channel already carried the output, so the
+    // returned stdout is empty (writeCommandResult's falsy check then
+    // skips the final print — no double emission).
+    expect(listed.stdout).toBe("");
+    const handles = emitted.slice(1).map((line) => line.trim().split(/\s{2,}/)[0]);
+    // Locals-first, then remotes in name-sorted registry order — the dead
+    // binding degrades inline, not out of order.
+    expect(handles).toEqual(["alpha", "zeta", "a-dead", "archive", "notes"]);
+    expect(emitted.find((line) => line.startsWith("a-dead"))).toContain("(unavailable)");
+    // Warnings ride stderr after the table (grouped with the rows:
+    // locals, then remotes). The warning quotes the REGISTERED binding url
+    // — the wire route (`/e/<name>` prefix) the transport actually fetched
+    // never reaches the reader.
+    expect(listed.stderr).toContain("endpoint 'a-dead' declared capabilities unavailable");
+    expect(listed.stderr).toContain("http://127.0.0.1:1/a-dead");
+    expect(listed.stderr).not.toContain("/e/");
+    // Streamed stdout lines never carry control characters (progress rides
+    // the stderr channel only)…
+    for (const line of emitted) expect(line).not.toMatch(/[\r\x1b]/);
+    // …the first frame announces the count, the final frame clears the
+    // line, and THE INTERLOCK holds: every remote row's flush cleared the
+    // frame before emitting (a frame without a trailing \n would otherwise
+    // let the row print beside it, and the next \r overwrite the row's
+    // head — the Windows Terminal dogfood finding that added the
+    // clear-before-flush rule).
+    expect(progressFrames[0]).toBe("fetching 3 remote endpoint(s)...");
+    expect(progressFrames.filter((frame) => /^\r *\r$/.test(frame)).length).toBe(3);
+    expect(progressFrames.filter((frame) => frame.startsWith("\rfetching")).length).toBe(2);
+    expect(progressFrames[progressFrames.length - 1]).toMatch(/^\r +\r$/);
+
+    // Byte-equality: the un-injected form (tests, non-streaming callers)
+    // returns exactly what the stream delivered, in the same locals-first
+    // order.
+    const piped = await asResult(executeListCommand([], { currentDirectory: root, registryPath: clientRegistry }));
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout).toBe(emitted.join("\n"));
+    expect(piped.stderr).toBe(listed.stderr);
+
+    // Virtual terminal: both channels feed ONE surface, \r modeled as
+    // cursor return with in-place overwrite (tail preserved — the exact
+    // corruption semantics). After the interlock, no rendered line mixes a
+    // table row with progress fragments or overwritten tails.
+    const rendered: string[] = [""];
+    let column = 0;
+    const write = (text: string) => {
+      for (const character of text) {
+        const last = rendered.length - 1;
+        if (character === "\r") {
+          column = 0;
+          continue;
+        }
+        if (character === "\n") {
+          rendered.push("");
+          column = 0;
+          continue;
+        }
+        rendered[last] = rendered[last].slice(0, column) + character + rendered[last].slice(column + 1);
+        column += 1;
+      }
+    };
+    const vt = await asResult(executeListCommand([], {
+      currentDirectory: root,
+      registryPath: clientRegistry,
+      emitStdout: (line) => write(`${line}\n`),
+      emitProgress: write,
+    }));
+    expect(vt.exitCode).toBe(0);
+    for (const line of rendered) {
+      const carriesRow = line.includes("ssh://") || line.includes("http://") || line.includes("capabilities on every endpoint");
+      const carriesFrame = line.includes("fetching");
+      expect(carriesRow && carriesFrame).toBe(false);
+    }
+    expect(rendered.filter((line) => line.includes("archive")).length).toBe(1);
+    expect(rendered.some((line) => line.trim() === "")).toBe(true); // cleared frame row ends blank
+  }, 20_000);
 });
