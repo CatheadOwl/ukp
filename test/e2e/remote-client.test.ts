@@ -519,8 +519,10 @@ describe("ukp list with remote rows", () => {
     registerRemoteAt(registryPath, { name: "dead-remote", url: "http://127.0.0.1:9" });
     const result = await asResult(executeListCommand([], { currentDirectory: root, registryPath }));
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(`serve-fixture\thttp://127.0.0.1:${info.port}\tsearch`);
-    expect(result.stdout).toContain("dead-remote\thttp://127.0.0.1:9\t(unavailable)");
+    // Column-aligned rows: cells separated by two-or-more spaces (padding to
+    // the widest same-column cell), never by tab stops.
+    expect(result.stdout).toMatch(new RegExp(`^serve-fixture[ ]{2,}http://127\\.0\\.0\\.1:${info.port}[ ]{2,}search$`, "m"));
+    expect(result.stdout).toMatch(/^dead-remote[ ]{2,}http:\/\/127\.0\.0\.1:9[ ]{2,}\(unavailable\)$/m);
     expect(result.stderr).toContain("dead-remote");
   });
 });

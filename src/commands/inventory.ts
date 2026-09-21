@@ -126,7 +126,23 @@ const DEFAULT_CAPABILITIES = (Object.keys(FILE_NATIVE_CAPABILITIES) as Array<key
   .filter((name) => FILE_NATIVE_CAPABILITIES[name].derived)
   .sort();
 
-function renderLocalListRow(endpoint: { name: string; path: string }): { line: string; warning?: string } {
+/** One list row as structured cells — column geometry is decided once, in
+ * renderListOutput, from every row's actual widths (raw tab stops made the
+ * columns land on a different multiple-of-8 per row once names, paths and
+ * urls of very different widths mixed). */
+interface InventoryListRow {
+  /** Endpoint handle; a remote handle that differs from its declared name
+   * carries the declaration inline (`name (declares X)`). */
+  name: string;
+  /** Local folder path or remote binding url. */
+  location: string;
+  /** Comma-separated declared extras, `-` for none, `(unavailable)` on
+   * degraded rows. */
+  capabilities: string;
+  warning?: string;
+}
+
+function renderLocalListRow(endpoint: { name: string; path: string }): InventoryListRow {
   let service;
   try {
     service = loadManifest(endpoint.path);
@@ -135,14 +151,16 @@ function renderLocalListRow(endpoint: { name: string; path: string }): { line: s
     // when the underlying ManifestError carries a full zod schema dump.
     const headline = (error instanceof Error ? error.message : String(error)).split("\n")[0];
     return {
-      line: `${endpoint.name}\t${endpoint.path}\t(unavailable)`,
+      name: endpoint.name,
+      location: endpoint.path,
+      capabilities: "(unavailable)",
       warning: `endpoint '${endpoint.name}' capabilities unavailable: ${headline}`,
     };
   }
   const extras = Object.keys(service.manifest.capabilities)
     .filter((name) => !(isFileNativeCapability(name) && FILE_NATIVE_CAPABILITIES[name].derived))
     .sort();
-  return { line: `${endpoint.name}\t${endpoint.path}\t${extras.length > 0 ? extras.join(",") : "-"}` };
+  return { name: endpoint.name, location: endpoint.path, capabilities: extras.length > 0 ? extras.join(",") : "-" };
 }
 
 export function executeRegisterCommand(
@@ -526,7 +544,7 @@ export function executeListCommand(
         ...(context.sshCommand === undefined ? {} : { sshCommand: context.sshCommand }),
       });
       try {
-        const rendered: Array<{ line: string; warning?: string }> = [];
+        const rendered: InventoryListRow[] = [];
         for (const endpoint of endpoints) {
           if (!isRemoteBinding(endpoint)) {
             rendered.push(renderLocalListRow({ name: endpoint.name, path: endpoint.path! }));
@@ -552,13 +570,23 @@ export function executeListCommand(
 }
 
 function renderListOutput(
-  rows: ReadonlyArray<{ line: string; warning?: string }>,
+  rows: ReadonlyArray<InventoryListRow>,
   extraNotes: readonly string[] = [],
 ): InventoryCommandResult {
   const warnings = [...rows.flatMap((row) => (row.warning !== undefined ? [row.warning] : [])), ...extraNotes];
+  // Space-padded columns: each cell pads to the widest same-column cell plus a
+  // two-space gutter (the guide topic list's idiom), last column unpadded so
+  // no line carries trailing whitespace. Tab-separated rows rendered ragged
+  // whenever name/location widths straddled the terminal's tab stops. The
+  // padded columns are registry-known strings (ADR 0026 rule 4): only the
+  // last, unpadded cell depends on the remote fetch.
+  const nameWidth = Math.max(...rows.map((row) => row.name.length));
+  const locationWidth = Math.max(...rows.map((row) => row.location.length));
   const stdout = [
     `capabilities on every endpoint: ${DEFAULT_CAPABILITIES.join(", ")} (derived file-native); additional declared capabilities per endpoint:`,
-    ...rows.map((row) => row.line),
+    ...rows.map((row) =>
+      `${row.name.padEnd(nameWidth)}  ${row.location.padEnd(locationWidth)}  ${row.capabilities}`
+    ),
   ].join("\n");
   return {
     exitCode: 0,
@@ -576,11 +604,11 @@ function renderListOutput(
 async function renderRemoteListRow(
   endpoint: RegistryBinding,
   pool: RemoteTransportPool,
-): Promise<{ line: string; warning?: string }> {
+): Promise<InventoryListRow> {
   const url = endpoint.url!;
-  const declaredNote = endpoint.declared_name !== undefined && endpoint.declared_name !== endpoint.name
-    ? ` (declares ${endpoint.declared_name})`
-    : "";
+  const name = endpoint.declared_name !== undefined && endpoint.declared_name !== endpoint.name
+    ? `${endpoint.name} (declares ${endpoint.declared_name})`
+    : endpoint.name;
   try {
     const transport = await pool.acquire(endpoint);
     const discovery = await fetchDiscoveryDocument(endpoint, transport, resolveRemoteToken(endpoint));
@@ -589,11 +617,13 @@ async function renderRemoteListRow(
       .map(([name]) => name)
       .sort();
     const warnings = discovery.warnings.length > 0 ? { warning: discovery.warnings.join("; ") } : {};
-    return { line: `${endpoint.name}${declaredNote}\t${url}\t${extras.length > 0 ? extras.join(",") : "-"}`, ...warnings };
+    return { name, location: url, capabilities: extras.length > 0 ? extras.join(",") : "-", ...warnings };
   } catch (error) {
     const headline = (error instanceof Error ? error.message : String(error)).split("\n")[0];
     return {
-      line: `${endpoint.name}${declaredNote}\t${url}\t(unavailable)`,
+      name,
+      location: url,
+      capabilities: "(unavailable)",
       warning: `endpoint '${endpoint.name}' capabilities unavailable: ${headline}`,
     };
   }

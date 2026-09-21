@@ -90,14 +90,6 @@ All notable public changes to UKP will be documented in this file.
   binding — those get the single-endpoint remedy
   (`ukp register --url <door>/<name> --name <handle>`), because the bulk
   import would skip them again.
-- `ukp list` rows are column-aligned again: cells pad to the widest cell
-  in their column (two-space gutter, last column unpadded). The rows had
-  been tab-separated, so alignment was left to the terminal's tab stops —
-  with the registry now mixing short names, long local paths and remote
-  urls, every row landed its columns on different stops and the table
-  read ragged. Row semantics (flat shape, `(unavailable)` degradation,
-  `(declares X)` annotations, stderr notes) are unchanged; a regression
-  test pins the shared column offsets.
 
 ## [0.2.2] - 2026-09-20
 
@@ -144,6 +136,20 @@ All notable public changes to UKP will be documented in this file.
   every command help for ADR-/RQ- tokens so the class stays dead.
 
 ## [Unreleased]
+
+### Fixed
+
+- `ukp list` rows become column-aligned: cells pad to the widest cell in
+  their column (two-space gutter, last column unpadded). The rows are
+  tab-separated today, so alignment is left to the terminal's tab stops —
+  with the registry mixing short names, long local paths and remote urls,
+  every row lands its columns on different stops and the table reads
+  ragged. Row semantics (flat shape, `(unavailable)` degradation,
+  `(declares X)` annotations, stderr notes) are unchanged; a regression
+  test pins the shared column offsets. (Rides 0.2.4 per the post-publish
+  ruling: an entry for this briefly sat in the 0.2.3 notes while its
+  implementation had not entered history — e67b096 excised the tests; the
+  implementation re-lands with them via the ukp_list workline.)
 
 ## [0.2.0] - 2026-09-20
 

@@ -260,7 +260,7 @@ describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
 
     const list = await asResult(executeListCommand([], context));
     expect(list.exitCode).toBe(0);
-    expect(list.stdout).toContain(`ali-notes (declares notes)\t${info.url}/notes\tsearch`);
+    expect(list.stdout).toMatch(new RegExp(`^ali-notes \\(declares notes\\)[ ]{2,}${info.url}/notes[ ]{2,}search$`, "m"));
     // Drift accounts by declared names: notes IS imported (as ali-notes);
     // only archive counts as unimported.
     expect(list.stderr).toContain(`door ${info.url}: 1 unimported endpoint(s): archive`);
@@ -404,7 +404,7 @@ describe("naming residence (W11 / ADR-REM-007 / D-086)", () => {
     expect(list.stderr).toContain("'ali-notes' and 'mirror-notes' pin the same instance_uid");
     expect(list.stderr).toContain("one service under two handles");
     // The declared annotation survives row degradation (unreachable mirror).
-    expect(list.stdout).toContain("mirror-notes (declares notes)\t");
+    expect(list.stdout).toMatch(/^mirror-notes \(declares notes\)[ ]{2,}https:\/\/mirror\.example\/notes[ ]{2,}\(unavailable\)$/m);
     expect(list.stdout).toContain("(unavailable)");
   });
 });
@@ -416,8 +416,8 @@ describe("day-2 through the door (byte-identical remote usage)", () => {
 
     const list = await asResult(executeListCommand([], context));
     expect(list.exitCode).toBe(0);
-    expect(list.stdout).toContain(`notes\t${info.url}/notes\tsearch`);
-    expect(list.stdout).toContain(`archive\t${info.url}/archive\tsearch`);
+    expect(list.stdout).toMatch(new RegExp(`^notes[ ]{2,}${info.url}/notes[ ]{2,}search$`, "m"));
+    expect(list.stdout).toMatch(new RegExp(`^archive[ ]{2,}${info.url}/archive[ ]{2,}search$`, "m"));
     expect(list.stderr).toBe("");
 
     const search = await asResult(executeSearchCommand(["fixture-cad-search-token", "--endpoint", "notes"], context));
@@ -461,7 +461,7 @@ describe("door drift notes (view dynamic, ledger static)", () => {
       `door ${info.url}: 1 unimported endpoint(s): pi-dev — run 'ukp register --url ${info.url}' to import`,
     );
     // Rows keep the flat shape; nothing about the registered rows changed.
-    expect(drifted.stdout).toContain(`notes\t${info.url}/notes\tsearch`);
+    expect(drifted.stdout).toMatch(new RegExp(`^notes[ ]{2,}${info.url}/notes[ ]{2,}search$`, "m"));
 
     const resolved = await asResult(executeRegisterCommand(["--url", info.url, "--select", "pi-dev"], context));
     expect(resolved.exitCode).toBe(0);
@@ -510,7 +510,7 @@ describe("ssh transport pooling (W7 / O-5) on the wake path (W9)", () => {
 
     const listed = await asResult(executeListCommand([], { ...context, sshCommand }));
     expect(listed.exitCode).toBe(0);
-    expect(listed.stdout).toContain(`notes\t${origin}/notes\tsearch`);
+    expect(listed.stdout).toMatch(new RegExp(`^notes[ ]{2,}${origin}/notes[ ]{2,}search$`, "m"));
     // The invocation seam, proven: two invocations, two wake tunnels — the
     // three same-origin fetches inside list (2 rows + 1 door check) shared one.
     const log = readFileSync(logPath, "utf8").trim().split("\n");
