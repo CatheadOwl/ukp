@@ -167,9 +167,17 @@ describe("serve --print-task guards", () => {
         currentDirectory: process.cwd(),
         registryPath: "unused-for-print",
       });
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("<paste-your-token>");
+      if (process.platform === "win32") {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("<paste-your-token>");
+      } else {
+        // Windows-only generator: the Linux leg hits the platform refusal —
+        // the secret guard below still runs on every platform.
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("Windows-only");
+      }
       expect(result.stdout).not.toContain("super-secret-do-not-print");
+      expect(result.stderr).not.toContain("super-secret-do-not-print");
     } finally {
       delete process.env.UKP_SERVE_TOKEN;
     }
