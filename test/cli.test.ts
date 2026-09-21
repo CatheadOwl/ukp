@@ -1415,10 +1415,38 @@ describe("CLI bootstrap", () => {
     expect(output.join("\n")).toContain("fixture-qmd");
     expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
     expect(output.join("\n")).toContain("capabilities on every endpoint: nav, read");
-    expect(output.join("\n")).toMatch(/fixture-qmd\t.*\tsearch,update/);
+    // Column-aligned rows: two-space gutters, no tab dependence (the single
+    // row pads to its own widths, so name and location end in exactly two
+    // spaces before the next cell).
+    expect(output.join("\n")).toMatch(/fixture-qmd  \S.*  search,update/);
     expect(readFileSync(registryPath, "utf8")).not.toContain("description");
     expect(runCli(["unregister", "fixture-qmd"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(output.at(-1)).toBe("No endpoints registered.");
+  });
+
+  test("list aligns columns by cell width, not terminal tab stops", () => {
+    const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-align-")), "registry.toml");
+    const context = {
+      currentDirectory: fixture,
+      registryPath,
+      resolveProvider: () => ({ supported: true }),
+    };
+    const output: string[] = [];
+    // A no-manifest folder keeps the second row local and degraded — name,
+    // location and capabilities widths all differ from the first row.
+    registerAt(registryPath, "fixture-qmd", fixture);
+    registerAt(registryPath, "ab", mkdtempSync(join(tmpdir(), "ukp-cli-align-b-")));
+    expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
+    const rows = output.join("\n").split("\n").slice(1);
+    expect(rows.length).toBe(2);
+    // Column geometry comes from the widest cell in the column: the location
+    // cell and the (unpadded) capabilities cell start at the same offset on
+    // every row, and no row carries tabs or trailing whitespace.
+    const locationStartAt = rows.map((row) => row.length - row.replace(/^\S+ +/, "").length);
+    const capsStartAt = rows.map((row) => row.lastIndexOf("  ") + 2);
+    expect(new Set(locationStartAt).size).toBe(1);
+    expect(new Set(capsStartAt).size).toBe(1);
+    expect(rows.every((row) => !row.includes("\t") && !/[ \t]+$/.test(row))).toBe(true);
   });
 });
