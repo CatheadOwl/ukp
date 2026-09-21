@@ -46,6 +46,12 @@ All notable public changes to UKP will be documented in this file.
 
 ### Fixed
 
+- Internal workline labels no longer surface in user-facing text: `serve
+  --help` carried a "TLS (W5')" decision label and the remote-skip messages
+  of `diagnose`/`inspect` said "ukp_remote W2" — both meaningless to a
+  user. Caught by the 0.2.3 first-impression blind replay; the help guard
+  test now sweeps workline labels alongside ADR-/RQ- tokens so the class
+  stays dead.
 - The Windows certificate command in the deployment handbook carried two
   literal tab characters where the `.ukp\tls\` paths were meant (the `\t`
   of `tls` had collapsed into a tab) — copy-pasting the documented openssl
