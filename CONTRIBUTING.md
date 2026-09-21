@@ -24,8 +24,8 @@ the full test suite, typecheck, package metadata and tarball allowlist
 review, private-material leak scans, and a publish dry-run. After publishing,
 verify the npm page renders the package README (registry readme metadata has
 been observed to go missing). The npm tarball
-is intentionally allowlisted — runtime source, README, package metadata,
-lock/config files, and the project license only.
+is intentionally allowlisted — runtime source, the in-package deployment
+guide, README, package metadata, and the project license only.
 
 ## Boundaries
 

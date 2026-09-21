@@ -40,7 +40,7 @@ All notable public changes to UKP will be documented in this file.
   door's exit code propagates to the task result, and a crashed door is
   retried up to 3 times 30s apart. The retry lives in the launcher
   because Task Scheduler's own restart-on-failure setting does not fire
-  on exit codes (disproven by crash drills on the liku host; zero-flash
+  on exit codes (disproven by crash drills on the dogfood host; zero-flash
   confirmed at logon there). Machine restart without a logon still
   leaves the door down — prefer ssh:// or a Linux host for always-on.
 
@@ -63,13 +63,21 @@ All notable public changes to UKP will be documented in this file.
   glosses QMD as an external tool and gives `-g` its own clause; `serve`'s
   summary glosses "host door"; `read`'s summary says where a docid comes
   from; `ukp init service` now calls rg what `ukp diagnose` calls it (the
-  external-tool base tier).
+  external-tool base tier). The shipped deployment handbook drops a
+  dangling internal cross-reference and private host-name provenance
+  (blocker and should-fix findings of the 0.2.3 homepage gate). The
+  grounding gate's findings landed in the same pass: the First Run
+  propose claim is scoped to endpoints that declare it (propose is never
+  derived), the agent-handoff bullet uses the dual-reference vocabulary
+  (docid handoff keys, durable `ukp://` references), and serve wording
+  says "every local binding" — a host door does not serve remote
+  bindings.
 - The Windows certificate command in the deployment handbook carried two
   literal tab characters where the `.ukp\tls\` paths were meant (the `\t`
   of `tls` had collapsed into a tab) — copy-pasting the documented openssl
   command as printed would write the key and certificate to a wrong path.
   Caught independently by all three agents of a blind raw-operator replay
-  (the liku operator had silently repaired it by hand); fixed before the
+  (the dogfood operator had silently repaired it by hand); fixed before the
   handbook's first tarball shipment. The same replay family caught two
   more stale handbook lines: `ukp register <folder>` (the CLI rejects
   positional arguments — the canonical form is running `ukp register`
@@ -82,6 +90,14 @@ All notable public changes to UKP will be documented in this file.
   binding — those get the single-endpoint remedy
   (`ukp register --url <door>/<name> --name <handle>`), because the bulk
   import would skip them again.
+- `ukp list` rows are column-aligned again: cells pad to the widest cell
+  in their column (two-space gutter, last column unpadded). The rows had
+  been tab-separated, so alignment was left to the terminal's tab stops —
+  with the registry now mixing short names, long local paths and remote
+  urls, every row landed its columns on different stops and the table
+  read ragged. Row semantics (flat shape, `(unavailable)` degradation,
+  `(declares X)` annotations, stderr notes) are unchanged; a regression
+  test pins the shared column offsets.
 
 ## [0.2.2] - 2026-09-20
 
