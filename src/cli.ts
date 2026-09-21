@@ -222,6 +222,51 @@ function writeCommandResult(
   return result.exitCode;
 }
 
+/** Channel philosophy for `ukp list` (ukp_list W2): stdout is the data
+ * channel — byte contract, one row per line, the terminal wraps what it
+ * must; stderr to an INTERACTIVE terminal is the human channel — progress
+ * frames already live there, and the footnote lines (degradation warnings,
+ * drift notes) may exceed any terminal width (pins are ~44 chars, urls
+ * longer), so the terminal would otherwise break them mid-word or
+ * mid-hash. This wraps them at word boundaries (over-long tokens
+ * hard-split at the width) — only when the emitter knows the width;
+ * piped/CI stderr keeps raw single lines, the machine-parseable form. */
+export function wrapLinesForTerminal(text: string, columns: number): string {
+  if (!Number.isSafeInteger(columns) || columns < 8) return text;
+  const wrapped: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line.length <= columns) {
+      wrapped.push(line);
+      continue;
+    }
+    let current = "";
+    for (const token of line.split(" ")) {
+      // A token longer than the width hard-splits at the width (paths and
+      // SPKI pins have no spaces to break on); the remainder re-enters the
+      // same greedy fill so following words still pack.
+      const pieces: string[] = [];
+      let rest = token;
+      while (rest.length > columns) {
+        pieces.push(rest.slice(0, columns));
+        rest = rest.slice(columns);
+      }
+      pieces.push(rest);
+      for (const piece of pieces) {
+        if (current.length === 0) {
+          current = piece;
+        } else if (current.length + 1 + piece.length <= columns) {
+          current += ` ${piece}`;
+        } else {
+          wrapped.push(current);
+          current = piece;
+        }
+      }
+    }
+    wrapped.push(current);
+  }
+  return wrapped.join("\n");
+}
+
 function executeVersionCommand(args: readonly string[]): CliCommandResult {
   if (args.length === 0) {
     return { exitCode: 0, stdout: renderVersion(), stderr: "" };
@@ -369,10 +414,34 @@ export function runCli(
   }
 
   if (command === "list") {
-    return writeCommandResultMaybeAsync(executeListCommand(args.slice(1), {
+    // Streaming delivery (ukp_list W2 / ADR 0026 rule 3): line-by-line
+    // through the same stdout writer every other print uses (console.log
+    // per line ≡ the single print's trailing-newline form, so piped bytes
+    // match the returned-text contract); progress frames only on an
+    // interactive stderr, so piped runs stay progress-silent. The stderr
+    // footnotes wrap at the terminal width there too — piped stderr keeps
+    // the raw single lines (wrapLinesForTerminal's contract).
+    const stderrColumns = process.stderr.columns ?? process.stdout.columns;
+    const interactivelyWrap = (result: CliCommandResult): CliCommandResult =>
+      process.stderr.isTTY === true && typeof stderrColumns === "number" && result.stderr.length > 0
+        ? { ...result, stderr: wrapLinesForTerminal(result.stderr, stderrColumns) }
+        : result;
+    // Conditionality preserved (the W2 sync seam): an all-local listing
+    // stays a synchronous value wrapped synchronously; only the remote
+    // branch's promise goes through .then.
+    const result = executeListCommand(args.slice(1), {
       currentDirectory,
       registryPath,
-    }), stdout, stderr);
+      ...(process.stderr.isTTY === true
+        ? { emitProgress: (frame: string) => process.stderr.write(frame) }
+        : {}),
+      emitStdout: (line: string) => stdout(line),
+    });
+    return writeCommandResultMaybeAsync(
+      result instanceof Promise ? result.then(interactivelyWrap) : interactivelyWrap(result),
+      stdout,
+      stderr,
+    );
   }
 
   if (command === "nav") {

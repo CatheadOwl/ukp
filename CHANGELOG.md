@@ -137,8 +137,71 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- `ukp list` with a mixed registry (local + remote bindings) now prints
+  local rows first and streams: the header and every local row appear
+  before any network work starts, remote rows append in registry order as
+  their fetches resolve, and an interactive terminal shows a single-line
+  progress indicator on stderr (piped output stays byte-identical to the
+  returned text and gains no control characters; the progress line never
+  appears when stderr is not a TTY). Row order is the one agent-visible
+  change: all locals first, then all remotes, each group in name-sorted
+  registry order — degradation warnings on stderr follow the same
+  grouping, after the table. Every streamed row clears the progress line
+  before printing and the next frame redraws below it, so the table and
+  the indicator never corrupt each other on a shared terminal. On an
+  interactive terminal the stderr footnotes wrap at word boundaries to
+  the terminal width (over-long tokens such as pins and paths hard-split;
+  piped stderr keeps raw single lines). All-local listings are untouched:
+  still fully synchronous with byte-identical output. (ukp_list W2 /
+  ADR 0026 rule 3.)
+- `ukp list` wording (probe-verified, 20260921-list-wording): the header
+  parenthetical is now plain language — "capabilities on every endpoint:
+  nav, read (built-in, from the folder itself)" (was "(derived
+  file-native)", which cold readers flagged as undefined jargon) — and a
+  degraded row's stderr warning now says "declared capabilities
+  unavailable", scoping the failure to the per-endpoint declared extras
+  instead of reading as if every capability (nav/read included) were down.
+  Blank-reader probes confirmed the new wording: readers scoped the
+  failure correctly 6/6 (2/2 could not with the old wording).
+- Remote error and remedy text now quotes the URL you registered, never
+  the wire address the client actually fetches. Door-endpoint bindings
+  (`ssh://host/name`) fetch through a `/e/<name>` route prefix (and, over
+  ssh, a loopback tunnel port); before, transport failures and hints
+  embedded that wire address, and the "is a host door" hint embedded it in
+  a suggested `ukp register --url` command that would fail if copied
+  verbatim. That hint now names the door origin (`ukp register --url
+  ssh://host`), and the fix spans every remote face
+  (list/search/read/nav/rg/propose), not just list.
+
 ### Fixed
 
+- Warning and note lines no longer misalign on Windows consoles using a
+  legacy DBCS codepage (cp936/GBK, the zh-CN Windows default). The CLI
+  writes UTF-8 bytes and such a console decodes them with the wrong table —
+  every multibyte character (the em dash in warning lines) shifted the
+  cursor by an extra cell and stderr lines landed mid-column with phantom
+  indents. The runtime output vocabulary for the list surface is now
+  printable ASCII (`—` → `-`, `…` → `...`), which every codepage decodes
+  identically. (ukp_list W2 dogfood finding; non-ASCII user content such
+  as Chinese folder names may still drift on DBCS consoles — run
+  `chcp 65001` there.)
+- `ukp list` fetches remote endpoints concurrently instead of serially:
+  every remote row and the door drift check start together and results are
+  awaited in registry order, so the wall clock is the slowest origin
+  instead of the sum of all origins, and the printed table is unchanged
+  byte for byte. Every ssh process ukp spawns (mux candidate, shell probe,
+  wake client) now carries `-o ConnectTimeout` (default 10s, override with
+  `UKP_SSH_CONNECT_TIMEOUT_MS`), so an unreachable host fails in seconds
+  instead of waiting out the OS TCP timeout through every wake attempt.
+  The host's shell family is cached beside the registry
+  (`wake-shell.toml`), skipping the per-invocation `echo %OS%` roundtrip;
+  a stale entry costs one wake retry and self-heals, never a hard failure.
+  One wording change rides along: wake-failure warnings name the ssh
+  target only — the redundant `(endpoint 'X')` parenthetical is gone, and
+  under the concurrent fetch each degraded row's warning no longer risks
+  quoting a sibling endpoint's name. (ukp_list W1 / ADR 0026 rules 1-2.)
 - `ukp list` rows become column-aligned: cells pad to the widest cell in
   their column (two-space gutter, last column unpadded). The rows are
   tab-separated today, so alignment is left to the terminal's tab stops —

@@ -12,6 +12,7 @@ import {
 } from "../../src/registry.ts";
 import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../../src/server.ts";
 import { executeListCommand, executeRegisterCommand } from "../../src/commands/inventory.ts";
+import { fetchDiscoveryDocumentAt } from "../../src/capabilities/remote-client.ts";
 import { executeSearchCommand } from "../../src/commands/search.ts";
 import { createHash } from "node:crypto";
 import { executeReadCommand } from "../../src/commands/read.ts";
@@ -523,7 +524,44 @@ describe("ukp list with remote rows", () => {
     // the widest same-column cell), never by tab stops.
     expect(result.stdout).toMatch(new RegExp(`^serve-fixture[ ]{2,}http://127\\.0\\.0\\.1:${info.port}[ ]{2,}search$`, "m"));
     expect(result.stdout).toMatch(/^dead-remote[ ]{2,}http:\/\/127\.0\.0\.1:9[ ]{2,}\(unavailable\)$/m);
-    expect(result.stderr).toContain("dead-remote");
+    // The degradation warning quotes the registered binding url and scopes
+    // the failure to the DECLARED capabilities; the wire route (`/e/<name>`)
+    // the transport actually fetched never reaches the reader.
+    expect(result.stderr).toContain("endpoint 'dead-remote' declared capabilities unavailable");
+    expect(result.stderr).toContain("http://127.0.0.1:9");
+    expect(result.stderr).not.toContain("/e/");
+  });
+
+  test("an endpoint-form url answered by a door document remedies with the door origin", async () => {
+    // A misaimed endpoint binding whose discovery path serves the DOOR
+    // document: the remedy must name the door origin (register the door),
+    // derived from the url the caller knows — never the wire base, which
+    // carries the `/e/<name>` route prefix.
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response(
+        JSON.stringify({
+          protocol: "ukp-remote",
+          protocol_version: "1",
+          scope: "host",
+          endpoints: [{ name: "skills", instance_uid: "uid-skills-1" }],
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    });
+    try {
+      let message = "";
+      try {
+        await fetchDiscoveryDocumentAt(`http://127.0.0.1:${server.port}`, { displayUrl: "https://door.example/skills" });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("service at https://door.example/skills is a host door");
+      expect(message).toContain("'ukp register --url https://door.example'");
+      expect(message).not.toContain("/e/");
+    } finally {
+      server.stop(true);
+    }
   });
 });
 
