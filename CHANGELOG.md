@@ -135,7 +135,7 @@ All notable public changes to UKP will be documented in this file.
   leak class the serve-help fix had cleaned). A guard test now sweeps
   every command help for ADR-/RQ- tokens so the class stays dead.
 
-## [Unreleased]
+## [0.2.4] - 2026-09-22
 
 ### Changed
 
@@ -154,17 +154,16 @@ All notable public changes to UKP will be documented in this file.
   interactive terminal the stderr footnotes wrap at word boundaries to
   the terminal width (over-long tokens such as pins and paths hard-split;
   piped stderr keeps raw single lines). All-local listings are untouched:
-  still fully synchronous with byte-identical output. (ukp_list W2 /
-  ADR 0026 rule 3.)
-- `ukp list` wording (probe-verified, 20260921-list-wording): the header
-  parenthetical is now plain language — "capabilities on every endpoint:
-  nav, read (built-in, from the folder itself)" (was "(derived
-  file-native)", which cold readers flagged as undefined jargon) — and a
-  degraded row's stderr warning now says "declared capabilities
-  unavailable", scoping the failure to the per-endpoint declared extras
-  instead of reading as if every capability (nav/read included) were down.
-  Blank-reader probes confirmed the new wording: readers scoped the
-  failure correctly 6/6 (2/2 could not with the old wording).
+  still fully synchronous with byte-identical output.
+- `ukp list` wording: the header parenthetical is now plain language —
+  "capabilities on every endpoint: nav, read (built-in, from the folder
+  itself)" (was "(derived file-native)", which cold readers flagged as
+  undefined jargon) — and a degraded row's stderr warning now says
+  "declared capabilities unavailable", scoping the failure to the
+  per-endpoint declared extras instead of reading as if every capability
+  (nav/read included) were down. Blank-reader probes confirmed the new
+  wording: readers scoped the failure correctly 6/6 (2/2 could not with
+  the old wording).
 - Remote error and remedy text now quotes the URL you registered, never
   the wire address the client actually fetches. Door-endpoint bindings
   (`ssh://host/name`) fetch through a `/e/<name>` route prefix (and, over
@@ -187,9 +186,9 @@ All notable public changes to UKP will be documented in this file.
   identically: the sweep started with the list surface (2026-09-21) and has
   since closed the class over serve and register help text, usage and
   refusal messages, remote and capability error/remedy text, the serve
-  banner, the `--print-task` artifacts, and the guide topics. (ukp_list W2
-  dogfood finding; non-ASCII user content such as Chinese folder names may
-  still drift on DBCS consoles — run `chcp 65001` there.)
+  banner, the `--print-task` artifacts, and the guide topics. (Non-ASCII
+  user content such as Chinese folder names may still drift on DBCS
+  consoles — run `chcp 65001` there.)
 - `ukp list` fetches remote endpoints concurrently instead of serially:
   every remote row and the door drift check start together and results are
   awaited in registry order, so the wall clock is the slowest origin
@@ -204,18 +203,15 @@ All notable public changes to UKP will be documented in this file.
   One wording change rides along: wake-failure warnings name the ssh
   target only — the redundant `(endpoint 'X')` parenthetical is gone, and
   under the concurrent fetch each degraded row's warning no longer risks
-  quoting a sibling endpoint's name. (ukp_list W1 / ADR 0026 rules 1-2.)
+  quoting a sibling endpoint's name.
 - `ukp list` rows become column-aligned: cells pad to the widest cell in
-  their column (two-space gutter, last column unpadded). The rows are
-  tab-separated today, so alignment is left to the terminal's tab stops —
+  their column (two-space gutter, last column unpadded). The rows were
+  tab-separated before, so alignment was left to the terminal's tab stops —
   with the registry mixing short names, long local paths and remote urls,
-  every row lands its columns on different stops and the table reads
+  every row landed its columns on different stops and the table read
   ragged. Row semantics (flat shape, `(unavailable)` degradation,
   `(declares X)` annotations, stderr notes) are unchanged; a regression
-  test pins the shared column offsets. (Rides 0.2.4 per the post-publish
-  ruling: an entry for this briefly sat in the 0.2.3 notes while its
-  implementation had not entered history — e67b096 excised the tests; the
-  implementation re-lands with them via the ukp_list workline.)
+  test pins the shared column offsets.
 
 ## [0.2.0] - 2026-09-20
 
