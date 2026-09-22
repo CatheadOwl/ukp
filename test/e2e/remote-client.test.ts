@@ -12,7 +12,12 @@ import {
 } from "../../src/registry.ts";
 import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../../src/server.ts";
 import { executeListCommand, executeRegisterCommand } from "../../src/commands/inventory.ts";
-import { fetchDiscoveryDocumentAt } from "../../src/capabilities/remote-client.ts";
+import {
+  classifyWakeFailure,
+  fetchDiscoveryDocumentAt,
+  wakeFailureMessage,
+  wakeNotReadyMessage,
+} from "../../src/capabilities/remote-client.ts";
 import { toolRelayScript } from "../../src/spawn-relay.ts";
 import { executeSearchCommand } from "../../src/commands/search.ts";
 import { createHash } from "node:crypto";
@@ -1171,5 +1176,56 @@ describe("win32 ssh relay (2026-09-22 Defender tax)", () => {
   test("relay script pins the powershell -EncodedCommand carrier shape", () => {
     const script = toolRelayScript(["ssh", "-V"]);
     expect(script).toBe("$a = @('ssh','-V'); & $a[0] $a[1..($a.Count-1)]; exit $LASTEXITCODE");
+  });
+});
+
+describe("wake failure classification (ADR-REM-008 / D-093)", () => {
+  test("signature table: each class matches its stable ssh wording, nothing else does", () => {
+    expect(classifyWakeFailure("ssh: connect to host liku port 22: Connection timed out")).toBe("unreachable");
+    expect(classifyWakeFailure("ssh: connect to host liku port 22: No route to host")).toBe("unreachable");
+    expect(classifyWakeFailure("ssh: Could not resolve hostname liku: Name or service not known")).toBe("unreachable");
+    expect(classifyWakeFailure("ssh: connect to host 127.0.0.1 port 22: Connection refused")).toBe("refused");
+    expect(classifyWakeFailure("liku@liku: Permission denied (publickey,password).")).toBe("auth");
+    expect(classifyWakeFailure("Host key verification failed.")).toBe("hostkey");
+    // Negatives: the ladder's own retry classes (bind collisions, mux
+    // conditions) and the existing early-exit branches (missing-ukp,
+    // shell-mismatch) must not be re-classified — early exit is for
+    // deterministic connect/auth verdicts only. The bare "Permission denied"
+    // (no method-list suffix) is a REMOTE-COMMAND exec error — a found-but-
+    // not-executable ukp — and must keep the generic wording, not the
+    // key-auth remedy (review P2).
+    expect(classifyWakeFailure("sshd: error: bind to port 24680 on 127.0.0.1 failed: Address already in use")).toBeUndefined();
+    expect(classifyWakeFailure("sh: /home/x/.bun/bin/ukp: Permission denied")).toBeUndefined();
+    expect(classifyWakeFailure("bash: line 1: ukp: command not found")).toBeUndefined();
+    expect(classifyWakeFailure("'sh' is not recognized as an internal or external command")).toBeUndefined();
+    expect(classifyWakeFailure("ControlPath too long for Unix domain socket")).toBeUndefined();
+    expect(classifyWakeFailure("")).toBeUndefined();
+  });
+
+  test("classified messages are printable ASCII, name the target, and carry per-class remedies", () => {
+    const classes = ["unreachable", "refused", "auth", "hostkey"] as const;
+    for (const failureClass of classes) {
+      const message = wakeFailureMessage(failureClass, "liku", "ssh: evidence tail");
+      // The frozen runtime-vocabulary rule (GBK console lesson): every
+      // shipped string stays printable ASCII.
+      expect(message).toMatch(/^[\x20-\x7E]*$/);
+      // Origin-level fact naming: the target, never an endpoint label.
+      expect(message).toContain("'liku'");
+      expect(message).toContain("evidence tail");
+    }
+    expect(wakeFailureMessage("unreachable", "liku", "")).toContain("appears off");
+    expect(wakeFailureMessage("refused", "liku", "")).toContain("Start the ssh server");
+    expect(wakeFailureMessage("auth", "liku", "")).toContain("authorized_keys");
+    expect(wakeFailureMessage("hostkey", "liku", "")).toContain("ssh-keygen -R");
+  });
+
+  test("not-ready wording stops blaming the alias and key auth", () => {
+    const message = wakeNotReadyMessage("liku", 20_000);
+    expect(message).toMatch(/^[\x20-\x7E]*$/);
+    expect(message).toContain("'liku'");
+    expect(message).toContain("did not become ready within 20s");
+    expect(message).toContain("ukp on the remote PATH");
+    expect(message).not.toContain("alias");
+    expect(message).not.toContain("key auth");
   });
 });
