@@ -6,6 +6,12 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp guide remote` now tells consumers how to peek at a door before
+  importing: `ssh <host> ukp list` for the ssh path, and the public
+  `/.well-known/ukp.json` document is previewable with curl before
+  registering (`-k` on the self-signed doors `ukp serve --tls` generates) —
+  the roster of endpoint names and capabilities is no longer a post-import
+  drift surprise.
 - `ukp rg --files`: file enumeration as a second mode of `rg` (same family as
   `--count`) — a true tree walk, so empty and binary files are listed too,
   with no pattern to give. Output is one sorted `ukp://` reference per file

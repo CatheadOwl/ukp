@@ -12,6 +12,8 @@ Current model:
 Owner path over SSH (zero ceremony - nothing to start on the host):
 1. Prerequisites (once): the host accepts your SSH key and has ukp installed the usual way
    ssh <host> ukp --help
+   Peek at the door before importing: ssh <host> ukp list shows the endpoint
+   names and capabilities the host declares
 
 2. On the consuming machine, import the door (the first call wakes it)
    ukp register --url ssh://<host>
@@ -45,7 +47,7 @@ Use this when you deliberately want to expose only one endpoint instead of the w
    ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
 
 Name and identity:
-- register --url fetches /.well-known/ukp.json and registers the declared name under a local handle (--name <handle> chooses another, e.g. when the name is taken).
+- register --url fetches /.well-known/ukp.json and registers the declared name under a local handle (--name <handle> chooses another, e.g. when the name is taken). That document is public - curl it before registering to preview the endpoint names and capabilities the door declares (self-signed doors: curl -k).
 - --endpoint <name> on register asserts the expected name; if discovery declares a different name, registration fails.
 - A host door can import everything, --select a comma-separated subset, or --endpoint exactly one endpoint.
 - Self-signed HTTPS certificates are pinned on first registration; compare the pinned fingerprint with the serve banner on untrusted networks.

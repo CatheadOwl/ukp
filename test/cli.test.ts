@@ -381,6 +381,10 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("wakes a loopback door over the SSH connection");
     expect(guide).toContain("has ukp installed the usual way (npm i -g or bun add -g");
     expect(guide).toContain("ukp register --url ssh://<host>");
+    // D-094 / door-roster peek: the consumer can see the door's roster
+    // before importing — ssh-path gesture sits with the prerequisite check
+    // (audience reach: consumer cognition lives on the runtime surface).
+    expect(guide).toContain("Peek at the door before importing: ssh <host> ukp list");
     // https path: resident door under the operator's process manager.
     expect(guide).toContain("UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls");
     expect(guide).toContain("ukp register --url https://<ip>:8570 --endpoint <name> --token <token>");
@@ -392,6 +396,15 @@ describe("CLI bootstrap", () => {
     // consumer handle (not an alias layer) is the --name registration slot.
     expect(guide).toContain("expected-name assertion on the declared name");
     expect(guide).toContain("--name <handle> when that name is already taken");
+    // D-094 / door-roster peek, https path: the public well-known document
+    // is previewable before registering — extension of the existing
+    // discovery sentence, not a new one.
+    expect(guide).toContain("curl it before registering to preview the endpoint names and capabilities");
+    // Focused replay 2026-09-22: a verbatim curl walls on the default
+    // (self-signed) door shape — schannel exit 60; the -k clause is the
+    // measured remedy, pinned so the recipe never fails unexplained on its
+    // own primary path.
+    expect(guide).toContain("(self-signed doors: curl -k)");
     // D-089: the guide states the rejection (dead grammar since the W9 wake),
     // not a silent no-op port.
     expect(guide).toContain("ssh:// urls take no port");
