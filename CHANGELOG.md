@@ -2,6 +2,22 @@
 
 All notable public changes to UKP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Windows: every remote command and every `ukp rg` run paid a hidden 5-10s
+  per-spawn tax — Windows Defender behaviorally inspects the direct
+  bun-to-`ssh.exe`/`rg.exe`/`taskkill.exe` child edge while letting the same
+  binaries start in a fraction of a second through any intermediary. Real-tool
+  spawns on win32 now route through a one-level `powershell -EncodedCommand`
+  relay that carries argv byte-identical (the pinned wake command's quoting is
+  untouched), and tunnel teardown tree-kills through cmd so the reaper itself
+  is not taxed. Measured on the liku/ali dogfood rig: `ukp rg --endpoint liku-notes`
+  11.4s -> 2.4s, `ukp list` (two ssh doors) ~11s -> 3.1s, local `ukp rg` 9.9s
+  -> 0.9s. Test-injected tool commands are never wrapped; non-Windows is
+  byte-identical.
+
 ## [0.2.3] - 2026-09-21
 
 ### Added

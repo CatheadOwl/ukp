@@ -19,6 +19,7 @@ import {
   type RemoteUrlParts,
 } from "../registry.ts";
 import { spkiPinOf } from "./tls-identity.ts";
+import { toolRelayScript } from "../spawn-relay.ts";
 import type { SearchEndpointOutcome } from "./search.ts";
 import type { NavEnvelope } from "./nav.ts";
 import type { ProposeResult, ProposeStatus } from "./propose.ts";
@@ -426,6 +427,60 @@ function persistShellFamily(cachePath: string | undefined, target: string, form:
   }
 }
 
+/** Structural subset of Bun's Subprocess that the ssh paths consume (a Pick,
+ * not a hand-written interface — the ADR 0021 guard scans for CLI-shaped
+ * member declarations). Direct spawns return the Subprocess itself; the win32
+ * relay below returns a delegating wrapper because its kill semantics differ
+ * (tree-kill). */
+type HostSshProcess = Pick<ReturnType<typeof Bun.spawn>, "pid" | "exitCode" | "stdout" | "stderr" | "kill">;
+
+/** Win32 Defender tax (2026-09-22 finding, ukp_remote TODO
+ * 20260922-win32-ssh-spawn-tax): the DIRECT bun-to-ssh.exe child edge is held
+ * ~10s by behavioral inspection — measured across stdio modes, windowsHide,
+ * and absolute paths, while bash-to-ssh is 0.16s and ANY intermediary parent
+ * (cmd, node, powershell) escapes to 0.5-0.8s. Every ssh spawn in this file
+ * pays it once, so on win32 real-ssh spawns go through a powershell.exe
+ * relay. -EncodedCommand carries the script as one base64 token (no quoting
+ * stress from Bun), and the script splats a PS array so the pinned wake
+ * command's load-bearing quotes reach ssh byte-identical (verified E2E: door
+ * READY in ~1.4s). Test injection (explicit sshCommand) bypasses the relay —
+ * the fakes must not be wrapped. Killing the relay orphans the ssh child
+ * (tunnel + door outlive the killed handle — verified), so the wrapped kill
+ * reaps the tree via taskkill /T /F. */
+function spawnHostSsh(options: { sshCommand?: readonly string[] }, argv: readonly string[]): HostSshProcess {
+  if (process.platform !== "win32" || options.sshCommand !== undefined) {
+    return Bun.spawn([...argv], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  }
+  const script = toolRelayScript(argv);
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  const proc = Bun.spawn(["powershell", "-NoProfile", "-EncodedCommand", encoded], {
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: "ignore",
+  });
+  const { pid, stdout, stderr } = proc;
+  return {
+    pid,
+    stdout,
+    stderr,
+    get exitCode() {
+      return proc.exitCode;
+    },
+    kill() {
+      // taskkill also carries the Defender tax when spawned directly from
+      // bun (measured 10.1s direct vs 105ms through cmd — same finding as
+      // the ssh/rg edges); the PID is digits-only, so the cmd payload needs
+      // no quoting. /T /F takes the relay AND its ssh child down together
+      // (killing the relay alone orphans the tunnel).
+      Bun.spawnSync(["cmd", "/d", "/c", `taskkill /PID ${pid} /T /F`], {
+        stdout: "ignore",
+        stderr: "ignore",
+        stdin: "ignore",
+      });
+    },
+  };
+}
+
 /** One cheap, language-independent roundtrip to learn the host shell family
  * BEFORE the first wake attempt (2026-09-20, liku 9.5 finding): cmd.exe
  * expands `%OS%` to `Windows_NT`; a POSIX shell echoes the literal token.
@@ -441,12 +496,14 @@ async function probeHostShellFamily(
   options: { sshCommand?: readonly string[] },
   target: string,
 ): Promise<WakeShellForm> {
-  const proc = Bun.spawn(
+  const proc = spawnHostSsh(
+    options,
     [...(options.sshCommand ?? ["ssh"]), "-o", "BatchMode=yes", ...connectTimeoutOptions(), target, "echo %OS%"],
-    { stdout: "pipe", stderr: "pipe", stdin: "ignore" },
   );
   const output = await Promise.race([
-    new Response(proc.stdout).text().catch(() => ""),
+    typeof proc.stdout === "object" && proc.stdout !== null
+      ? new Response(proc.stdout).text().catch(() => "")
+      : "",
     Bun.sleep(5_000).then(() => ""),
   ]);
   proc.kill();
@@ -463,7 +520,7 @@ async function probeHostShellFamily(
 async function probeWakeReady(
   base: string,
   timeoutMs: number,
-  proc: ReturnType<typeof Bun.spawn>,
+  proc: HostSshProcess,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -499,9 +556,12 @@ async function probeWakeReady(
  * so diagnostics can arrive on either stream — both are drained and
  * concatenated. Resolves when the streams end (i.e. after the process is
  * dead) — only await once the proc has been killed or has exited. */
-function drainStderrTail(streams: readonly ReadableStream<Uint8Array>[], keep = 2000): Promise<string> {
+function drainStderrTail(
+  streams: readonly (ReadableStream<Uint8Array> | number | undefined)[],
+  keep = 2000,
+): Promise<string> {
   return Promise.all(
-    streams.map((stream) => new Response(stream).text().catch(() => "")),
+    streams.map((stream) => (typeof stream === "object" && stream !== null ? new Response(stream).text().catch(() => "") : "")),
   ).then((texts) => {
     const text = texts.join("").trim();
     return text.length > keep ? `...${text.slice(-keep)}` : text;
@@ -525,7 +585,7 @@ function drainStderrTail(streams: readonly ReadableStream<Uint8Array>[], keep = 
 async function openSshTunnel(
   parts: { user?: string; host: string },
   options: { sshCommand?: readonly string[]; registryPath?: string },
-): Promise<{ proc: ReturnType<typeof Bun.spawn>; base: string }> {
+): Promise<{ proc: HostSshProcess; base: string }> {
   const target = parts.user !== undefined ? `${parts.user}@${parts.host}` : parts.host;
   // Tier 1 first: a detached mux master per origin (no-op when one already
   // holds the socket); the wake client below rides it when possible and
@@ -564,7 +624,7 @@ async function openSshTunnel(
       target,
       wakeDoorCommand(remotePort, form),
     ];
-    const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const proc = spawnHostSsh(options, argv);
     const stderrTail = drainStderrTail([proc.stdout, proc.stderr]);
     if (await probeWakeReady(`http://127.0.0.1:${localPort}`, WAKE_READY_TIMEOUT_MS, proc)) {
       // Ground truth for the shell-family cache: the form that actually woke
@@ -662,7 +722,7 @@ export interface RemoteTransportPool {
 export function createTransportPool(
   options: { sshCommand?: readonly string[]; registryPath?: string } = {},
 ): RemoteTransportPool {
-  const tunnels = new Map<string, Promise<{ proc: ReturnType<typeof Bun.spawn>; base: string }>>();
+  const tunnels = new Map<string, Promise<{ proc: HostSshProcess; base: string }>>();
   return {
     async acquire(binding) {
       if (binding.kind !== "remote" || binding.url === undefined) {
