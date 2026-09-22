@@ -230,7 +230,7 @@ export function assertRegistrableRemoteUrl(raw: string): void {
       + `${parts.endpointName !== undefined ? `/${parts.endpointName}` : ""}`;
     throw new RegistryError(
       `ssh:// urls take no port: the woken door listens on a client-chosen loopback port and the url port selects nothing`
-        + ` — register '${portless}' instead`
+        + ` - register '${portless}' instead`
         + ` (for a non-standard sshd port, use an ssh config Host alias)`,
     );
   }
@@ -240,7 +240,7 @@ export class RegistryBusyError extends RegistryError {
   constructor(path: string) {
     super(
       `registry_busy: ${path} (another ukp process holds the registry lock; ` +
-        `stale locks are reclaimed automatically — close other ukp commands or retry shortly)`,
+        `stale locks are reclaimed automatically - close other ukp commands or retry shortly)`,
     );
     this.name = "RegistryBusyError";
   }

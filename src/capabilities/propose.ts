@@ -442,7 +442,7 @@ export function runPropose(request: ProposeRequest, context: ProposeContext): Pr
       failure: {
         errorClass: "capability-undeclared",
         message: `endpoint '${binding.name}' does not declare the propose capability`
-          + ` — declare [capabilities.propose] in the Service Manifest (.ukp/service.toml); 'ukp guide propose' walks through it`,
+          + ` - declare [capabilities.propose] in the Service Manifest (.ukp/service.toml); 'ukp guide propose' walks through it`,
       },
     };
   }

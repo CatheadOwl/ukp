@@ -34,23 +34,23 @@ function parseServeTokens(raw: string | undefined): string[] {
  * over `/e/<name>/` routing. */
 export const SERVE_SPEC: UkpCommandSpec = {
   name: "serve",
-  summary: "serve one endpoint — or the whole registry as a host door, one HTTP server for every endpoint — for remote UKP clients",
+  summary: "serve one endpoint - or the whole registry as a host door, one HTTP server for every endpoint - for remote UKP clients",
   group: "operations",
   description:
-    "Expose a registered endpoint over HTTP using the ukp-remote wire, or — without --endpoint — serve every local endpoint as one host door routed by name.",
-  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]… | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task]",
+    "Expose a registered endpoint over HTTP using the ukp-remote wire, or - without --endpoint - serve every local endpoint as one host door routed by name.",
+  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task]",
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve the whole registry as a host door (/e/<name>/ routing, all endpoints, one port)" },
     { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
     { flags: "--port <n>", help: "listen port (default 8570)" },
     { flags: "--tls", help: "serve HTTPS with a self-signed identity (auto-generated under .ukp/tls/, SAN covers this host's addresses; clients pin it at registration)" },
     { flags: "--tls-san <ip|dns>", help: "extra SAN entry for the --tls self-signed identity (repeatable): a public/NAT IP or hostname no NIC of this host carries; a persisted certificate missing an entry is re-signed over the same key (pin unchanged, pinned clients re-anchor)", multi: true },
-    { flags: "--tls-cert <pem>", help: "TLS certificate (chain) PEM path — Let's Encrypt, mkcert, or a private CA; pair with --tls-key" },
+    { flags: "--tls-cert <pem>", help: "TLS certificate (chain) PEM path - Let's Encrypt, mkcert, or a private CA; pair with --tls-key" },
     { flags: "--tls-key <pem>", help: "TLS private key PEM path; pair with --tls-cert" },
     { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
-    { flags: "--max-idle <seconds>", help: "exit after <seconds> without requests (self-reap; the orphan backstop for on-demand-woken doors — fractional values accepted for tests)" },
-    { flags: "--systemd-socket", help: "serve on the systemd socket-activation listener (LISTEN_FDS fd 3) instead of binding a port — the port belongs to your .socket unit; Linux-only" },
-    { flags: "--print-task", help: "Windows: print this door's process-manager artifacts (start script, hidden launcher, Task Scheduler command, firewall rule) instead of serving — review and apply them yourself; nothing is installed or started for you, and the token is yours to paste (never printed)" },
+    { flags: "--max-idle <seconds>", help: "exit after <seconds> without requests (self-reap; the orphan backstop for on-demand-woken doors - fractional values accepted for tests)" },
+    { flags: "--systemd-socket", help: "serve on the systemd socket-activation listener (LISTEN_FDS fd 3) instead of binding a port - the port belongs to your .socket unit; Linux-only" },
+    { flags: "--print-task", help: "Windows: print this door's process-manager artifacts (start script, hidden launcher, Task Scheduler command, firewall rule) instead of serving - review and apply them yourself; nothing is installed or started for you, and the token is yours to paste (never printed)" },
   ],
   helpSuffix: [
     "",
@@ -58,9 +58,9 @@ export const SERVE_SPEC: UkpCommandSpec = {
     `  GET  ${DISCOVERY_PATH}        discovery document (manifest projection,`,
     "                                protocol version, instance identity)",
     "  POST /v1/search              {query, limit} -> ukp.search.v1 envelope",
-    "  GET  /v1/read?ref=…|uri=…    endpoint-relative ref or ukp:// URI",
+    "  GET  /v1/read?ref=...|uri=...  endpoint-relative ref or ukp:// URI",
     "  GET  /v1/nav?path=&depth=    markdown route view (ukp.nav.v1)",
-    "  GET  /v1/rg?query=…          lexical search (ukp.rg.v1, ukp_uri handoff)",
+    "  GET  /v1/rg?query=...        lexical search (ukp.rg.v1, ukp_uri handoff)",
     "",
     "Wire (ukp-remote v1), host door (no --endpoint):",
     `  GET  ${DISCOVERY_PATH}        door document (scope:"host", endpoint roster)`,
@@ -75,26 +75,26 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "  --allow-anonymous, loopback binds only. The discovery document stays",
     "  public. A reverse proxy on the same host forwards from the public side",
     "  to the loopback bind, so proxy deployments treat the token as",
-    "  mandatory — serve cannot see past its own bind address.",
+    "  mandatory - serve cannot see past its own bind address.",
     "",
     "  Loopback-without-token covers testing/dogfood AND the ssh door",
     "  deployment: bind the door on the remote host's loopback and let ssh",
     "  forwarding carry encryption and authentication (clients register",
-    "  'ukp register --url ssh://<host>' — zero tokens, docker",
+    "  'ukp register --url ssh://<host>' - zero tokens, docker",
     "  DOCKER_HOST=ssh:// posture). It is not the way to consume a",
-    "  same-machine endpoint — register its local path instead.",
+    "  same-machine endpoint - register its local path instead.",
     "  TLS: pass --tls to serve HTTPS with a self-signed identity",
-    "  (generated under .ukp/tls/ — under the registry directory in door",
-    "  mode —, SAN covers this host's addresses; remote clients TOFU-pin it",
+    "  (generated under .ukp/tls/ - under the registry directory in door",
+    "  mode -, SAN covers this host's addresses; remote clients TOFU-pin it",
     "  at registration and refresh by re-registering), or --tls-cert/--tls-key",
-    "  for your own certificate (Let's Encrypt — IP certs available since",
-    "  2026-01 —, mkcert, a private CA). Plain HTTP remains loopback-only by",
+    "  for your own certificate (Let's Encrypt - IP certs available since",
+    "  2026-01 -, mkcert, a private CA). Plain HTTP remains loopback-only by",
     "  admission; public exposure needs TLS or the ssh:// transport.",
     "",
     "  A cloud NAT/EIP host's public IP is on no NIC (--tls alone cannot",
     "  cover it): add --tls-san <public-ip> next to --tls. Repeatable; DNS",
     "  names accepted. The persisted certificate re-signs over the same key",
-    "  when a new entry appears — the pin is unchanged and pinned clients",
+    "  when a new entry appears - the pin is unchanged and pinned clients",
     "  re-anchor transparently; dropping entries never re-signs.",
     "",
   ].join("\n"),
@@ -136,7 +136,7 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
   }
   const printTask = options.printTask === true;
   if (printTask && systemdSocket) {
-    throw new KitUsageError("--print-task is the Windows resident form; --systemd-socket is the Linux one (systemd holds the port — see the deployment handbook)");
+    throw new KitUsageError("--print-task is the Windows resident form; --systemd-socket is the Linux one (systemd holds the port - see the deployment handbook)");
   }
   let maxIdleSeconds: number | undefined;
   if (options.maxIdle !== undefined) {
@@ -183,10 +183,10 @@ export function renderServeBanner(info: ServeInfo): string {
       `serving host door (ukp-remote v1)`,
       `  listening: ${info.url}`,
       `  discovery: ${info.url.startsWith("http") ? `${info.url}${DISCOVERY_PATH}` : info.url} (host door)`,
-      `  endpoints: ${info.door!.endpoints.length > 0 ? info.door!.endpoints.join(", ") : "(none — register endpoints on this host)"}`,
+      `  endpoints: ${info.door!.endpoints.length > 0 ? info.door!.endpoints.join(", ") : "(none - register endpoints on this host)"}`,
       `  write: ${info.door!.write.length > 0 ? info.door!.write.join(", ") + " (propose via PUT /e/<name>/v1/propose/<id>)" : "(no endpoint declares propose)"}`,
       `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback bind; ssh-forwarded clients authenticate by SSH key)"}`,
-      `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning — install ripgrep on this door's PATH)"}`,
+      `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning - install ripgrep on this door's PATH)"}`,
       ...(info.maxIdleSeconds !== undefined
         ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
         : []),
@@ -201,7 +201,7 @@ export function renderServeBanner(info: ServeInfo): string {
     `  listening: ${info.url}`,
     `  discovery: ${info.url.startsWith("http") ? `${info.url}${DISCOVERY_PATH}` : info.url}`,
     `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback only)"}`,
-    `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning — install ripgrep on this door's PATH)"}`,
+    `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning - install ripgrep on this door's PATH)"}`,
     ...(info.maxIdleSeconds !== undefined
       ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
       : []),
@@ -295,7 +295,7 @@ export function executeServeCommand(
     // premise of --allow-anonymous is unverifiable here (RQ-18 review P1).
     if (systemdSocket && tokens.length === 0) {
       throw new Error(
-        "refusing to serve on --systemd-socket without a token: the listener's bind address belongs to the socket unit and may be public — tokenless loopback serving cannot be verified here; set UKP_SERVE_TOKEN",
+        "refusing to serve on --systemd-socket without a token: the listener's bind address belongs to the socket unit and may be public - tokenless loopback serving cannot be verified here; set UKP_SERVE_TOKEN",
       );
     }
     const decision = serveAuthDecision(host, tokens, allowAnonymous);

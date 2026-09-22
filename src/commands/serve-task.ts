@@ -48,15 +48,15 @@ export function printTaskPreflightError(input: {
   allowAnonymous: boolean;
 }): string | undefined {
   if (input.platform !== "win32") {
-    return "--print-task is Windows-only; on Linux prefer systemd socket activation (ukp serve --systemd-socket) — the deployment handbook carries that recipe";
+    return "--print-task is Windows-only; on Linux prefer systemd socket activation (ukp serve --systemd-socket) - the deployment handbook carries that recipe";
   }
   const loopback =
     input.host === "127.0.0.1" || input.host === "localhost" || input.host === "::1" || input.host === "[::1]";
   if (!loopback && !input.hasTls) {
-    return "refusing to print an off-loopback door without TLS: clients refuse to register plain-http urls — pass --tls (self-signed, pinned at registration) or --tls-cert/--tls-key, or bind loopback behind a TLS-terminating proxy";
+    return "refusing to print an off-loopback door without TLS: clients refuse to register plain-http urls - pass --tls (self-signed, pinned at registration) or --tls-cert/--tls-key, or bind loopback behind a TLS-terminating proxy";
   }
   if (input.allowAnonymous && !loopback) {
-    return "refusing to print this shape: --allow-anonymous is loopback-only and serve would refuse it at task start — set the token in the generated script instead";
+    return "refusing to print this shape: --allow-anonymous is loopback-only and serve would refuse it at task start - set the token in the generated script instead";
   }
   return undefined;
 }
@@ -86,10 +86,10 @@ function parentDirOf(path: string): string | undefined {
 export function renderServeTaskArtifacts(input: ServeTaskInput): string {
   const serveLine = serveCommandLine(input);
   const out: string[] = [
-    "ukp serve --print-task — Windows resident-door artifacts",
+    "ukp serve --print-task - Windows resident-door artifacts",
     "",
     "Print-only: review these, then apply them yourself. UKP installs nothing,",
-    "starts nothing, and supervises nothing — the door's lifecycle belongs to",
+    "starts nothing, and supervises nothing - the door's lifecycle belongs to",
     "you and your process manager.",
     "",
   ];
@@ -97,7 +97,7 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
   if (input.tls?.mode === "certificates") {
     const certDir = parentDirOf(input.tls.certPath);
     out.push(
-      "0) Certificate — generate ONCE (Git for Windows' openssl works; this",
+      "0) Certificate - generate ONCE (Git for Windows' openssl works; this",
       "   avoids any runtime openssl dependency of --tls):",
       "",
       "   openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout",
@@ -115,7 +115,7 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
   }
 
   out.push(
-    "1) Start script — save as %USERPROFILE%\\.ukp\\start-door.cmd",
+    "1) Start script - save as %USERPROFILE%\\.ukp\\start-door.cmd",
     "   (write it with a real editor and CRLF line endings; writing cmd",
     "   files over ssh echo mangles % escaping)",
     "",
@@ -125,13 +125,13 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
     "   rem (e.g. openssl rand -hex 32), paste it in, keep this file private.",
     "   set \"UKP_SERVE_TOKEN=<paste-your-token>\"",
     "   rem ukp resolves through the logged-on task's per-user PATH; the",
-    "   rem launcher finds bun itself — no PATH export needed.",
+    "   rem launcher finds bun itself - no PATH export needed.",
     "   if not exist \"%USERPROFILE%\\.ukp\" mkdir \"%USERPROFILE%\\.ukp\"",
     `   ${serveLine} >> "%USERPROFILE%\\.ukp\\door.log" 2>&1`,
     "",
-    "2) Hidden launcher — save as %USERPROFILE%\\.ukp\\start-door-hidden.vbs",
+    "2) Hidden launcher - save as %USERPROFILE%\\.ukp\\start-door-hidden.vbs",
     "   (CRLF and a real editor again: the vbs carries literal % signs that",
-    "   ssh echo would expand — copy the file instead)",
+    "   ssh echo would expand - copy the file instead)",
     "",
     "   ' UKP door hidden launcher: runs start-door.cmd with NO visible",
     "   ' window (hidden at process creation - nothing flashes), captures",
@@ -150,7 +150,7 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
     "   Next",
     "   WScript.Quit rc",
     "",
-    "3) Scheduled task — starts the door at LOGON, hidden",
+    "3) Scheduled task - starts the door at LOGON, hidden",
     "   (create it from an elevated shell: creating an ONLOGON task from a",
     "    plain shell fails with Access denied)",
     "",
@@ -167,29 +167,29 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
           "- --tls self-signs at first start using an openssl on PATH (Git",
           "  for Windows' openssl qualifies). On a host with no openssl",
           "  anywhere, pre-generate the certificate once instead: re-run with",
-          "  --tls-cert/--tls-key — the handbook's Windows section carries",
+          "  --tls-cert/--tls-key - the handbook's Windows section carries",
           "  that recipe.",
         ]
       : []),
     "- No visible window, by design: the hidden launcher starts the console",
     "  hidden at process creation (nothing ever flashes on the desktop) and",
-    "  captures everything to door.log — that redirect is the paper trail (a",
+    "  captures everything to door.log - that redirect is the paper trail (a",
     "  silent EADDRINUSE exit leaves a line).",
     "- Crash self-recovery is the launcher's bounded retry: a non-zero exit",
     "  is retried up to 3 times, 30s apart; exhausted retries leave the",
     "  failure visible (non-zero task result + door.log). Do not rely on",
-    "  Task Scheduler's restart-on-failure setting — it does not fire on",
+    "  Task Scheduler's restart-on-failure setting - it does not fire on",
     "  exit codes.",
     "- To restart the door by hand (new token, ukp upgrade, new cert):",
     "  taskkill /PID <door-pid> /T /F, then schtasks /Run /TN ukp-door",
     "  (schtasks /End does not reliably kill the process tree).",
-    "- LOGON, not boot: the door starts when someone logs on — nobody",
+    "- LOGON, not boot: the door starts when someone logs on - nobody",
     "  logged on means no door. Unattended-boot always-on needs a service",
-    "  wrapper (WinSW-class) — deliberately outside this recipe; prefer the",
+    "  wrapper (WinSW-class) - deliberately outside this recipe; prefer the",
     "  ssh:// path or a Linux host (systemd socket activation) for that.",
     "- Re-run ukp serve --print-task with different flags to regenerate;",
     "  edits land by saving the files and re-running schtasks /Run.",
-    "- Full recipes and hardening: the deployment handbook —",
+    "- Full recipes and hardening: the deployment handbook -",
     "  docs/remote-deployment.md in this package, or",
     "  https://github.com/CatheadOwl/ukp/blob/main/docs/remote-deployment.md",
     "",

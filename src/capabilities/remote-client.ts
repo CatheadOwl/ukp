@@ -1041,7 +1041,7 @@ export async function remoteSearch(
 
 function authMessage(token: string | undefined): string {
   return token === undefined
-    ? "remote endpoint requires a bearer token; set UKP_ENDPOINT_<NAME>_TOKEN (NAME upper-cased, '-' → '_')"
+    ? "remote endpoint requires a bearer token; set UKP_ENDPOINT_<NAME>_TOKEN (NAME upper-cased, '-' -> '_')"
     : "remote endpoint rejected the bearer token (401)";
 }
 

@@ -30,7 +30,7 @@ describe("serve --print-task rendering (W12)", () => {
       "schtasks /Create /TN ukp-door /TR \"wscript.exe \\\"%USERPROFILE%\\.ukp\\start-door-hidden.vbs\\\"\" /SC ONLOGON /F",
     );
     expect(hostDoorSelfSigned).toContain(
-      "2) Hidden launcher — save as %USERPROFILE%\\.ukp\\start-door-hidden.vbs",
+      "2) Hidden launcher - save as %USERPROFILE%\\.ukp\\start-door-hidden.vbs",
     );
     // The launcher's contract, all four load-bearing lines: environment
     // expansion (not baked paths), hidden + waiting run, bounded crash
