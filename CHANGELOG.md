@@ -4,6 +4,22 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `ukp rg --files`: file enumeration as a second mode of `rg` (same family as
+  `--count`) — a true tree walk, so empty and binary files are listed too,
+  with no pattern to give. Output is one sorted `ukp://` reference per file
+  (`--json` gains a `files` array and `files_mode`), `--glob`/`--type` narrow
+  it, and the result cap defaults to 500 (`--limit` to change). Visibility is
+  the same root as rg search: hidden files — including the `.ukp/` wiring —
+  stay behind `-- --hidden`. Remote endpoints behave the same over the door
+  (`/v1/rg?files=1`).
+- `ukp rg --glob` is now repeatable (a later glob may negate with `!`, so
+  include+exclude combinations work), `--iglob` joined the passthrough
+  allowlist (case-insensitive glob), and `ukp guide rg` covers the three
+  modes, glob semantics, and visibility tiers — rg was the only command
+  without guide coverage.
+
 ### Fixed
 
 - Windows: every remote command and every `ukp rg` run paid a hidden 5-10s

@@ -61,7 +61,9 @@ predictable scope, and a single command surface. Use UKP when:
   Requirements). `read` and `nav` are derived defaults of every local
   Service.
 - Run base lexical search with `rg` across endpoint files — no search
-  provider needed, on by default, shaped into `read`-ready references.
+  provider needed, on by default, shaped into `read`-ready references —
+  or enumerate them with `rg --files` (a tree walk: empty and binary files
+  included, hidden files behind `-- --hidden`).
 - Search indexed content, QMD-backed: one endpoint, the workspace default
   scope, or the whole local Registry. `--recursive` additionally searches
   the endpoints a Service declares in its manifest `dependencies` —
@@ -143,7 +145,7 @@ Endpoint commands:
 | `ukp search` | Indexed search through the endpoint's provider (QMD today); `--recursive` expands the manifest's declared `dependencies`. Results hand off via docid session keys and verified `ukp://` references. |
 | `ukp read` | Reads an endpoint-scoped resource — exact path, `ukp://` URI, or a `docid` handed off by search results. |
 | `ukp nav` | Markdown outline of an endpoint (`--depth`, respects `.gitignore`); on by default, configurable via `[capabilities.nav]`. |
-| `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; results become `read`-ready `ukp://` references. A missing rg binary skips the endpoint with a warning. |
+| `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; `--files` enumerates them instead of searching. Results become `read`-ready `ukp://` references. A missing rg binary skips the endpoint with a warning. |
 | `ukp propose` | Submits an idempotent change proposal (suggestion box — the owner decides what happens next). Created/unchanged/updated; the revision bumps only on `updated`. |
 
 Registry commands:
@@ -171,6 +173,7 @@ Help commands:
 | `ukp guide service` | Provider-agnostic Service setup path. |
 | `ukp guide service qmd` | Provider-owned setup for the QMD provider. |
 | `ukp guide client` | How a workspace uses registered Services by default. |
+| `ukp guide rg` | The rg quickstart: modes, glob semantics, visibility tiers. |
 | `ukp guide remote` | How to serve and consume endpoints across machines. |
 | `ukp guide propose` | The propose quickstart. |
 

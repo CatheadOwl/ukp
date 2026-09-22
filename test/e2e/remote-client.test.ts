@@ -654,6 +654,29 @@ describe("remote rg (ukp_remote W6)", () => {
   );
 
   test.skipIf(!rgAvailable)(
+    "files mode enumerates the remote endpoint with reanchored ukp:// lines (ADR-RG-005)",
+    async () => {
+      const { info } = startRemote();
+      registerRemoteAt(registryPath, { name: "serve-fixture", url: info.url });
+      const context = { currentDirectory: root, registryPath };
+
+      const result = await asResult(executeRgCommand(["--files", "-c", "serve-fixture"], context));
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("== serve-fixture ==");
+      expect(result.stdout).toContain("ukp://serve-fixture/documents/cad-notes.md");
+      // The hidden tier (including the .ukp/ wiring) stays behind --hidden
+      // over the wire too — same visibility root as the local run.
+      expect(result.stdout).not.toContain(".ukp");
+
+      const json = await asResult(executeRgCommand(["--files", "-c", "serve-fixture", "--json"], context));
+      expect(json.exitCode).toBe(0);
+      expect(json.stdout).toContain('"files_mode": true');
+      expect(json.stdout).toContain('"ukp://serve-fixture/documents/cad-notes.md"');
+    },
+    30000,
+  );
+
+  test.skipIf(!rgAvailable)(
     "mixed local+remote rg keeps both endpoints; a dead remote fails visibly without hiding locals",
     async () => {
       const { info } = startRemote();

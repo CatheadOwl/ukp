@@ -304,3 +304,156 @@ describe("ukp rg command surface", () => {
     }
   });
 });
+
+// ADR-RG-005 (D-092): --files enumeration mode — true tree walk, so empty
+// and binary files are visible; visibility shares the search-mode root
+// (hidden files, including .ukp/, stay behind -- --hidden); pattern is
+// omitted; the full list is sorted before the client-side cap.
+describe("ukp rg --files (ADR-RG-005)", () => {
+  const tree: FileSpec[] = [
+    { path: "README.md", content: "# readme\nneedle here\n" },
+    { path: "docs/a.md", content: "# a\nneedle\n" },
+    { path: "data.json", content: "{\"needle\": true}\n" },
+    { path: "empty.txt", content: "" },
+    { path: "blob.bin", content: "\x00\x01\x02binary-needle-bytes" },
+  ];
+
+  test("parse layer: pattern omitted, 500 default limit, three mutual exclusions", () => {
+    const parsed = parseRgArgs(["--endpoint", "kb", "--files"]);
+    expect(parsed.request).toEqual({ query: "", limit: 500 });
+    expect(parsed.options.files).toBe(true);
+    expect(parseRgArgs(["--endpoint", "kb", "--files", "--limit", "10"]).request.limit).toBe(10);
+    // Mode switches cannot combine; a pattern in files mode points at --glob.
+    expect(() => parseRgArgs(["--endpoint", "kb", "--files", "--count"])).toThrow(/--files and --count/);
+    expect(() => parseRgArgs(["--endpoint", "kb", "--files", "-i"])).toThrow(/--iglob/);
+    expect(() => parseRgArgs(["--endpoint", "kb", "--files", "pattern"])).toThrow(/--files takes no pattern/);
+    // The missing-pattern error teaches the files-mode alternative.
+    expect(() => parseRgArgs(["--endpoint", "kb"])).toThrow(/--files/);
+  });
+
+  test("repeated --glob is collected in order; --iglob rides the passthrough allowlist", () => {
+    const parsed = parseRgArgs(["--endpoint", "kb", "needle", "--glob", "*.md", "--glob", "!docs/*"]);
+    expect(parsed.options.globs).toEqual(["*.md", "!docs/*"]);
+    expect(() => validateRgPassthrough(["--iglob", "*.MD"])).not.toThrow();
+  });
+
+  test("enumerates every file type as sorted ukp:// lines (empty and binary visible)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-files-"));
+    try {
+      const context = setup(root, "kb", tree);
+      const result = executeRgCommand(["--endpoint", "kb", "--files"], context);
+      expect(result.exitCode).toBe(0);
+      // The fixture emits the tree REVERSED with a ./ prefix: the sorted,
+      // stripped one-uri-per-line form below is entirely UKP's doing.
+      expect(result.stdout).toBe(
+        "== kb ==\n"
+          + "ukp://kb/README.md\n"
+          + "ukp://kb/blob.bin\n"
+          + "ukp://kb/data.json\n"
+          + "ukp://kb/docs/a.md\n"
+          + "ukp://kb/empty.txt\n",
+      );
+      // Hidden tier stays hidden by default (.ukp/ wiring included).
+      expect(result.stdout).not.toContain(".ukp");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("-- --hidden reveals the hidden tier, including the .ukp/ wiring", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-files-hidden-"));
+    try {
+      const context = setup(root, "kb", tree);
+      const result = executeRgCommand(["--endpoint", "kb", "--files", "--", "--hidden"], context);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("ukp://kb/.ukp/service.toml");
+      expect(result.stdout).toContain("ukp://kb/README.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("--glob filters apply to the enumeration, including include+exclude combos", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-files-glob-"));
+    try {
+      const context = setup(root, "kb", tree);
+      const jsonOnly = executeRgCommand(["--endpoint", "kb", "--files", "--glob", "*.json"], context);
+      expect(jsonOnly.exitCode).toBe(0);
+      expect(jsonOnly.stdout).toContain("ukp://kb/data.json");
+      expect(jsonOnly.stdout).not.toContain("README.md");
+      // include+exclude combination: md files but nothing under docs/.
+      const combo = executeRgCommand(["--endpoint", "kb", "--files", "--glob", "*.md", "--glob", "!docs/*"], context);
+      expect(combo.exitCode).toBe(0);
+      expect(combo.stdout).toContain("ukp://kb/README.md");
+      expect(combo.stdout).not.toContain("docs/a.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("limit truncates the SORTED enumeration (deterministic window) and marks truncated", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-files-limit-"));
+    try {
+      const context = setup(root, "kb", tree);
+      const result = executeRgCommand(["--endpoint", "kb", "--files", "--limit", "2", "--json"], context);
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(result.stdout);
+      expect(envelope.files_mode).toBe(true);
+      expect(envelope.query).toBeUndefined();
+      expect(envelope.endpoints[0].file_count).toBe(2);
+      expect(envelope.endpoints[0].truncated).toBe(true);
+      // The window is the FIRST two paths in sorted order, not an arbitrary
+      // subset of the (reversed) emission order.
+      expect(envelope.endpoints[0].files.map((file: { path: string }) => file.path)).toEqual(["README.md", "blob.bin"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("json envelope: files_mode, no query field, entries carry ukp_uri", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-files-json-"));
+    try {
+      const context = setup(root, "kb", tree);
+      const result = executeRgCommand(["--endpoint", "kb", "--files", "--json"], context);
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(result.stdout);
+      expect(envelope.schema).toBe("ukp.rg.v1");
+      expect(envelope.count_mode).toBe(false);
+      expect(envelope.files_mode).toBe(true);
+      expect(envelope.limit).toBe(500);
+      expect(envelope).not.toHaveProperty("query");
+      expect(envelope.endpoints[0].files[0]).toEqual({ path: "README.md", ukp_uri: "ukp://kb/README.md" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty enumeration is a successful no-files result", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-files-empty-"));
+    try {
+      const context = setup(root, "kb", []);
+      const result = executeRgCommand(["--endpoint", "kb", "--files"], context);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("(no files)");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("enumerated ukp:// uris round-trip through ukp read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-files-roundtrip-"));
+    try {
+      const context = setup(root, "kb", tree);
+      const rgResult = executeRgCommand(["--endpoint", "kb", "--files", "--json"], context);
+      const envelope = JSON.parse(rgResult.stdout);
+      const uri = envelope.endpoints[0].files.find((file: { path: string }) => file.path === "docs/a.md").ukp_uri;
+      const { executeReadCommand } = await import("../src/commands/read.ts");
+      const readMaybeAsync = executeReadCommand([uri], { currentDirectory: root, registryPath: context.registryPath });
+      if (readMaybeAsync instanceof Promise) throw new Error("local read unexpectedly took the async path");
+      expect(readMaybeAsync.exitCode).toBe(0);
+      expect(readMaybeAsync.stdout).toContain("needle");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

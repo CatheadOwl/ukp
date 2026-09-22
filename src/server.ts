@@ -33,6 +33,7 @@ import {
   runRg,
   projectRgEnvelope,
   RG_DEFAULT_LIMIT,
+  RG_FILES_DEFAULT_LIMIT,
   RG_MAX_LIMIT,
   validateRgPassthrough,
   RgUsageError,
@@ -463,18 +464,44 @@ function parseNavParams(
 }
 
 /** Wire rg params → ParsedRg with serve-fixed scope. Params are flat (no
- * argv reconstruction needed): query/limit/glob/type/i/count map onto
+ * argv reconstruction needed): query/limit/glob/type/i/count/files map onto
  * ParsedRg directly and passthrough re-validates against the same
- * allowlist (ADR-RG-002) before any endpoint work starts. */
+ * allowlist (ADR-RG-002) before any endpoint work starts. Files mode
+ * (ADR-RG-005) mirrors the CLI parse layer's mutual exclusions so the wire
+ * keeps the same strictness as query/limit. */
 function parseRgParams(
   endpointName: string,
   url: URL,
 ): { parsed: ParsedRg } | { error: string } {
+  // Boolean params are strictly "1"/"0" — same strictness as query/limit, so
+  // a hand-crafted `i=true` is a visible usage error, not a silent mode miss.
+  const booleanOf = (name: string): boolean | { error: string } => {
+    const raw = url.searchParams.get(name);
+    if (raw === null) return false;
+    if (raw === "1") return true;
+    if (raw === "0") return false;
+    return { error: `'${name}' must be 1 or 0` };
+  };
+  const files = booleanOf("files");
+  if (typeof files === "object") return files;
+  const ignoreCase = booleanOf("i");
+  if (typeof ignoreCase === "object") return ignoreCase;
+  const count = booleanOf("count");
+  if (typeof count === "object") return count;
   const query = url.searchParams.get("query");
-  if (query === null || query.length === 0) {
-    return { error: "'query' is required and must be a non-empty pattern" };
+  if (files && count) {
+    return { error: "'files' and 'count' cannot be used together (pick one output mode)" };
   }
-  let limit = RG_DEFAULT_LIMIT;
+  if (files && ignoreCase) {
+    return { error: "'files' cannot be combined with 'i': pass an --iglob passthrough arg for a case-insensitive glob filter" };
+  }
+  if (files && query !== null) {
+    return { error: "'files' takes no 'query' - use 'glob' to filter by name" };
+  }
+  if (!files && (query === null || query.length === 0)) {
+    return { error: "'query' is required and must be a non-empty pattern (or pass files=1 for enumeration mode)" };
+  }
+  let limit = files ? RG_FILES_DEFAULT_LIMIT : RG_DEFAULT_LIMIT;
   const rawLimit = url.searchParams.get("limit");
   if (rawLimit !== null) {
     if (!/^[0-9]+$/.test(rawLimit)) return { error: "'limit' must be a decimal integer" };
@@ -490,31 +517,19 @@ function parseRgParams(
     if (error instanceof RgUsageError) return { error: error.message };
     throw error;
   }
-  // Boolean params are strictly "1"/"0" — same strictness as query/limit, so
-  // a hand-crafted `i=true` is a visible usage error, not a silent mode miss.
-  const booleanOf = (name: string): boolean | { error: string } => {
-    const raw = url.searchParams.get(name);
-    if (raw === null) return false;
-    if (raw === "1") return true;
-    if (raw === "0") return false;
-    return { error: `'${name}' must be 1 or 0` };
-  };
-  const ignoreCase = booleanOf("i");
-  if (typeof ignoreCase === "object") return ignoreCase;
-  const count = booleanOf("count");
-  if (typeof count === "object") return count;
-  const glob = url.searchParams.get("glob");
+  const globs = url.searchParams.getAll("glob");
   const type = url.searchParams.get("type");
   return {
     parsed: {
-      request: { query, limit },
+      request: { query: files ? "" : query!, limit },
       options: {
         explicitEndpoints: [endpointName],
         global: false,
-        ...(glob !== null ? { glob } : {}),
+        ...(globs.length > 0 ? { globs } : {}),
         ...(type !== null ? { type } : {}),
         ...(ignoreCase ? { ignoreCase: true } : {}),
         ...(count ? { count: true } : {}),
+        ...(files ? { files: true } : {}),
         passthrough,
       },
       warnings: [],
@@ -1170,7 +1185,7 @@ function handleRg(url: URL, request: Request, config: ServeConfig, endpointName:
     currentDirectory: config.currentDirectory,
     registryPath: config.registryPath,
   });
-  return jsonResponse(projectRgEnvelope(result, parsed.parsed.options.count === true));
+  return jsonResponse(projectRgEnvelope(result));
 }
 
 /** PUT /v1/propose/{id} (W8 / ADR-REM-005): the write face. Body = the

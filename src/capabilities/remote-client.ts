@@ -24,7 +24,7 @@ import type { SearchEndpointOutcome } from "./search.ts";
 import type { NavEnvelope } from "./nav.ts";
 import type { ProposeResult, ProposeStatus } from "./propose.ts";
 import { EXTERNAL_PROVIDER } from "../config/external-tool.ts";
-import type { RgEndpointOutcome, RgMatch, RgCountEntry } from "./rg.ts";
+import type { RgEndpointOutcome, RgMatch, RgCountEntry, RgFileEntry } from "./rg.ts";
 
 /** Remote transport for the client side (ukp-remote wire v1, ADR-REM-002/003;
  * ukp_remote W2). All calls fetch fresh (no cross-invocation cache), carry the
@@ -1228,10 +1228,23 @@ function remoteRgCounts(raw: unknown): RgCountEntry[] | undefined {
   });
 }
 
+function remoteRgFiles(raw: unknown): RgFileEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.flatMap((entry): RgFileEntry[] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const file = entry as Record<string, unknown>;
+    if (typeof file.path !== "string") return [];
+    return [{ path: file.path, ...(typeof file.ukp_uri === "string" ? { ukp_uri: file.ukp_uri } : {}) }];
+  });
+}
+
 const RG_WIRE_STATUSES = new Set(["succeeded", "no_matches", "skipped", "failed", "interrupted", "cancelled"]);
 
 /** GET /v1/rg — single-endpoint outcome in the local RgEndpointOutcome
- * vocabulary (provider is rg's external tier regardless of transport). */
+ * vocabulary (provider is rg's external tier regardless of transport).
+ * Files mode (ADR-RG-005) sends files=1 and omits query — an older serve
+ * without files support answers its query-required usage error, which
+ * lands here as a failed outcome carrying the server's message. */
 export async function remoteRg(
   binding: RegistryBinding,
   transport: RemoteTransportHandle,
@@ -1239,16 +1252,19 @@ export async function remoteRg(
   params: {
     query: string;
     limit: number;
-    glob?: string;
+    globs?: readonly string[];
     type?: string;
     ignoreCase?: boolean;
     count?: boolean;
+    files?: boolean;
     passthrough: readonly string[];
   },
 ): Promise<RemoteRgExecution> {
   const base = transport.base;
-  const search = new URLSearchParams({ query: params.query, limit: String(params.limit) });
-  if (params.glob !== undefined) search.set("glob", params.glob);
+  const search = new URLSearchParams({ limit: String(params.limit) });
+  if (params.files === true) search.set("files", "1");
+  else search.set("query", params.query);
+  for (const glob of params.globs ?? []) search.append("glob", glob);
   if (params.type !== undefined) search.set("type", params.type);
   if (params.ignoreCase === true) search.set("i", "1");
   if (params.count === true) search.set("count", "1");
@@ -1283,6 +1299,9 @@ export async function remoteRg(
     match.ukp_uri !== undefined ? { ...match, ukp_uri: reanchorRemoteUkpUri(match.ukp_uri, binding) } : match,
   );
   const counts = remoteRgCounts(entry.counts);
+  const files = remoteRgFiles(entry.files)?.map((file) =>
+    file.ukp_uri !== undefined ? { ...file, ukp_uri: reanchorRemoteUkpUri(file.ukp_uri, binding) } : file,
+  );
   const warnings = Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [];
   return {
     outcome: {
@@ -1292,6 +1311,7 @@ export async function remoteRg(
       ...(typeof entry.message === "string" ? { message: entry.message } : {}),
       ...(matches !== undefined ? { matches } : {}),
       ...(counts !== undefined ? { counts } : {}),
+      ...(files !== undefined ? { files } : {}),
       ...(entry.truncated === true ? { truncated: true } : {}),
     },
     warnings,

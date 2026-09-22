@@ -3,6 +3,7 @@ import {
   projectRgEnvelope,
   renderRgHuman,
   RG_DEFAULT_LIMIT,
+  RG_FILES_DEFAULT_LIMIT,
   RG_MAX_LIMIT,
   RgPlanningError,
   RgUsageError,
@@ -11,6 +12,7 @@ import {
   type RgAggregateStatus,
   type RgContext,
   type RgEndpointOutcome,
+  type RgMode,
   type RgResult,
 } from "../capabilities/rg.ts";
 import { EXTERNAL_PROVIDER } from "../config/external-tool.ts";
@@ -50,17 +52,19 @@ export const RG_SPEC: UkpCommandSpec = {
   summary: "grep raw endpoint files with ripgrep (no index or declaration needed; results as ukp:// references)",
   group: "endpoint",
   description:
-    "Run base lexical search (ripgrep) across one or more Service endpoints. "
+    "Run base lexical search (ripgrep) across one or more Service endpoints, "
+    + "or enumerate their files with --files. "
     + "Available on every registered endpoint by default; results are shaped into ukp:// references that 'ukp read' consumes directly. "
     + "For indexed/semantic search use 'ukp search'.",
-  usage: "[--endpoint <name> ... | -g] <pattern> [--limit <1-1000>] [--count] [--glob <glob>] [--type <type>] [-i] [-- <rg flags>]",
-  arguments: [{ name: "pattern", help: "one non-empty regex pattern; quote to escape the shell" }],
+  usage: "[--endpoint <name> ... | -g] (<pattern> | --files) [--limit <1-1000>] [--count] [--glob <glob> ...] [--type <type>] [-i] [-- <rg flags>]",
+  arguments: [{ name: "pattern", help: "one non-empty regex pattern; quote to escape the shell (omit with --files)" }],
   options: [
     { flags: "-c, --endpoint <name>", help: "select one endpoint; repeat to select multiple endpoints", multi: true },
     { flags: "-g", help: "search every endpoint in the Host Registry; takes no value" },
-    { flags: "--limit <1-1000>", help: `maximum matches per run (default: ${RG_DEFAULT_LIMIT})` },
+    { flags: "--limit <1-1000>", help: `maximum results per run (default: ${RG_DEFAULT_LIMIT}; ${RG_FILES_DEFAULT_LIMIT} with --files)` },
     { flags: "--count", help: "count mode: per-file match counts instead of matches" },
-    { flags: "--glob <glob>", help: "glob filter passed to rg (e.g. \"*.md\")" },
+    { flags: "--files", help: "files mode: enumerate files by tree walk with no pattern (empty and binary files included; combine with --glob/--type)" },
+    { flags: "--glob <glob>", help: "glob filter passed to rg (e.g. \"*.md\"); repeat to combine - a later glob may negate with !", multi: true },
     { flags: "--type <type>", help: "file type filter passed to rg (e.g. md, py)" },
     { flags: "-i", help: "case-insensitive search" },
     { flags: "--json", help: "emit the structured response envelope" },
@@ -69,7 +73,8 @@ export const RG_SPEC: UkpCommandSpec = {
     "",
     "Passthrough:",
     "  After '--', rg native flags are passed through on an allowlist",
-    "  (-A/-B/-C/-m/--glob/--type/--max-filesize and common boolean flags).",
+    "  (-A/-B/-C/-m/--glob/--iglob/--type/--max-filesize and common boolean",
+    "  flags).",
     "  Path operands and output-changing flags (--json, -r, --pre, --config)",
     "  are rejected: the endpoint selector owns scope, UKP owns the output.",
     "",
@@ -84,6 +89,12 @@ export const RG_SPEC: UkpCommandSpec = {
     "  'ukp search' covers indexed search where the Service declares a search",
     "  capability provider.",
     "",
+    "Visibility:",
+    "  Every rg mode skips hidden files (dot-prefixed, including the .ukp/",
+    "  wiring) by default; pass -- --hidden after '--' to include them",
+    "  (-uu additionally lifts .gitignore rules). --files lists every",
+    "  non-hidden file, including empty and binary ones.",
+    "",
   ].join("\n"),
 };
 
@@ -92,7 +103,8 @@ interface RgCommandOptions extends Record<string, unknown> {
   g?: boolean;
   limit?: string;
   count?: boolean;
-  glob?: string;
+  files?: boolean;
+  glob?: string[];
   type?: string;
   i?: boolean;
   json?: boolean;
@@ -102,10 +114,13 @@ export function parseRgArgs(args: readonly string[]): ParsedRg {
   const parsed = parseKitArgs<RgCommandOptions>(RG_SPEC, args);
   const explicit: string[] = [];
   const warnings: string[] = [];
+  const files = parsed.options.files === true;
 
   // Command-side semantic checks, in the pre-kit order: limit validation,
-  // duplicate warnings, excess positional, emptiness, conflict.
-  let limit = RG_DEFAULT_LIMIT;
+  // duplicate warnings, excess positional, mode conflicts, pattern rule,
+  // scope conflict. Files mode (ADR-RG-005) relaxes the pattern requirement
+  // and rejects combinations that would silently no-op.
+  let limit = files ? RG_FILES_DEFAULT_LIMIT : RG_DEFAULT_LIMIT;
   if (parsed.options.limit !== undefined) {
     if (!/^[0-9]+$/.test(parsed.options.limit)) throw new KitUsageError("--limit must be a decimal integer");
     limit = Number(parsed.options.limit);
@@ -125,20 +140,34 @@ export function parseRgArgs(args: readonly string[]): ParsedRg {
       `unexpected argument '${unexpected}'; rg accepts exactly one pattern. Use '--endpoint <name>' to select an endpoint; '-g' takes no value.`,
     );
   }
-  if (pattern === undefined || pattern.length === 0) throw new KitUsageError("rg pattern must be non-empty");
+  if (files && parsed.options.count === true) {
+    throw new KitUsageError("--files and --count cannot be used together (pick one output mode)");
+  }
+  if (files && parsed.options.i === true) {
+    throw new KitUsageError("--files cannot be combined with -i: there is no pattern to match; pass '-- --iglob <glob>' for a case-insensitive glob filter");
+  }
+  if (files) {
+    if (pattern !== undefined) {
+      throw new KitUsageError(`unexpected argument '${pattern}'; --files takes no pattern - use --glob to filter by name`);
+    }
+  } else if (pattern === undefined || pattern.length === 0) {
+    throw new KitUsageError("rg pattern must be non-empty (or pass --files to enumerate files without a pattern)");
+  }
   if (parsed.options.g && explicit.length > 0) {
     throw new KitUsageError("--endpoint and -g cannot be used together");
   }
 
+  const globs = parsed.options.glob ?? [];
   return {
-    request: { query: pattern, limit },
+    request: { query: files ? "" : pattern!, limit },
     options: {
       explicitEndpoints: explicit.length > 0 ? explicit : undefined,
       global: parsed.options.g ?? false,
-      ...(parsed.options.glob === undefined ? {} : { glob: parsed.options.glob }),
+      ...(globs.length > 0 ? { globs } : {}),
       ...(parsed.options.type === undefined ? {} : { type: parsed.options.type }),
       ...(parsed.options.i === true ? { ignoreCase: true } : {}),
       ...(parsed.options.count === true ? { count: true } : {}),
+      ...(files ? { files: true } : {}),
       ...(parsed.options.json === true ? { json: true } : {}),
       passthrough: [],
     },
@@ -238,7 +267,7 @@ function renderRgCommandResult(parsed: ParsedRg, result: RgResult): RgCommandRes
   if (parsed.options.json === true) {
     return {
       exitCode: RG_EXIT_BY_AGGREGATE[result.aggregate],
-      stdout: `${JSON.stringify(projectRgEnvelope(result, parsed.options.count === true), null, 2)}\n`,
+      stdout: `${JSON.stringify(projectRgEnvelope(result), null, 2)}\n`,
       stderr: view.diagnostics,
     };
   }
@@ -305,10 +334,11 @@ async function executeMixedRg(
         const execution = await remoteRg(binding, transport, token, {
           query: parsed.request.query,
           limit: parsed.request.limit,
-          ...(parsed.options.glob !== undefined ? { glob: parsed.options.glob } : {}),
+          ...(parsed.options.globs !== undefined ? { globs: parsed.options.globs } : {}),
           ...(parsed.options.type !== undefined ? { type: parsed.options.type } : {}),
           ...(parsed.options.ignoreCase === true ? { ignoreCase: true } : {}),
           ...(parsed.options.count === true ? { count: true } : {}),
+          ...(parsed.options.files === true ? { files: true } : {}),
           passthrough: parsed.options.passthrough,
         });
         remoteOutcomes.set(binding.name, execution.outcome);
@@ -343,6 +373,7 @@ async function executeMixedRg(
   return renderRgCommandResult(parsed, {
     query: parsed.request.query,
     limit: parsed.request.limit,
+    mode: (parsed.options.files === true ? "files" : parsed.options.count === true ? "count" : "match") as RgMode,
     endpoints,
     warnings,
     aggregate,
