@@ -19,6 +19,7 @@ import {
   renderServiceGuide,
   renderServiceQmdGuide,
   renderClientGuide,
+  renderRgGuide,
   renderRemoteGuide,
   renderProposeGuide,
   renderProposeHelp,
@@ -835,7 +836,25 @@ describe("CLI bootstrap", () => {
   });
 
   test("guide help lists the topics and subtopics", () => {
-    expect(renderGuideHelp()).toContain("guide topic: service | service qmd | client | remote | propose");
+    expect(renderGuideHelp().replace(/\s+/g, " ")).toContain("guide topic: service | service qmd | client | rg | remote | propose");
+  });
+
+  // ADR-RG-005 design condition 4: rg stops being the only command without
+  // guide coverage — the topic carries glob semantics and visibility tiers
+  // (probe 20260922: both were learnable only by trial).
+  test("guide rg covers modes, glob semantics, and visibility tiers", () => {
+    const output: string[] = [];
+    expect(renderRgGuide()).toContain("UKP rg quickstart");
+    expect(runCli(["guide", "rg"], (message) => output.push(message))).toBe(0);
+    const guide = output.join("\n").replace(/\s+/g, " ");
+    expect(guide).toContain("Three modes: match (default), --count (per-file totals), --files (enumeration).");
+    expect(guide).toContain("empty and binary files are listed too");
+    expect(guide).toContain('a glob without "/" matches the file name at any depth');
+    expect(guide).toContain('a glob containing "/" anchors to the endpoint-relative path');
+    expect(guide).toContain('a leading "!" excludes');
+    expect(guide).toContain("case-insensitive");
+    expect(guide).toContain("including the .ukp/ wiring");
+    expect(guide).toContain("-- --hidden after '--'");
   });
 
   test("guide rejects unknown topics with recovery guidance", () => {

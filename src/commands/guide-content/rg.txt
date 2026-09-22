@@ -1,0 +1,35 @@
+UKP rg quickstart
+
+Goal: search or enumerate a Service's own files with ripgrep - no index, no declaration, real-time.
+
+Model:
+- rg is the lexical baseline: it scans files at call time, so it works on every registered endpoint. 'ukp search' is the indexed path and needs the Service to declare a provider.
+- Output is ukp:// references that 'ukp read' consumes directly.
+- Three modes: match (default), --count (per-file totals), --files (enumeration).
+
+1. Search
+   ukp rg --endpoint <name> "pattern"
+   -i is case-insensitive; --glob narrows by name; --limit raises the cap (default 50 matches).
+
+2. Enumerate files (no pattern)
+   ukp rg --endpoint <name> --files
+   A true tree walk, not a content match: empty and binary files are listed too.
+   Narrow by name with --glob, by kind with --type. Output is sorted; the
+   cap defaults to 500 (--limit to change).
+
+3. Glob semantics
+   --glob follows ripgrep/gitignore rules: a glob without "/" matches the
+   file name at any depth ("*.md"); a glob containing "/" anchors to the
+   endpoint-relative path ("docs/*"). Matching is case-sensitive; pass
+   -- --iglob "<glob>" after '--' for a case-insensitive variant.
+   --glob repeats: a leading "!" excludes, so "*.md" plus "!docs/*" is
+   markdown outside docs/.
+
+4. Visibility (every rg mode)
+   Hidden files (dot-prefixed, including the .ukp/ wiring) are skipped by
+   default. Add -- --hidden after '--' to include them; -uu also lifts
+   .gitignore rules. 'ukp read' can address hidden files directly either way.
+
+Remember:
+- Exact flags and the passthrough allowlist live in 'ukp rg --help'.
+- Remote endpoints behave the same: one command drives local and door-registered endpoints alike.

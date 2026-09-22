@@ -16,6 +16,8 @@ import { toolRelayArgv, TOOL_NOT_FOUND_EXIT } from "../spawn-relay.ts";
 // Structured outcome per ADR 0021 — never rendered text, never exit codes.
 
 export interface RgRequest {
+  /** Search pattern (match/count modes). Empty only in files mode, where
+   * the parse layer guarantees it was omitted (ADR-RG-005 mutual exclusion). */
   query: string;
   limit: number;
 }
@@ -23,10 +25,15 @@ export interface RgRequest {
 export interface RgOptions {
   explicitEndpoints?: string[];
   global: boolean;
-  glob?: string;
+  /** Ordered glob filters (repeatable top-level flag, ADR-RG-005: rg glob
+   * grammar lets a later glob negate with `!` — include+exclude combos). */
+  globs?: readonly string[];
   type?: string;
   ignoreCase?: boolean;
   count?: boolean;
+  /** Files enumeration mode (ADR-RG-005): true tree walk via `rg --files` —
+   * no content matching, so empty and binary files are visible. */
+  files?: boolean;
   /** Validated passthrough args (allowlist + scope protection, ADR-RG-002). */
   passthrough: readonly string[];
   /** Surface concern (propose precedent): the capability never consumes it —
@@ -73,6 +80,14 @@ export interface RgCountEntry {
   count: number;
 }
 
+/** One enumerated file (files mode, ADR-RG-005): endpoint-relative path plus
+ * the durable slot key under the same containment-gated emission rule as
+ * matches (ADR 0019 stance). */
+export interface RgFileEntry {
+  path: string;
+  ukp_uri?: string;
+}
+
 export interface RgEndpointOutcome {
   name: string;
   provider: typeof EXTERNAL_PROVIDER;
@@ -92,13 +107,20 @@ export interface RgEndpointOutcome {
   matches?: RgMatch[];
   /** Count mode results (`--count`). */
   counts?: RgCountEntry[];
+  /** Files mode results (`--files`, sorted then capped). */
+  files?: RgFileEntry[];
   /** True when matches were truncated at the request limit. */
   truncated?: boolean;
 }
 
+/** The run's output mode — drives tool argv, intake, and both presentation
+ * stages (envelope count_mode/files_mode and the human render branches). */
+export type RgMode = "match" | "count" | "files";
+
 export interface RgResult {
   query: string;
   limit: number;
+  mode: RgMode;
   endpoints: RgEndpointOutcome[];
   warnings: string[];
   aggregate: RgAggregateStatus;
@@ -119,6 +141,10 @@ export class RgPlanningError extends Error {
 }
 
 export const RG_DEFAULT_LIMIT = 50;
+/** Files-mode request limit default (ADR-RG-005): enumeration units are a
+ * single path line vs the 3-4 line match unit, so the same consumer-comfort
+ * calibration that set 50 for matches lands on 500 here. */
+export const RG_FILES_DEFAULT_LIMIT = 500;
 export const RG_MAX_LIMIT = 1000;
 
 export function defaultRgCommand(): readonly string[] {
@@ -156,8 +182,9 @@ export function rgTimeoutMs(): number {
 // Passthrough validation (ADR-RG-002): allowlist + scope protection.
 // ---------------------------------------------------------------------------
 
-/** Value flags consume the next token (or an attached value: `-C2`). */
-const PASSTHROUGH_VALUE_FLAGS = new Set(["-A", "-B", "-C", "-m", "--max-count", "-g", "--glob", "-t", "--type", "--max-filesize"]);
+/** Value flags consume the next token (or an attached value: `-C2`). `--iglob`
+ * joined with ADR-RG-005 (case-insensitive glob variant, probe friction 2/8). */
+const PASSTHROUGH_VALUE_FLAGS = new Set(["-A", "-B", "-C", "-m", "--max-count", "-g", "--glob", "--iglob", "-t", "--type", "--max-filesize"]);
 const PASSTHROUGH_BOOL_FLAGS = new Set(["-i", "--ignore-case", "-S", "--smart-case", "-s", "--case-sensitive", "-w", "--word-regexp", "-F", "--fixed-strings", "-v", "--invert-match", "-U", "--multiline", "--no-ignore", "--hidden", "--no-messages", "--column", "--no-heading"]);
 
 /** Validates passthrough args: allowlist membership + scope protection.
@@ -248,13 +275,15 @@ function toUkpUri(endpointName: string, path: string): string {
  * provider-location mapping. A miss silently drops the `ukp_uri` field
  * (the match and its `path` stay): rg output is tool output, not user
  * error. Output-side filtering is the second line of defense; the
- * passthrough allowlist (no path operands) is the first. */
-function ukpUriIfInside(endpointFolder: string, endpointName: string, path: string): string | undefined {
+ * passthrough allowlist (no path operands) is the first. The folder's
+ * realpath is passed in pre-resolved (per endpoint, not per entry — review
+ * 2026-09-22: per-file resolution paid 2 realpaths/file on exactly the
+ * win32 Defender-taxed path); an unresolvable folder emits nothing. */
+function ukpUriIfInside(folderReal: string | undefined, endpointFolder: string, endpointName: string, path: string): string | undefined {
+  if (folderReal === undefined) return undefined;
   const absolute = resolve(endpointFolder, ...path.replace(/\\/g, "/").split("/"));
-  let folderReal: string;
   let targetReal: string;
   try {
-    folderReal = realpathSync(endpointFolder);
     targetReal = realpathSync(absolute);
   } catch {
     return undefined;
@@ -273,6 +302,16 @@ interface RgJsonEvent {
 }
 
 function rgToolArgs(parsed: ParsedRg): string[] {
+  if (parsed.options.files) {
+    // Files mode (ADR-RG-005): true tree walk — rg lists paths without
+    // reading content, so empty and binary files are visible. No `-e`:
+    // the parse layer guarantees no pattern rides along.
+    const args: string[] = ["--files", "--no-messages"];
+    for (const glob of parsed.options.globs ?? []) args.push("--glob", glob);
+    if (parsed.options.type !== undefined) args.push("--type", parsed.options.type);
+    args.push(...parsed.options.passthrough);
+    return args;
+  }
   const args: string[] = ["--no-heading", "--no-messages"];
   if (parsed.options.count) {
     args.push("--count");
@@ -280,7 +319,7 @@ function rgToolArgs(parsed: ParsedRg): string[] {
     args.push("--json");
   }
   if (parsed.options.ignoreCase) args.push("-i");
-  if (parsed.options.glob !== undefined) args.push("--glob", parsed.options.glob);
+  for (const glob of parsed.options.globs ?? []) args.push("--glob", glob);
   if (parsed.options.type !== undefined) args.push("--type", parsed.options.type);
   args.push(...parsed.options.passthrough);
   args.push("-e", parsed.request.query);
@@ -294,6 +333,7 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
   validateRgPassthrough(parsed.options.passthrough);
   const { plan, warnings } = planRg(parsed, context);
   const command = context.rgCommand ?? defaultRgCommand();
+  const mode: RgMode = parsed.options.files === true ? "files" : parsed.options.count === true ? "count" : "match";
   const endpoints: RgEndpointOutcome[] = [];
   let succeeded = false;
   let failed = false;
@@ -306,6 +346,22 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
       outcome.status = "cancelled";
       continue;
     }
+
+    // Lazy once-per-endpoint folder realpath for the uri emission rule: the
+    // folder cannot change mid-run, and a skip/fail path never pays for it.
+    // `null` marks "not attempted yet" vs `undefined` = "attempted, failed"
+    // (a failed resolution emits no uris without re-attempting per entry).
+    let endpointFolderReal: string | undefined | null = null;
+    const folderRealpath = (): string | undefined => {
+      if (endpointFolderReal === null) {
+        try {
+          endpointFolderReal = realpathSync(endpoint.folder);
+        } catch {
+          endpointFolderReal = undefined;
+        }
+      }
+      return endpointFolderReal;
+    };
 
     // Explicit search root: with no path operand rg searches stdin instead
     // of the cwd whenever stdin is not a tty (ISSUE-013 root cause,
@@ -361,6 +417,42 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
       continue;
     }
 
+    if (mode === "files") {
+      // Plain path-per-line intake. The full list is sorted BEFORE the
+      // client-side cap so truncation yields a deterministic window (the
+      // first N paths in lexicographic order, ADR-RG-005) rather than an
+      // arbitrary subset of rg's parallel-walk order.
+      const paths = (result.stdout ?? "")
+        .split(/\r?\n/)
+        .filter((line) => line.length > 0)
+        .map((line) => line.replace(/\\/g, "/").replace(/^\.\//, ""))
+        .sort();
+      const files: RgFileEntry[] = [];
+      let truncated = false;
+      for (const path of paths) {
+        if (files.length >= parsed.request.limit) {
+          truncated = true;
+          break;
+        }
+        const entry: RgFileEntry = { path };
+        const uri = ukpUriIfInside(folderRealpath(), endpoint.folder, endpoint.name, path);
+        if (uri !== undefined) entry.ukp_uri = uri;
+        files.push(entry);
+      }
+      if (files.length === 0 && !truncated) {
+        // An empty enumeration (empty folder or everything filtered out) is
+        // a successful result — same D-036 stance as a no-match search.
+        succeeded = true;
+        outcome.status = "no_matches";
+      } else {
+        succeeded = true;
+        outcome.status = "succeeded";
+        outcome.files = files;
+        if (truncated) outcome.truncated = true;
+      }
+      continue;
+    }
+
     if (parsed.options.count) {
       const counts: RgCountEntry[] = [];
       for (const line of (result.stdout ?? "").split(/\r?\n/)) {
@@ -407,7 +499,7 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
         const firstLine = text.split(/\r?\n/)[0] ?? "";
         if (firstLine.length > 0) entry.text = firstLine.length > 240 ? `${firstLine.slice(0, 240)}...` : firstLine;
       }
-      const uri = ukpUriIfInside(endpoint.folder, endpoint.name, entry.path);
+      const uri = ukpUriIfInside(folderRealpath(), endpoint.folder, endpoint.name, entry.path);
       if (uri !== undefined) entry.ukp_uri = uri;
       matches.push(entry);
     }
@@ -427,6 +519,7 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
   return {
     query: parsed.request.query,
     limit: parsed.request.limit,
+    mode,
     endpoints,
     warnings,
     aggregate: interrupted
@@ -447,35 +540,41 @@ export interface RgEnvelope {
   schema: "ukp.rg.v1";
   command: "rg";
   capability: "rg";
-  query: string;
+  /** Omitted in files mode (ADR-RG-005): there is no pattern to echo. */
+  query?: string;
   limit: number;
   count_mode: boolean;
+  files_mode: boolean;
   endpoints: Array<{
     name: string;
     provider: string;
     status: string;
     match_count?: number;
+    file_count?: number;
     truncated?: boolean;
     message?: string;
     matches?: RgMatch[];
     counts?: RgCountEntry[];
+    files?: RgFileEntry[];
   }>;
   warnings: string[];
 }
 
-export function projectRgEnvelope(result: RgResult, countMode: boolean): RgEnvelope {
+export function projectRgEnvelope(result: RgResult): RgEnvelope {
   return {
     schema: "ukp.rg.v1",
     command: "rg",
     capability: "rg",
-    query: result.query,
+    ...(result.mode === "files" ? {} : { query: result.query }),
     limit: result.limit,
-    count_mode: countMode,
+    count_mode: result.mode === "count",
+    files_mode: result.mode === "files",
     endpoints: result.endpoints.map((endpoint) => ({
       name: endpoint.name,
       provider: endpoint.provider,
       status: endpoint.status ?? "failed",
       ...(endpoint.matches !== undefined ? { match_count: endpoint.matches.length, matches: endpoint.matches } : {}),
+      ...(endpoint.files !== undefined ? { file_count: endpoint.files.length, files: endpoint.files } : {}),
       ...(endpoint.counts !== undefined ? { counts: endpoint.counts } : {}),
       ...(endpoint.truncated !== undefined ? { truncated: endpoint.truncated } : {}),
       ...(endpoint.message !== undefined ? { message: endpoint.message } : {}),
@@ -501,7 +600,14 @@ export function renderRgHuman(result: RgResult): RgHumanView {
       continue;
     }
     if (endpoint.status === "no_matches") {
-      lines.push("(no matches)");
+      lines.push(result.mode === "files" ? "(no files)" : "(no matches)");
+      continue;
+    }
+    if (endpoint.files !== undefined) {
+      // Exhibit form (probe 20260922, zero misreads): one line per file,
+      // the durable uri when containment allows it, the raw path otherwise.
+      for (const file of endpoint.files) lines.push(file.ukp_uri ?? file.path);
+      if (endpoint.truncated) lines.push(`(truncated at the result limit ${result.limit}; raise --limit)`);
       continue;
     }
     if (endpoint.counts !== undefined) {
