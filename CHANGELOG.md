@@ -34,6 +34,23 @@ All notable public changes to UKP will be documented in this file.
   -> 0.9s. Test-injected tool commands are never wrapped; non-Windows is
   byte-identical.
 
+- An ssh endpoint whose host is powered off now fails with a classified
+  verdict in seconds instead of stalling `ukp list` (and every remote
+  command) for ~40s before a vague "check the host alias and key auth"
+  message. Deterministic failures — host unreachable (off / firewalled /
+  name gone), connection refused (host online, no ssh server), key rejected,
+  host key changed — are read from ssh's own diagnostics and reject on the
+  first attempt instead of burning the three-attempt wake ladder; instant
+  verdicts (refused / auth / host key / name-resolution failures) are
+  caught even earlier by the shell-family probe. Each class says what it
+  means and what to do ("the machine appears off, firewalled, or its
+  address no longer resolves; verify it is powered on", "start the ssh
+  server on the host", ...). The retry ladder keeps doing its actual job
+  (remote port collisions, doors that are slow to start), and
+  `UKP_SSH_CONNECT_TIMEOUT_MS` keeps its meaning. Measured against a
+  powered-off host: warm shell cache 39.8s -> 11.2s (one ConnectTimeout),
+  cold cache -> ~17s, refused 13.4s -> 5.3s; healthy paths unchanged.
+
 ## [0.2.3] - 2026-09-21
 
 ### Added

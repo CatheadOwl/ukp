@@ -901,13 +901,14 @@ describe("W1 responsiveness (ukp_list / ADR 0026 rules 1-2): fan-out, bounded co
 
   test("dead origin: each row degrades under its own name (no sibling leak through the shared ladder), exit stays 0", async () => {
     // An ssh that dies instantly, like a real ssh against an unreachable
-    // host after ConnectTimeout: no forward, no diagnostics of any
-    // recognized class — the ladder exhausts quickly and the origin
-    // degrades. Two same-origin bindings pin the fan-out failure shape:
-    // both rows share the origin's ONE rejected ladder, so a warning that
-    // embedded the first acquirer's endpoint label would leak it into the
-    // sibling's warning (the review finding that removed endpoint labels
-    // from transport messages — the target is origin-level fact).
+    // host after ConnectTimeout: the timed-out signature classifies as
+    // unreachable and the ladder's FIRST attempt issues the origin's verdict
+    // (ADR-REM-008 — before it, this burned all three attempts). Two
+    // same-origin bindings pin the fan-out failure shape: both rows share
+    // the origin's ONE rejected ladder, so a warning that embedded the first
+    // acquirer's endpoint label would leak it into the sibling's warning
+    // (the review finding that removed endpoint labels from transport
+    // messages — the target is origin-level fact).
     const deadSsh = join(root, "fake-ssh-dead.mjs");
     writeFileSync(
       deadSsh,
@@ -932,10 +933,140 @@ describe("W1 responsiveness (ukp_list / ADR 0026 rules 1-2): fan-out, bounded co
     const warnings = listed.stderr.split("\n");
     const deltaWarning = warnings.find((line) => line.startsWith("endpoint 'delta'"));
     const gammaWarning = warnings.find((line) => line.startsWith("endpoint 'gamma'"));
-    expect(deltaWarning).toContain("waking the ukp door on 'dead-host' failed");
-    expect(gammaWarning).toContain("waking the ukp door on 'dead-host' failed");
+    expect(deltaWarning).toContain("waking the ukp door on 'dead-host' failed - the host is unreachable");
+    expect(gammaWarning).toContain("waking the ukp door on 'dead-host' failed - the host is unreachable");
     expect(deltaWarning).not.toContain("gamma");
     expect(gammaWarning).not.toContain("delta");
+  }, 20_000);
+});
+
+describe("wake failure classification (ADR-REM-008 / D-093): deterministic verdicts fast-fail", () => {
+  // Phase-journaling failing fake: every invocation appends one phase line
+  // (probe = the `echo %OS%` argv, attempt = the pinned wake command, master
+  // = a `-N` mux argv — master only appears off-win32 and is not asserted),
+  // then fails with the given ssh stderr + exit 255 — the missing-ukp
+  // inline-fake idiom plus spawn accounting, so tests pin BOTH the classified
+  // message and how much of the ladder the verdict consumed.
+  function writeFailingFake(name: string, stderrText: string): string {
+    const fakePath = join(root, name);
+    writeFileSync(
+      fakePath,
+      [
+        `import { appendFileSync } from "node:fs";`,
+        `const argv = process.argv.slice(2);`,
+        `const phase = argv.includes("echo %OS%") ? "probe" : argv.includes("-N") ? "master" : "attempt";`,
+        `appendFileSync(${JSON.stringify(`${fakePath}.journal`)}, phase + "\\n", "utf8");`,
+        `console.error(${JSON.stringify(stderrText)});`,
+        `process.exit(255);`,
+      ].join("\n"),
+      "utf8",
+    );
+    return fakePath;
+  }
+  const phaseCount = (fakePath: string, phase: string): number =>
+    readFileSync(`${fakePath}.journal`, "utf8").split("\n").filter((line) => line === phase).length;
+
+  async function wakeFailureOf(fakePath: string, url: string, options: { registryPath?: string } = {}): Promise<string> {
+    try {
+      const transport = await openRemoteTransport(
+        { name: "(probe)", kind: "remote", url },
+        { sshCommand: [process.execPath, fakePath], ...options },
+      );
+      transport.close();
+      return "";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  test("refused host, cold cache: the family probe's instant verdict rejects - the ladder is never entered", async () => {
+    const fake = writeFailingFake(
+      "fake-ssh-refused.mjs",
+      "ssh: connect to host 127.0.0.1 port 22: Connection refused",
+    );
+    const message = await wakeFailureOf(fake, "ssh://refused-host");
+    expect(message).toContain("waking the ukp door on 'refused-host' failed - the host is reachable but nothing is listening for ssh");
+    expect(message).toContain("Connection refused");
+    expect(message).toContain("Start the ssh server");
+    expect(phaseCount(fake, "probe")).toBe(1);
+    expect(phaseCount(fake, "attempt")).toBe(0);
+  }, 20_000);
+
+  test("auth failure, cold cache: probe-classified with the key remedy, zero attempts", async () => {
+    const fake = writeFailingFake(
+      "fake-ssh-auth.mjs",
+      "root@auth-host: Permission denied (publickey,password).",
+    );
+    const message = await wakeFailureOf(fake, "ssh://auth-host");
+    expect(message).toContain("ssh rejected the credentials");
+    expect(message).toContain("authorized_keys");
+    expect(phaseCount(fake, "probe")).toBe(1);
+    expect(phaseCount(fake, "attempt")).toBe(0);
+  }, 20_000);
+
+  test("host key rejection, cold cache: probe-classified with the re-verify remedy, zero attempts", async () => {
+    const fake = writeFailingFake("fake-ssh-hostkey.mjs", "Host key verification failed.");
+    const message = await wakeFailureOf(fake, "ssh://hostkey-host");
+    expect(message).toContain("the host key was not accepted");
+    expect(message).toContain("ssh-keygen -R");
+    expect(phaseCount(fake, "probe")).toBe(1);
+    expect(phaseCount(fake, "attempt")).toBe(0);
+  }, 20_000);
+
+  test("black-hole host, cold cache: the probe's timeout verdict defers to the ladder's full budget", async () => {
+    // A slow-but-alive host outlives a short probe window, so a probe-stage
+    // timed-out verdict is not trustworthy — the same signature thrown by
+    // the ladder (which runs the full ConnectTimeout) is. The probe runs
+    // (cold cache), does not reject, and the FIRST ladder attempt issues
+    // the verdict.
+    const fake = writeFailingFake(
+      "fake-ssh-blackhole.mjs",
+      "ssh: connect to host 127.0.0.1 port 22: Connection timed out",
+    );
+    const message = await wakeFailureOf(fake, "ssh://blackhole-host");
+    expect(message).toContain("the host is unreachable");
+    expect(message).toContain("appears off");
+    expect(phaseCount(fake, "probe")).toBe(1);
+    expect(phaseCount(fake, "attempt")).toBe(1);
+  }, 20_000);
+
+  test("black-hole host, warm shell cache: the first (and only) wake attempt issues the verdict", async () => {
+    // The user's actual shape (liku): the shell family is cached, the probe
+    // is skipped entirely, and the offline verdict costs one ConnectTimeout.
+    const fake = writeFailingFake(
+      "fake-ssh-blackhole-warm.mjs",
+      "ssh: connect to host 127.0.0.1 port 22: Connection timed out",
+    );
+    const clientRegistry = join(root, "warm-blackhole-client-registry.toml");
+    // Writes the shared <root>/wake-shell.toml wholesale (review P3): safe
+    // only because this test runs AFTER the shell-family-cache tests above
+    // (their assertions are done) and the cold-cache tests pass no
+    // registryPath — the ordering assumption this comment pins.
+    writeFileSync(
+      join(root, "wake-shell.toml"),
+      stringifyToml({ shells: { "warm-blackhole-host": "posix" } }),
+      "utf8",
+    );
+    const message = await wakeFailureOf(fake, "ssh://warm-blackhole-host/x", { registryPath: clientRegistry });
+    expect(message).toContain("the host is unreachable");
+    expect(phaseCount(fake, "probe")).toBe(0);
+    expect(phaseCount(fake, "attempt")).toBe(1);
+  }, 20_000);
+
+  test("unclassified failure keeps the retry ladder: bind collisions burn all three attempts", async () => {
+    // The ladder's reason to exist: port-collision binds are the transient
+    // class the classifier must NOT swallow — an unclassified exit is
+    // retried to exhaustion and surfaces the generic failure wording.
+    const fake = writeFailingFake(
+      "fake-ssh-bind.mjs",
+      "ukp serve: error: bind to port 24680 on 127.0.0.1 failed: Address already in use",
+    );
+    const message = await wakeFailureOf(fake, "ssh://bind-host");
+    expect(message).toContain("waking the ukp door on 'bind-host' failed");
+    expect(message).toContain("Address already in use");
+    expect(message).not.toContain("unreachable");
+    expect(message).not.toContain("nothing is listening");
+    expect(phaseCount(fake, "attempt")).toBe(3);
   }, 20_000);
 });
 

@@ -382,6 +382,71 @@ function wrongShellSignature(form: WakeShellForm, diagnostics: string): boolean 
   return /['"]cmd['"]|cmd: (?:command )?not found/i.test(diagnostics);
 }
 
+/** Wake failure classes from ssh's own diagnostics (ADR-REM-008 / D-093):
+ * OpenSSH's stderr wording is locale-stable (unlike cmd.exe's), so stable
+ * substrings classify the deterministic failures — verdicts a re-run against
+ * the same host reproduces, which is why none of them belongs in the retry
+ * ladder. One taxonomy, three matchers: these connect/auth signatures here,
+ * missing-ukp (127/9009 dictionary) and shell-mismatch keep their existing
+ * branches. Pure function by design — the signature table is unit-testable
+ * without spawning ssh. */
+export type WakeFailureClass = "unreachable" | "refused" | "auth" | "hostkey";
+
+export function classifyWakeFailure(diagnostics: string): WakeFailureClass | undefined {
+  if (/Connection timed out|No route to host|Could not resolve hostname/i.test(diagnostics)) return "unreachable";
+  if (/Connection refused/i.test(diagnostics)) return "refused";
+  if (/Host key verification failed/i.test(diagnostics)) return "hostkey";
+  // Auth failures always carry the method-list suffix ("Permission denied
+  // (publickey,password).") — ssh's own format. The bare phrase also appears
+  // in REMOTE-COMMAND exec errors (a found-but-not-executable ukp on a
+  // noexec mount), which reach these diagnostics under -tt and must keep
+  // falling through to the generic wording, not get the key-auth remedy
+  // (review P2).
+  if (/Permission denied \(/i.test(diagnostics)) return "auth";
+  return undefined;
+}
+
+/** A probe-stage timeout verdict is not trustworthy on its own (ADR-REM-008
+ * §3, implementation-time refinement): the probe's 5s race window is shorter
+ * than the full ConnectTimeout budget a slow-but-alive host may legitimately
+ * need — its wake would succeed in the ladder's window — so black-hole
+ * signatures defer to the ladder, which runs the full budget before the same
+ * classifier issues the verdict. Instant verdicts (refused, auth, hostkey,
+ * resolve and no-route failures) settle within one roundtrip and are trusted
+ * wherever they appear; a probe-local short ConnectTimeout would have
+ * misjudged every host slower than it. */
+function wakeFailureDefersToLadder(failureClass: WakeFailureClass, diagnostics: string): boolean {
+  return failureClass === "unreachable"
+    && /Connection timed out/i.test(diagnostics)
+    && !/No route to host|Could not resolve hostname/i.test(diagnostics);
+}
+
+/** Classified wake-failure text (ADR-REM-008 §4): names the ssh TARGET (an
+ * origin-level fact under fan-out — never an endpoint label), quotes the ssh
+ * diagnostics as evidence, and gives the class its one remedy. Printable
+ * ASCII only — the frozen vocabulary rule for runtime strings. */
+export function wakeFailureMessage(failureClass: WakeFailureClass, target: string, diagnostics: string): string {
+  const evidence = diagnostics.length > 0 ? `: ${diagnostics}` : "";
+  switch (failureClass) {
+    case "unreachable":
+      return `waking the ukp door on '${target}' failed - the host is unreachable${evidence}. The machine appears off, firewalled, or its address no longer resolves; verify it is powered on and reachable`;
+    case "refused":
+      return `waking the ukp door on '${target}' failed - the host is reachable but nothing is listening for ssh${evidence}. Start the ssh server on the host (on Windows: the optional OpenSSH Server feature) or fix the port`;
+    case "auth":
+      return `waking the ukp door on '${target}' failed - ssh rejected the credentials (BatchMode, no password prompt)${evidence}. Fix key auth: add the public key to the host's authorized_keys, or check the ssh config's IdentityFile`;
+    case "hostkey":
+      return `waking the ukp door on '${target}' failed - the host key was not accepted${evidence}. If the host was reinstalled this is expected: re-verify it (ssh-keygen -R), then retry`;
+  }
+}
+
+/** Not-ready wording (ADR-REM-008): the old text blamed the host alias and
+ * key auth — both, by the time this message is reached, have already
+ * succeeded (their failures classify earlier); what failed is the door
+ * behind a working connection. */
+export function wakeNotReadyMessage(target: string, timeoutMs: number): string {
+  return `the ssh connection to '${target}' worked but the ukp door did not become ready within ${Math.round(timeoutMs / 1000)}s. Host prerequisite (W9): ukp on the remote PATH; a slow first start also lands here - retry once before investigating`;
+}
+
 /** Cross-invocation shell-family cache (ukp_list W1 / L-1, ADR 0026's
  * implementation-time note): a host's shell family is a static fact, but
  * learning it costs a full ssh roundtrip per origin per invocation — on
@@ -491,23 +556,32 @@ function spawnHostSsh(options: { sshCommand?: readonly string[] }, argv: readonl
  * build LOSES a quoted remote command under a pty (an interactive cmd
  * swallows it and waits on stdin forever — the no-pty path executes it
  * correctly). Defaults to POSIX (the common server shape) when the probe
- * errors or times out; the ladder remains as the backstop. */
+ * errors or times out; the ladder remains as the backstop.
+ *
+ * The probe doubles as the first failure classifier (ADR-REM-008 §3): its
+ * merged output — the `%OS%` answer on stdout, ssh's own diagnostics on
+ * stderr — feeds `classifyWakeFailure`, so instant verdicts (refused / auth
+ * / hostkey / resolve failures) classify here and the ladder is never
+ * entered for them. */
 async function probeHostShellFamily(
   options: { sshCommand?: readonly string[] },
   target: string,
-): Promise<WakeShellForm> {
+): Promise<{ form: WakeShellForm; diagnostics: string }> {
   const proc = spawnHostSsh(
     options,
     [...(options.sshCommand ?? ["ssh"]), "-o", "BatchMode=yes", ...connectTimeoutOptions(), target, "echo %OS%"],
   );
-  const output = await Promise.race([
-    typeof proc.stdout === "object" && proc.stdout !== null
-      ? new Response(proc.stdout).text().catch(() => "")
-      : "",
+  // One merged read of BOTH streams, raced against the 5s cap: resolves when
+  // the process dies (a healthy probe answers and exits), else returns empty
+  // at the cap and the default form stands — a slow host is never punished.
+  // A generous keep (review P3): the tail-trimmed merge must not push the
+  // stdout %OS% answer out the front even behind unusual stderr volume.
+  const text = await Promise.race([
+    drainStderrTail([proc.stdout, proc.stderr], 8192),
     Bun.sleep(5_000).then(() => ""),
   ]);
   proc.kill();
-  return /Windows_NT/i.test(output) ? "cmd" : "posix";
+  return { form: /Windows_NT/i.test(text) ? "cmd" : "posix", diagnostics: text };
 }
 
 /** HTTP-level readiness probe through the tunnel (W9): a TCP accept on the
@@ -599,8 +673,25 @@ async function openSshTunnel(
   // Shell form (2026-09-20): probed up front via `echo %OS%` (language-
   // independent — see probeHostShellFamily), POSIX by default; the wrong-
   // shell ladder below remains the backstop for a lying or timed-out probe.
-  let form: WakeShellForm = readCachedShellFamily(shellFamilyCachePath(options), target)
-    ?? await probeHostShellFamily(options, target);
+  // Cold cache: the probe doubles as the first failure classifier
+  // (ADR-REM-008 §3) — its instant verdicts (refused / auth / hostkey /
+  // resolve failures) reject the origin here, before any ladder attempt;
+  // black-hole timeouts defer to the ladder's full ConnectTimeout budget.
+  // Warm cache (the probe is skipped): the ladder's first attempt carries
+  // the same classifier, so the classified verdicts cost at most one
+  // ConnectTimeout either way.
+  let form: WakeShellForm;
+  const cachedForm = readCachedShellFamily(shellFamilyCachePath(options), target);
+  if (cachedForm !== undefined) {
+    form = cachedForm;
+  } else {
+    const probed = await probeHostShellFamily(options, target);
+    const probeClass = classifyWakeFailure(probed.diagnostics);
+    if (probeClass !== undefined && !wakeFailureDefersToLadder(probeClass, probed.diagnostics)) {
+      throw new RemoteTransportError(wakeFailureMessage(probeClass, target, probed.diagnostics));
+    }
+    form = probed.form;
+  }
   const attempts = 3;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const localPort = await freePort();
@@ -639,6 +730,15 @@ async function openSshTunnel(
     // fast crash as a slow timeout.
     const diagnostics = (await stderrTail).trim();
     const exited = proc.exitCode !== null;
+    // Deterministic connect/auth verdicts never consume the ladder's
+    // remaining attempts (ADR-REM-008 §2): re-running against the same host
+    // reproduces them, so attempt 1's verdict IS the origin's verdict. The
+    // ladder stays for what it was built for — port-collision binds and
+    // not-ready timeouts.
+    const failureClass = exited ? classifyWakeFailure(diagnostics) : undefined;
+    if (failureClass !== undefined) {
+      throw new RemoteTransportError(wakeFailureMessage(failureClass, target, diagnostics));
+    }
     if (/ControlPath too long|muxserver_listen|unix_listener/i.test(diagnostics)) {
       muxDisabled = true;
     }
@@ -664,7 +764,7 @@ async function openSshTunnel(
       throw new RemoteTransportError(
         exited
           ? `waking the ukp door on '${target}' failed: ${diagnostics}`
-          : `the ukp door on '${target}' did not become ready within ${WAKE_READY_TIMEOUT_MS / 1000}s; check the host alias and key auth (BatchMode)`,
+          : wakeNotReadyMessage(target, WAKE_READY_TIMEOUT_MS),
       );
     }
   }
