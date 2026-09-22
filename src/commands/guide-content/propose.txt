@@ -1,6 +1,6 @@
 UKP propose quickstart
 
-Goal: submit a change proposal to a Service endpoint as an idempotent, adjudicable document — not a file write.
+Goal: submit a change proposal to a Service endpoint as an idempotent, adjudicable document - not a file write.
 
 Model:
 - A proposal is a pending change the Service owner will adjudicate; the submitter proposes, the owner decides.

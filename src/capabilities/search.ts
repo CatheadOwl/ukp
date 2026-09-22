@@ -872,7 +872,7 @@ function renderResultUnit(
   const base = basenameOf(providerLocation);
   const location = base ? (line ? `${base}:${line}` : base) : "";
   const identity = title
-    ? (location ? `${title} — ${location}` : title)
+    ? (location ? `${title} - ${location}` : title)
     : (location || "");
 
   const snippet = snippetOf(result);
@@ -890,7 +890,7 @@ function renderResultUnit(
     const key = line ? `${docid}:${line}` : docid;
     lines.push(`   read: ukp read --endpoint ${endpointName} ${key}`);
   } else {
-    lines.push(`   (no direct read — provider-managed result)`);
+    lines.push(`   (no direct read - provider-managed result)`);
   }
   if (ukpUri && remoteUri === undefined) lines.push(`   uri: ${ukpUri}`);
   return lines.join("\n");

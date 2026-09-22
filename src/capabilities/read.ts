@@ -870,7 +870,7 @@ function executeResolvedRead(
         return readFailure(
           "resource-missing",
           `resource-missing '${request.path}' in endpoint '${binding.name}'`
-            + ` (absolute paths address files exactly; the mapped route does not exist — the target may live one level deeper, e.g. under src/)\n`
+            + ` (absolute paths address files exactly; the mapped route does not exist - the target may live one level deeper, e.g. under src/)\n`
             + formatRecoveryCandidates(recovered.recovery.candidates).trimEnd(),
           recovered.recovery,
         );

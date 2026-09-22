@@ -107,7 +107,7 @@ describe("CLI bootstrap", () => {
   // init and register (confirmed on-ramp hole).
   test("root help states the on-ramp and the search/rg choice criteria", () => {
     const help = renderHelp();
-    expect(help).toContain("Start here: 'ukp guide service' (first setup — covers init and register) or 'ukp list' (see registered endpoints).");
+    expect(help).toContain("Start here: 'ukp guide service' (first setup - covers init and register) or 'ukp list' (see registered endpoints).");
     expect(help).toContain("search a Service's indexed content (provider-backed; use 'ukp rg' to grep raw files)");
     expect(help).toContain("grep raw endpoint files with ripgrep (no index or declaration needed");
     expect(help).toContain("remove a registered endpoint binding (files on disk are untouched)");
@@ -548,7 +548,7 @@ describe("CLI bootstrap", () => {
     // --lines count and --format defaults.
     const readHelp = renderReadHelp().replace(/\s+/g, " ");
     expect(readHelp).toContain("Reference forms:");
-    expect(readHelp).toContain("docid[:line] / qmd://<reference> — provider-owned references");
+    expect(readHelp).toContain("docid[:line] / qmd://<reference> - provider-owned references");
     expect(readHelp).toContain("count omitted: to end of file");
     expect(readHelp).toContain("default is human output");
     // D-088: --pin routes to --show-pin for emission, not to a guide topic.

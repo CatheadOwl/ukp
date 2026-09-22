@@ -182,11 +182,14 @@ All notable public changes to UKP will be documented in this file.
   writes UTF-8 bytes and such a console decodes them with the wrong table —
   every multibyte character (the em dash in warning lines) shifted the
   cursor by an extra cell and stderr lines landed mid-column with phantom
-  indents. The runtime output vocabulary for the list surface is now
-  printable ASCII (`—` → `-`, `…` → `...`), which every codepage decodes
-  identically. (ukp_list W2 dogfood finding; non-ASCII user content such
-  as Chinese folder names may still drift on DBCS consoles — run
-  `chcp 65001` there.)
+  indents. The runtime output vocabulary is now printable ASCII across all
+  command faces (`—` → `-`, `…` → `...`), which every codepage decodes
+  identically: the sweep started with the list surface (2026-09-21) and has
+  since closed the class over serve and register help text, usage and
+  refusal messages, remote and capability error/remedy text, the serve
+  banner, the `--print-task` artifacts, and the guide topics. (ukp_list W2
+  dogfood finding; non-ASCII user content such as Chinese folder names may
+  still drift on DBCS consoles — run `chcp 65001` there.)
 - `ukp list` fetches remote endpoints concurrently instead of serially:
   every remote row and the door drift check start together and results are
   awaited in registry order, so the wall clock is the slowest origin

@@ -25,7 +25,7 @@ Fast path for a simple knowledge folder:
    By default add registers the collection under the folder's full path as
    its name; the short name comes from this rename, never from add itself.
    rename matches the exact current name only, so re-check collection list
-   before renaming — the short name you had in mind may already belong to an
+   before renaming - the short name you had in mind may already belong to an
    existing collection.
 4. Update the index (qmd update, qmd status)
 5. Verify the provider before returning to UKP (qmd search / qmd get)

@@ -407,7 +407,7 @@ function parseReadParams(
   pin: string | null,
 ): { request: ReadRequest } | { error: string; class?: string } {
   if ((ref === null) === (uri === null)) {
-    return { error: "exactly one of 'ref' (endpoint-relative) or 'uri' (ukp://…) is required" };
+    return { error: "exactly one of 'ref' (endpoint-relative) or 'uri' (ukp://...) is required" };
   }
   const args = uri !== null
     ? [
@@ -546,14 +546,14 @@ export function parseListenFds(env: NodeJS.ProcessEnv): { fd: number } | { error
     };
   }
   if (Number(env.LISTEN_PID) !== process.pid) {
-    return { error: `LISTEN_PID ${env.LISTEN_PID} does not match this process (${process.pid}) — inherited activation variables belong to another process` };
+    return { error: `LISTEN_PID ${env.LISTEN_PID} does not match this process (${process.pid}) - inherited activation variables belong to another process` };
   }
   const count = Number(env.LISTEN_FDS);
   if (!Number.isSafeInteger(count) || count < 1) {
     return { error: `LISTEN_FDS=${String(env.LISTEN_FDS)} is not a positive integer` };
   }
   if (count !== 1) {
-    return { error: `expected exactly one listening fd (LISTEN_FDS=1), got ${count} — run one socket unit per serve instance` };
+    return { error: `expected exactly one listening fd (LISTEN_FDS=1), got ${count} - run one socket unit per serve instance` };
   }
   delete env.LISTEN_FDS;
   delete env.LISTEN_PID;
@@ -645,7 +645,7 @@ function startServeListener(
     isSocket = false;
   }
   if (!isSocket) {
-    throw new ServeSetupError(`fd ${parsed.fd} is not an open socket — socket activation must pass a bound listening socket`);
+    throw new ServeSetupError(`fd ${parsed.fd} is not an open socket - socket activation must pass a bound listening socket`);
   }
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, ...tls, fetch });
   const acceptor = netCreateServer();

@@ -791,7 +791,7 @@ describe("serve host door mode (W7 / ADR-REM-004)", () => {
     };
     expect(renderServeBanner({ ...base, rg: "ok" })).toContain("\n  rg: ok\n");
     expect(renderServeBanner({ ...base, rg: "missing" })).toContain(
-      "  rg: missing (rg calls skip with a warning — install ripgrep on this door's PATH)",
+      "  rg: missing (rg calls skip with a warning - install ripgrep on this door's PATH)",
     );
   });
 });

@@ -96,18 +96,18 @@ export const READ_SPEC: UkpCommandSpec = {
     },
     {
       flags: "--show-pin",
-      help: "emit the ukp-pin for the read resource on stderr (<!-- ukp-pin: sha256-… -->, whole-file LF-normalized sha256; embed next to a ukp:// reference to power rename recovery). Local reads allow a line window — the pin still covers the whole file; remote reads need the whole file, so drop the window there",
+      help: "emit the ukp-pin for the read resource on stderr (<!-- ukp-pin: sha256-... -->, whole-file LF-normalized sha256; embed next to a ukp:// reference to power rename recovery). Local reads allow a line window - the pin still covers the whole file; remote reads need the whole file, so drop the window there",
     },
     { flags: "--format <mode>", help: "output mode: 'json' emits a structured failure envelope (body still goes to stdout); default is human output" },
   ],
   helpSuffix: [
     "",
     "Reference forms:",
-    "  endpoint-local path — requires --endpoint <name>",
-    "  ukp://<endpoint>/<rel-path>[#L<line>] — carries its own endpoint",
-    "  docid[:line] / qmd://<reference> — provider-owned references;",
+    "  endpoint-local path - requires --endpoint <name>",
+    "  ukp://<endpoint>/<rel-path>[#L<line>] - carries its own endpoint",
+    "  docid[:line] / qmd://<reference> - provider-owned references;",
     "  require --endpoint <name> and are resolved by the Service's provider",
-    "  absolute filesystem path — the owning endpoint is matched from the",
+    "  absolute filesystem path - the owning endpoint is matched from the",
     "  Host Registry (mapping echoed on stderr)",
     "",
   ].join("\n"),
@@ -481,7 +481,7 @@ async function executeRemoteRead(
       exitCode: 2,
       stdout: "",
       stderr: renderReadUsageError(
-        "--show-pin needs whole-file content; drop the line window (--lines / #L) — the pin always covers the whole file",
+        "--show-pin needs whole-file content; drop the line window (--lines / #L) - the pin always covers the whole file",
       ),
     };
   }

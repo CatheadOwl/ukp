@@ -155,7 +155,7 @@ export function validateRgPassthrough(args: readonly string[]): readonly string[
     const token = args[index]!;
     if (!token.startsWith("-")) {
       throw new RgUsageError(
-        `passthrough argument '${token}' is not allowed: rg targets the Service folder — no path operands (use the endpoint selector for scope)`,
+        `passthrough argument '${token}' is not allowed: rg targets the Service folder - no path operands (use the endpoint selector for scope)`,
       );
     }
     if (PASSTHROUGH_BOOL_FLAGS.has(token)) continue;

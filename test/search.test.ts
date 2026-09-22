@@ -133,7 +133,7 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("== fixture-qmd ==");
-      expect(result.stdout).toContain("1. CAD fixture note — cad-notes.md:1");
+      expect(result.stdout).toContain("1. CAD fixture note - cad-notes.md:1");
       expect(result.stdout).toContain("   CAD fixture note content.");
       // The fixture copy carries documents/cad-notes.md on disk, so the
       // docid is the disk-honest sha256 prefix (ADR 0025) and the verified
@@ -789,7 +789,7 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("1. Embedded provider location note — provider-note.md:5");
+      expect(result.stdout).toContain("1. Embedded provider location note - provider-note.md:5");
       expect(result.stdout).toContain("   read: ukp read --endpoint embedded-uri f6a7b8:5");
       // A 6-hex token in body content (e.g. a color code) is not a docid and
       // must not become the handoff key or a get hint.
@@ -817,13 +817,13 @@ describe("search", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("== multi-result ==");
-      expect(result.stdout).toContain("1. CAD fixture note — cad-notes.md:1");
+      expect(result.stdout).toContain("1. CAD fixture note - cad-notes.md:1");
       expect(result.stdout).toContain("   CAD fixture note content.");
       expect(result.stdout).toContain("   read: ukp read --endpoint multi-result a1b2c3:1");
       // Result units within one endpoint are separated by a blank line: the get
       // line of unit 1 is directly followed by an empty line before the `2.` unit.
-      expect(result.stdout).toContain("a1b2c3:1\n\n2. Collection-shaped fixture note — collection-note.md:3");
-      expect(result.stdout).toContain("2. Collection-shaped fixture note — collection-note.md:3");
+      expect(result.stdout).toContain("a1b2c3:1\n\n2. Collection-shaped fixture note - collection-note.md:3");
+      expect(result.stdout).toContain("2. Collection-shaped fixture note - collection-note.md:3");
       expect(result.stdout).toContain("   read: ukp read --endpoint multi-result b2c3d4:3");
       expect(result.stdout).not.toContain("UKP reference:");
     } finally {
@@ -847,7 +847,7 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("1. No-line fixture note — no-line.md");
+      expect(result.stdout).toContain("1. No-line fixture note - no-line.md");
       expect(result.stdout).toContain("   read: ukp read --endpoint no-line c1d2e3");
       expect(result.stdout).not.toContain("--lines");
     } finally {
@@ -897,9 +897,9 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("1. No-docid fixture note — no-docid.md:3");
+      expect(result.stdout).toContain("1. No-docid fixture note - no-docid.md:3");
       expect(result.stdout).toContain("   No-docid fixture content cannot form a get route.");
-      expect(result.stdout).toContain("   (no direct read — provider-managed result)");
+      expect(result.stdout).toContain("   (no direct read - provider-managed result)");
       expect(result.stdout).not.toContain("read: ukp read");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -922,7 +922,7 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("1. Banner fixture note — banner.md:1");
+      expect(result.stdout).toContain("1. Banner fixture note - banner.md:1");
       expect(result.stdout).toContain("   read: ukp read --endpoint banner d2e3f4:1");
       expect(result.stdout).not.toContain("---");
       expect(result.stdout).not.toContain("Banner body text.");

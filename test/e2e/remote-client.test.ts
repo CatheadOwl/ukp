@@ -335,7 +335,7 @@ describe("remote search (mixed driver)", () => {
     }));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Outside fixture note");
-    expect(result.stdout).toContain("(no direct read — provider-managed result)");
+    expect(result.stdout).toContain("(no direct read - provider-managed result)");
     expect(result.stdout).not.toContain("read: ukp read --endpoint outside-endpoint");
   });
 
