@@ -6,6 +6,7 @@ import { resolveExternalToolCapability, EXTERNAL_PROVIDER } from "../config/exte
 import { localPathOf, readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { isInsideRealRoot } from "../path-safety.ts";
+import { toolRelayArgv, TOOL_NOT_FOUND_EXIT } from "../spawn-relay.ts";
 
 // rg capability (ADR-RG-001..004): an independent atomic
 // capability parallel to `search` — base lexical search over the endpoint's
@@ -125,10 +126,23 @@ export function defaultRgCommand(): readonly string[] {
 }
 
 /** Base-tool availability probe (diagnose / provider resolver): true when a
- * ripgrep executable starts. */
+ * ripgrep executable starts. Memoized per process — PATH does not change
+ * mid-process, and server startup (the door's ServeInfo carries this field)
+ * must not pay the probe again per start; the win32 relay costs ~0.8s where
+ * the direct spawn was Defender-taxed ~5s (2026-09-22 finding, see
+ * spawn-relay.ts). The relay's not-found guard exits TOOL_NOT_FOUND_EXIT,
+ * which no real ripgrep invocation produces (rg exits 0/1/2 only). */
+let rgAvailabilityMemo: boolean | undefined;
+
 export function rgExecutableAvailable(): boolean {
-  const result = spawnSync("rg", ["--version"], { encoding: "utf8", windowsHide: true, timeout: 5_000 });
-  return !result.error;
+  if (rgAvailabilityMemo === undefined) {
+    const probeArgv = process.platform === "win32"
+      ? toolRelayArgv(["rg", "--version"], { notFoundGuard: true })
+      : ["rg", "--version"];
+    const result = spawnSync(probeArgv[0]!, probeArgv.slice(1), { encoding: "utf8", windowsHide: true, timeout: 5_000 });
+    rgAvailabilityMemo = !result.error && result.status !== TOOL_NOT_FOUND_EXIT;
+  }
+  return rgAvailabilityMemo;
 }
 
 export function rgTimeoutMs(): number {
@@ -298,8 +312,15 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
     // confirmed on the ali repro host: spawned rg read an empty pipe and
     // exited 1 with zero traversal; tty and /dev/null stdin walk the cwd).
     // "." keeps rg's rendered paths endpoint-relative; the "./" prefix is
-    // stripped at both intakes below.
-    const result = spawnSync(command[0]!, [...command.slice(1), ...rgToolArgs(parsed), "."], {
+    // stripped at both intakes below. Win32: the real-tool invocation routes
+    // through the spawn relay (Defender taxes the direct bun-to-rg.exe edge
+    // ~5s — 2026-09-22 finding, see spawn-relay.ts); the injected test
+    // command is never wrapped, and the relay's not-found guard maps a
+    // missing rg onto the same skip path the spawn error always took.
+    const runArgv = process.platform === "win32" && context.rgCommand === undefined
+      ? toolRelayArgv([...command, ...rgToolArgs(parsed), "."], { notFoundGuard: true })
+      : [command[0]!, ...command.slice(1), ...rgToolArgs(parsed), "."];
+    const result = spawnSync(runArgv[0]!, runArgv.slice(1), {
       cwd: endpoint.folder,
       encoding: "utf8",
       windowsHide: true,
@@ -307,7 +328,7 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
       timeout: rgTimeoutMs(),
     });
 
-    if (result.error) {
+    if (result.error || result.status === TOOL_NOT_FOUND_EXIT) {
       // ADR-RG-003/R-7: a missing base tool is a degradation, not a fault —
       // skipped + warning, the run continues with other endpoints.
       warnings.push(`endpoint '${endpoint.name}' rg unavailable: rg executable is not available`);

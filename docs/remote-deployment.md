@@ -65,6 +65,13 @@ Notes:
   wake — the client chooses the door port per invocation, which a fixed
   forced command cannot express.
 
+Windows note: some antivirus setups (Windows Defender behavioral inspection
+included) delay a process spawned directly by the runtime by several seconds
+per call — 5-10s per ssh/rg spawn was measured before ukp routed its
+Windows tool spawns through a one-level relay. ukp does this automatically;
+if you also add your own exclusion for your package manager's runtimes the
+residual per-call cost is just the real ssh handshake plus the door spawn.
+
 Windows hosts work out of the box: when the host's OpenSSH default shell
 (cmd.exe) rejects the POSIX wake form, the client detects the signature and
 resends the pinned cmd.exe form automatically — nothing to configure beyond

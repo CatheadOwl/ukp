@@ -13,6 +13,7 @@ import {
 import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../../src/server.ts";
 import { executeListCommand, executeRegisterCommand } from "../../src/commands/inventory.ts";
 import { fetchDiscoveryDocumentAt } from "../../src/capabilities/remote-client.ts";
+import { toolRelayScript } from "../../src/spawn-relay.ts";
 import { executeSearchCommand } from "../../src/commands/search.ts";
 import { createHash } from "node:crypto";
 import { executeReadCommand } from "../../src/commands/read.ts";
@@ -1089,5 +1090,63 @@ describe("remote --show-pin (D-088)", () => {
     expect(Date.now() - startedAt).toBeLessThan(2000);
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("--show-pin needs whole-file content");
+  });
+});
+
+describe("win32 ssh relay (2026-09-22 Defender tax)", () => {
+  // Simulates PowerShell parsing of a single-quoted array literal: elements
+  // open/close with ', the only escape is '' -> '.
+  function psParseArray(inner: string): string[] {
+    const out: string[] = [];
+    let i = 0;
+    while (i < inner.length) {
+      if (inner[i] === ",") {
+        i += 1;
+        continue;
+      }
+      if (inner[i] !== "'") throw new Error(`unexpected char at ${i}: ${inner[i]}`);
+      i += 1;
+      let element = "";
+      for (;;) {
+        if (inner[i] === "'") {
+          if (inner[i + 1] === "'") {
+            element += "'";
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        element += inner[i];
+        i += 1;
+      }
+      out.push(element);
+    }
+    return out;
+  }
+
+  test("relay script round-trips argv byte-identically, including the pinned wake form", () => {
+    const BS = String.fromCharCode(92);
+    const remoteCmd = `cmd /d /c "set "PATH=%USERPROFILE%${BS}.bun${BS}bin;%USERPROFILE%${BS}scoop${BS}shims;%APPDATA%${BS}npm;%PATH%"&&ukp serve --allow-anonymous --host 127.0.0.1 --port 24680 --max-idle 60"`;
+    const argv = [
+      "ssh",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:39111:127.0.0.1:24680",
+      "liku",
+      remoteCmd,
+      "it's quoted",
+    ];
+    const script = toolRelayScript(argv);
+    expect(script).toContain("exit $LASTEXITCODE");
+    const match = script.match(/^\$a = @\((.*)\); & \$a\[0\] \$a\[1\.\.\(\$a\.Count-1\)\]; exit \$LASTEXITCODE$/);
+    expect(match).not.toBeNull();
+    expect(psParseArray(match![1]!)).toEqual(argv);
+  });
+
+  test("relay script pins the powershell -EncodedCommand carrier shape", () => {
+    const script = toolRelayScript(["ssh", "-V"]);
+    expect(script).toBe("$a = @('ssh','-V'); & $a[0] $a[1..($a.Count-1)]; exit $LASTEXITCODE");
   });
 });
