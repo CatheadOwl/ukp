@@ -315,6 +315,7 @@ describe("diagnose --door", () => {
         throw new Error("powershell gone");
       },
       homeDir: HOME,
+      platform: "win32",
     };
     const result = executeDiagnoseCommand(["--door"], context);
     expect(result.exitCode).toBe(1);
