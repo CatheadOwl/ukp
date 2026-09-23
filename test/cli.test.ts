@@ -388,13 +388,18 @@ describe("CLI bootstrap", () => {
     // https path: resident door under the operator's process manager.
     expect(guide).toContain("UKP_SERVE_TOKEN=<token> ukp serve --host 0.0.0.0 --tls");
     expect(guide).toContain("ukp register --url https://<ip>:8570 --endpoint <name> --token <token>");
-    // O-020 ruling A rider: the host-door preference is conditional - a
-    // Registry mixing in endpoints the operator will not declare cannot
-    // take it (discovery declares everything registered); the per-door
-    // cost of the --endpoint alternative is named so the tradeoff is
-    // visible before the port-per-endpoint path is chosen.
+    // O-020 ruling A rider, superseded shape (ruling D / ADR-REM-010): the
+    // host-door preference is conditional - a Registry mixing in endpoints
+    // the operator will not declare takes --select (one port, one door, only
+    // the named subset; unselected endpoints are not served, routed, or
+    // declared), and per-endpoint --endpoint doors are reserved for
+    // different-consumer splits. The subset sentence must name the
+    // indistinguishability posture; the old one-port-per-endpoint fallback
+    // wording is retired.
     expect(guide).toContain("Prefer host door mode when the whole Registry is safe to declare");
-    expect(guide).toContain("one port, task, and token each");
+    expect(guide).toContain("ukp serve --select a,b,c keeps one port and one door");
+    expect(guide).toContain("not served, routed, or declared");
+    expect(guide).not.toContain("one port, task, and token each");
     // STATUS-043 / remote-guide.consumption-model: the https quickstart must
     // carry the NAT/EIP remedy itself, not defer it to the README.
     expect(guide).toContain("--tls --tls-san <public-ip>");

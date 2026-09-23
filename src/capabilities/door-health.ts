@@ -13,8 +13,8 @@
  * killed, no file written, no task registered or unregistered, and the
  * "port bind dry-run" is a listener-table lookup, not a real bind (a real
  * listen could pop a firewall prompt and race the launcher's crash retry).
- * The start script is read but only the serve line's --endpoint/--host/
- * --port values are ever echoed; the UKP_SERVE_TOKEN line stays in the
+ * The start script is read but only the serve line's --endpoint/--select/
+ * --host/--port values are ever echoed; the UKP_SERVE_TOKEN line stays in the
  * file (secret-free output, D-090 convention). Repair knowledge is
  * pointers only: `ukp serve --print-task` section 5 and the deployment
  * handbook - diagnose says what is wrong, never fixes it. */
@@ -124,7 +124,7 @@ export interface DoorReport {
    * be resolved (task is then structurally failed). */
   launcherPath?: string;
   scriptPath?: string;
-  serve?: { endpoint?: string; host?: string; port?: number };
+  serve?: { endpoint?: string; select?: string[]; host?: string; port?: number };
   /** Main root-to-leaf chain (wscript -> cmd -> ... -> bun); absent when no
    * launcher process was found. */
   tree?: Array<{ pid: number; name: string }>;
@@ -187,19 +187,22 @@ function vbsPathFromCommandLine(commandLine: string): string | undefined {
 }
 
 /** The serve line's flags from the start script text; undefined pieces are
- * simply absent. Only these three values are ever echoed - the token line
- * in the same file is never reproduced. */
-export function parseServeLine(scriptText: string): { endpoint?: string; host?: string; port?: number } | undefined {
+ * simply absent. Only these values are ever echoed - the token line in the
+ * same file is never reproduced. `--select` (ADR-REM-010 subset doors)
+ * parses to the name list. */
+export function parseServeLine(scriptText: string): { endpoint?: string; select?: string[]; host?: string; port?: number } | undefined {
   const line = scriptText
     .split(/\r?\n/)
     .map((entry) => entry.trim())
     .find((entry) => /^ukp\s+serve(\s|$)/.test(entry));
   if (line === undefined) return undefined;
   const endpoint = /--endpoint\s+(\S+)/.exec(line)?.[1];
+  const selectRaw = /--select\s+(\S+)/.exec(line)?.[1];
   const host = /--host\s+(\S+)/.exec(line)?.[1];
   const portRaw = /--port\s+(\d+)/.exec(line)?.[1];
   return {
     ...(endpoint !== undefined ? { endpoint } : {}),
+    ...(selectRaw !== undefined ? { select: selectRaw.split(",") } : {}),
     ...(host !== undefined ? { host } : {}),
     ...(portRaw !== undefined ? { port: Number(portRaw) } : {}),
   };
@@ -428,7 +431,9 @@ export function renderDoorReport(report: DoorReport): string[] {
   if (report.serve !== undefined) {
     const shape = report.serve.endpoint !== undefined
       ? `endpoint ${report.serve.endpoint}`
-      : "host door";
+      : report.serve.select !== undefined
+        ? `subset ${report.serve.select.join(",")}`
+        : "host door";
     const host = report.serve.host !== undefined ? `, host ${report.serve.host}` : "";
     const port = report.serve.port !== undefined ? `, port ${report.serve.port}` : "";
     lines.push(`serve: ${shape}${host}${port}`);

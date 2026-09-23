@@ -71,8 +71,9 @@ predictable scope, and a single command surface. Use UKP when:
 - Propose changes as an idempotent, reviewable suggestion — the proposal
   lands in the endpoint's inbox and the verdict stays with its owner.
 - Update provider-owned indexes through a stable UKP command (QMD-backed).
-- Serve an endpoint over HTTP — a single endpoint, or every local binding as
-  a host door — when you want it reachable from other machines.
+- Serve an endpoint over HTTP — a single endpoint, a `--select`ed subset, or
+  every local binding as a host door — when you want it reachable from other
+  machines.
 - Want a read-only endpoint? Declare zero capabilities — an empty
   `[capabilities]` table still registers one (derived `read`/`nav` only).
 - Give agents JSON output (`--json`; `ukp read` uses `--format json`),
@@ -163,7 +164,7 @@ Operations commands:
 | `ukp diagnose` | Checks a Service folder or endpoint scope for wiring problems. |
 | `ukp inspect` | Explains current scope, bindings, manifest capabilities, and provider availability. |
 | `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared (local endpoints today). |
-| `ukp serve` | Serves one endpoint — or, without `--endpoint`, every local binding as a **host door** — over HTTP (a discovery document plus the five command routes; loopback by default). |
+| `ukp serve` | Serves one endpoint — or, without `--endpoint`, local bindings as a **host door** (every one of them, or just the ones `--select` names — unselected endpoints are not served, routed, or declared) — over HTTP (a discovery document plus the five command routes; loopback by default). |
 
 Help commands:
 
@@ -203,10 +204,14 @@ NAT/EIP cloud host (public IP on no NIC)? Name it with
 over the same key, so the pin (and every registration) survives; details in
 the deployment guide.
 
-Registration mechanics: a **host door** url imports every endpoint behind it
+Registration mechanics: a **host door** url imports every endpoint it declares
 (`--endpoint <name>` checks the served name and narrows the import to that
 one, `--select` narrows to a subset); `--token` is stored with the binding;
-re-running a registration refreshes it idempotently.
+re-running a registration refreshes it idempotently. A host whose registry
+mixes shareable knowledge with internal projects can serve
+`ukp serve --select a,b,c` — one port for exactly those endpoints; everything
+the door does not select behaves as if it did not exist (discovery, routes,
+and 404 rosters alike).
 
 Remote endpoints take the same commands as local ones — search, read, nav,
 rg, propose. The full guide — the host door (one port for the whole

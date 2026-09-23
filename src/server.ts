@@ -44,18 +44,22 @@ import { KitUsageError } from "./commands/kit.ts";
 /** ukp-remote wire v1 server core (ADR-REM-001/002/003, ukp_remote W1/W7):
  * two serving shapes over one wire. Single-endpoint mode exposes ONE
  * registered endpoint; door mode (`endpointName` absent, ADR-REM-004) serves
- * every local binding in the registry, routed by name at `/e/<name>/…` with
+ * local bindings in the registry, routed by name at `/e/<name>/…` with
  * a `scope:"host"` door document — the registry is read fresh per request so
- * the door grows without restart. Both shapes expose a discovery document
- * (manifest projection + protocol version + instance identity) plus the
- * read-side capability routes (search/read since W1, nav/rg since W6); the
- * per-endpoint documents are byte-identical across modes, so client-side
- * TOFU and name-assertion paths are shared. The capability layer runs
- * unchanged behind the routes (provider/transport axes stay orthogonal):
- * search via `runSearch` with a single-endpoint scope, read via `runRead`,
- * nav via `runNav`, rg via `runRg`. There is no session, no streaming, and
- * no server-side artifact: responses inline the reference data (RQ-07) and
- * generate a serve-scoped run id. */
+ * the door grows without restart. Door mode comes in two widths
+ * (ADR-REM-010): every local binding, or the `select` whitelist subset. To
+ * anyone the subset excludes, the door pretends those endpoints do not
+ * exist — roster, routes, per-endpoint documents, and 404 rosters all see
+ * the same effective set (select ∩ current registry). Both shapes expose a
+ * discovery document (manifest projection + protocol version + instance
+ * identity) plus the read-side capability routes (search/read since W1,
+ * nav/rg since W6); the per-endpoint documents are byte-identical across
+ * modes, so client-side TOFU and name-assertion paths are shared. The
+ * capability layer runs unchanged behind the routes (provider/transport
+ * axes stay orthogonal): search via `runSearch` with a single-endpoint
+ * scope, read via `runRead`, nav via `runNav`, rg via `runRg`. There is no
+ * session, no streaming, and no server-side artifact: responses inline the
+ * reference data (RQ-07) and generate a serve-scoped run id. */
 
 export const PROTOCOL_NAME = "ukp-remote";
 export const PROTOCOL_VERSION = "1";
@@ -66,11 +70,20 @@ export const DISCOVERY_PATH = "/.well-known/ukp.json";
 export const PROPOSE_BODY_LIMIT_BYTES = 1024 * 1024;
 
 export interface ServeConfig {
-  /** Absent = host door mode (ADR-REM-004 / O-2): serve EVERY local binding
-   * in the registry over one listener, routed by name at `/e/<name>/…`, with
-   * a `scope:"host"` door document at the well-known path. Present = the
+  /** Absent = host door mode (ADR-REM-004 / O-2): serve local bindings in
+   * the registry over one listener, routed by name at `/e/<name>/…`, with a
+   * `scope:"host"` door document at the well-known path. Present = the
    * original single-endpoint mode (N=1 retreat stays legal long-term). */
   endpointName?: string;
+  /** Subset door (ADR-REM-010 / O-020 ruling D): a declarative name
+   * whitelist next to an ABSENT endpointName — the door serves only the
+   * selected local bindings, and to anyone the list excludes the door
+   * pretends those endpoints do not exist (roster, routes, per-endpoint
+   * documents, 404 rosters all carry the same effective set). The server
+   * layer does NOT validate the names at startup — the command layer's
+   * eager check (usage error with the roster) is the admission; here the
+   * set just intersects with the per-request registry read. */
+  select?: readonly string[];
   currentDirectory: string;
   registryPath: string;
   qmdCommand?: readonly string[];
@@ -144,10 +157,13 @@ export interface ServeInfo {
   folder?: string;
   instanceUid?: string;
   /** Door mode fields (present iff mode === "door"): the startup snapshot of
-   * servable endpoint names (the door itself grows without restart), plus
-   * the snapshot of write-capable (propose-declaring) names — the banner's
-   * "you opened a write face" line (ADR-REM-005 verdict C). */
-  door?: { endpoints: string[]; write: string[] };
+   * servable endpoint names (the door itself grows without restart), the
+   * snapshot of write-capable (propose-declaring) names — the banner's
+   * "you opened a write face" line (ADR-REM-005 verdict C) — and, on a
+   * subset door (ADR-REM-010), the declared select whitelist itself (the
+   * banner's `select:` line: what was asked for, next to what is being
+   * served). */
+  door?: { endpoints: string[]; write: string[]; select?: string[] };
   url: string;
   host: string;
   port: number;
@@ -279,21 +295,25 @@ export function buildDiscoveryDocument(
   };
 }
 
-/** Servable endpoints of a door (O-2): every LOCAL binding in the registry,
- * read fresh by the caller per request (new endpoints appear without a
- * restart). Remote bindings are not servable and never make the roster. */
-function listDoorEndpoints(registryPath: string): Array<{ name: string; folder: string }> {
+/** Servable endpoints of a door (O-2): the LOCAL bindings in the registry
+ * the door's width admits — every one of them, or the `select` whitelist's
+ * members (ADR-REM-010) — read fresh by the caller per request (new
+ * endpoints appear without a restart). Remote bindings are not servable and
+ * never make the roster. */
+function listDoorEndpoints(registryPath: string, select?: readonly string[]): Array<{ name: string; folder: string }> {
   return readRegistry(registryPath)
     .filter((binding) => binding.kind !== "remote")
+    .filter((binding) => select === undefined || select.includes(binding.name))
     .map((binding) => ({ name: binding.name, folder: binding.path! }));
 }
 
 /** Startup snapshot of write-capable (propose-declaring) door endpoints —
  * the banner line that makes the opened write face visible (ADR-REM-005
- * verdict C). Unreadable/name-drifted Services drop out silently here;
- * they are already reported by the roster/discovery paths. */
-function listWriteEndpoints(registryPath: string): string[] {
-  return listDoorEndpoints(registryPath).flatMap((endpoint) => {
+ * verdict C). Subset doors narrow it to the select set (ADR-REM-010).
+ * Unreadable/name-drifted Services drop out silently here; they are already
+ * reported by the roster/discovery paths. */
+function listWriteEndpoints(registryPath: string, select?: readonly string[]): string[] {
+  return listDoorEndpoints(registryPath, select).flatMap((endpoint) => {
     try {
       const loaded = loadManifest(endpoint.folder);
       return loaded.effectiveName === endpoint.name
@@ -758,10 +778,14 @@ function bearerGate(
  * read fresh, the name segment has already passed ENDPOINT_NAME (injection
  * unreachable), unknown and non-servable names get the roster 404, and the
  * RQ-14 binding↔manifest identity check runs per request like the
- * single-mode discovery fetch does. */
+ * single-mode discovery fetch does. A subset door (ADR-REM-010) routes an
+ * excluded name into the SAME roster-404 branch as an unknown one — the
+ * response is byte-identical either way, so the roster is the only name
+ * list any response ever carries. */
 function resolveDoorRoute(
   registryPath: string,
   name: string,
+  select?: readonly string[],
 ): { folder: string } | { response: Response } {
   let binding;
   try {
@@ -770,8 +794,8 @@ function resolveDoorRoute(
     const reason = error instanceof Error ? error.message : String(error);
     return { response: jsonResponse(errorBody("provider-unavailable", `Host Registry is not readable: ${reason}`), 503) };
   }
-  if (binding === undefined || binding.kind === "remote") {
-    const roster = listDoorEndpoints(registryPath).map((endpoint) => endpoint.name).join(", ");
+  if (binding === undefined || binding.kind === "remote" || (select !== undefined && !select.includes(name))) {
+    const roster = listDoorEndpoints(registryPath, select).map((endpoint) => endpoint.name).join(", ");
     return {
       response: jsonResponse(
         errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
@@ -808,10 +832,13 @@ function resolveDoorRoute(
 
 /** Door-mode routing table (ADR-REM-004 / O-2). The door document and the
  * per-endpoint documents stay public (ADR-REM-003 declaration/capability
- * divide); every `/e/<name>/v1/*` route passes the door-level bearer gate. */
-function doorNotFound(name: string | undefined, registryPath: string): Response {
+ * divide); every `/e/<name>/v1/*` route passes the door-level bearer gate.
+ * The roster a 404 carries is the door's effective set — on a subset door
+ * (ADR-REM-010) that is the select ∩ registry intersection, never the full
+ * registry. */
+function doorNotFound(name: string | undefined, registryPath: string, select?: readonly string[]): Response {
   if (name !== undefined) {
-    const roster = listDoorEndpoints(registryPath).map((endpoint) => endpoint.name).join(", ");
+    const roster = listDoorEndpoints(registryPath, select).map((endpoint) => endpoint.name).join(", ");
     return jsonResponse(
       errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
       404,
@@ -827,6 +854,11 @@ function doorNotFound(name: string | undefined, registryPath: string): Response 
 }
 
 function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnType<typeof resolveTlsMaterial>): StartedServe {
+  // The door's width (ADR-REM-010): undefined = the whole registry, a name
+  // list = the subset whitelist. One variable feeds every surface below —
+  // door document, per-request routes, 404 rosters — so the subset cannot
+  // drift between them.
+  const select = config.select;
   const handler = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
 
@@ -835,7 +867,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         return jsonResponse(errorBody("method-not-allowed", `the discovery document is a GET resource`), 405);
       }
       try {
-        return jsonResponse(buildDoorDocument(listDoorEndpoints(config.registryPath), (config.tokens?.length ?? 0) > 0));
+        return jsonResponse(buildDoorDocument(listDoorEndpoints(config.registryPath, select), (config.tokens?.length ?? 0) > 0));
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         return jsonResponse(errorBody("provider-unavailable", `Host Registry is not readable: ${reason}`), 503);
@@ -849,13 +881,13 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
       const name = routeMatch[1]!;
       const rest = routeMatch[2] ?? "/";
       if (!ENDPOINT_NAME.test(name)) {
-        return doorNotFound(name, config.registryPath);
+        return doorNotFound(name, config.registryPath, select);
       }
       if (rest === DISCOVERY_PATH) {
         if (request.method !== "GET") {
           return jsonResponse(errorBody("method-not-allowed", `the discovery document is a GET resource`), 405);
         }
-        const resolved = resolveDoorRoute(config.registryPath, name);
+        const resolved = resolveDoorRoute(config.registryPath, name, select);
         if ("response" in resolved) return resolved.response;
         try {
           const loaded = loadManifest(resolved.folder);
@@ -871,15 +903,15 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         const denied = bearerGate(request, config.tokens);
         if (denied !== undefined) return denied;
         const id = rest.slice("/v1/propose/".length);
-        if (id.includes("/")) return doorNotFound(undefined, config.registryPath);
-        const resolved = resolveDoorRoute(config.registryPath, name);
+        if (id.includes("/")) return doorNotFound(undefined, config.registryPath, select);
+        const resolved = resolveDoorRoute(config.registryPath, name, select);
         if ("response" in resolved) return resolved.response;
         return await handlePropose(request, config, name, resolved.folder, id);
       }
       if (rest === "/v1/search" || rest === "/v1/read" || rest === "/v1/nav" || rest === "/v1/rg") {
         const denied = bearerGate(request, config.tokens);
         if (denied !== undefined) return denied;
-        const resolved = resolveDoorRoute(config.registryPath, name);
+        const resolved = resolveDoorRoute(config.registryPath, name, select);
         if ("response" in resolved) return resolved.response;
         if (rest === "/v1/search") {
           return await handleSearch(request, config, name, resolved.folder);
@@ -892,10 +924,10 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         }
         return handleRg(url, request, config, name);
       }
-      return doorNotFound(undefined, config.registryPath);
+      return doorNotFound(undefined, config.registryPath, select);
     }
 
-    return doorNotFound(undefined, config.registryPath);
+    return doorNotFound(undefined, config.registryPath, select);
   };
 
   const listener = startServeListener(handler, {
@@ -910,8 +942,9 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
   const info: ServeInfo = {
     mode: "door",
     door: {
-      endpoints: listDoorEndpoints(config.registryPath).map((endpoint) => endpoint.name),
-      write: listWriteEndpoints(config.registryPath),
+      endpoints: listDoorEndpoints(config.registryPath, select).map((endpoint) => endpoint.name),
+      write: listWriteEndpoints(config.registryPath, select),
+      ...(select !== undefined ? { select: [...select] } : {}),
     },
     url: listener.publicUrl,
     host,

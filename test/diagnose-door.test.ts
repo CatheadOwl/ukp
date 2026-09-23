@@ -9,6 +9,7 @@ import {
 import {
   isDoorTaskAction,
   parseServeLine,
+  renderDoorHealthReport,
   type DoorListenerRow,
   type DoorProcessRow,
   type DoorSystemSnapshot,
@@ -364,5 +365,15 @@ describe("door task matching and serve parsing (pure)", () => {
     const hostDoor = parseServeLine(["ukp serve --host 127.0.0.1 --port 8579 --allow-anonymous"].join("\r\n"));
     expect(hostDoor).toEqual({ host: "127.0.0.1", port: 8579 });
     expect(parseServeLine("@echo off\r\nrem nothing")).toBeUndefined();
+  });
+
+  test("serve line parsing picks up a subset door's --select list (ADR-REM-010)", () => {
+    const subset = parseServeLine(["ukp serve --select skill-dev,agent-eval --host 0.0.0.0 --port 8570 --tls"].join("\r\n"));
+    expect(subset).toEqual({ select: ["skill-dev", "agent-eval"], host: "0.0.0.0", port: 8570 });
+    // The rendered shape names the subset next to the single/whole forms.
+    const rendered = renderDoorHealthReport([
+      { taskName: "ukp-door", taskState: "Running", serve: subset, warnings: [], status: "ok" },
+    ]);
+    expect(rendered).toContain("serve: subset skill-dev,agent-eval, host 0.0.0.0, port 8570");
   });
 });

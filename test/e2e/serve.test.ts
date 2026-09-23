@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 // the same sha256 prefix from the served file's content.
 const shaPrefix = (content: string): string =>
   createHash("sha256").update(content).digest("hex").slice(0, 6);
-import { registerAt } from "../../src/registry.ts";
+import { registerAt, unregisterAt } from "../../src/registry.ts";
 import {
   DISCOVERY_PATH,
   buildDiscoveryDocument,
@@ -792,6 +792,94 @@ describe("serve host door mode (W7 / ADR-REM-004)", () => {
     expect(renderServeBanner({ ...base, rg: "ok" })).toContain("\n  rg: ok\n");
     expect(renderServeBanner({ ...base, rg: "missing" })).toContain(
       "  rg: missing (rg calls skip with a warning - install ripgrep on this door's PATH)",
+    );
+  });
+});
+
+describe("serve subset door (--select / ADR-REM-010)", () => {
+  // A private registry: the shared one grows as other tests register late
+  // endpoints, and subset rosters must be order-independent.
+  const subsetRegistry = join(root, "subset-registry.toml");
+  registerAt(subsetRegistry, "alpha-sub", createService("subset-alpha-svc", "alpha-sub"));
+  registerAt(subsetRegistry, "beta-sub", createService("subset-beta-svc", "beta-sub"));
+  registerAt(subsetRegistry, "gamma-sub", createService("subset-gamma-svc", "gamma-sub"));
+  const startSubset = (select: readonly string[]): StartedServe => {
+    const handle = startUkpServer({ currentDirectory: root, registryPath: subsetRegistry, qmdCommand, port: 0, select });
+    started.push(handle);
+    return handle;
+  };
+
+  test("the door document declares exactly the selected subset", async () => {
+    const { info } = startSubset(["alpha-sub", "beta-sub"]);
+    const doc = await (await fetch(`${info.url}${DISCOVERY_PATH}`)).json() as DoorDocument;
+    expect(doc.scope).toBe("host");
+    expect(doc.endpoints.map((endpoint) => endpoint.name)).toEqual(["alpha-sub", "beta-sub"]);
+  });
+
+  test("every face pretends the excluded endpoints do not exist (byte-identical to unknown)", async () => {
+    const { info } = startSubset(["alpha-sub", "beta-sub"]);
+    // Face 1: the PUBLIC per-endpoint discovery document 404s for the
+    // excluded name; face 2: the /v1 routes refuse it (routing must filter
+    // in lockstep with discovery — the token is door-level, so a hidden but
+    // routable name would be rsync-style obscurity, not security).
+    const excludedDoc = await (await fetch(`${info.url}/e/gamma-sub${DISCOVERY_PATH}`)).text();
+    const excludedRoute = await (await fetch(`${info.url}/e/gamma-sub/v1/read?ref=documents/cad-notes.md`)).text();
+    // The roster a 404 carries is exactly the selected subset — the hidden
+    // name never reaches any available-list.
+    expect(JSON.parse(excludedDoc).error.message).toMatch(/\(available: alpha-sub, beta-sub\)$/);
+    expect(JSON.parse(excludedRoute).error.message).toMatch(/\(available: alpha-sub, beta-sub\)$/);
+    // THE indistinguishability pin (CWE-204): the same probes after the name
+    // is genuinely unregistered must return the same bytes — the door never
+    // betrays that gamma-sub was ever registered behind it.
+    unregisterAt(subsetRegistry, "gamma-sub");
+    expect(await (await fetch(`${info.url}/e/gamma-sub${DISCOVERY_PATH}`)).text()).toBe(excludedDoc);
+    expect(await (await fetch(`${info.url}/e/gamma-sub/v1/read?ref=documents/cad-notes.md`)).text()).toBe(excludedRoute);
+    registerAt(subsetRegistry, "gamma-sub", createService("subset-gamma-svc", "gamma-sub"));
+    // The selected subset serves end to end.
+    expect((await fetch(`${info.url}/e/alpha-sub/v1/read?ref=documents/cad-notes.md`)).status).toBe(200);
+  });
+
+  test("effective roster = select ∩ current registry, reconciled per request", async () => {
+    const { info } = startSubset(["alpha-sub", "beta-sub"]);
+    // A selected name that drifts away (unregistered later) disappears from
+    // every face without a warning — door-mode drift tolerance as ever.
+    unregisterAt(subsetRegistry, "beta-sub");
+    const shrunk = await (await fetch(`${info.url}${DISCOVERY_PATH}`)).json() as DoorDocument;
+    expect(shrunk.endpoints.map((endpoint) => endpoint.name)).toEqual(["alpha-sub"]);
+    expect((await fetch(`${info.url}/e/beta-sub${DISCOVERY_PATH}`)).status).toBe(404);
+    // A late registration enters only if the whitelist names it (O-2's
+    // grow-without-restart stays true, bounded by the declared subset).
+    registerAt(subsetRegistry, "delta-sub", createService("subset-delta-svc", "delta-sub"));
+    const grown = await (await fetch(`${info.url}${DISCOVERY_PATH}`)).json() as DoorDocument;
+    expect(grown.endpoints.map((endpoint) => endpoint.name)).toEqual(["alpha-sub"]);
+    registerAt(subsetRegistry, "beta-sub", createService("subset-beta-svc", "beta-sub"));
+    unregisterAt(subsetRegistry, "delta-sub");
+  });
+
+  test("banner: the subset door announces what it was asked to serve", () => {
+    const door = startSubset(["alpha-sub", "beta-sub"]);
+    const banner = renderServeBanner(door.info);
+    expect(banner).toContain("serving host door (ukp-remote v1)");
+    expect(banner).toContain("select: alpha-sub, beta-sub (subset door");
+    expect(banner).toMatch(/^  endpoints: alpha-sub, beta-sub$/m);
+  });
+
+  test("admission: an unknown --select name is a usage error with the roster (exit 2)", () => {
+    const result = executeServeCommand(
+      ["--select", "alpha-sub,nope", "--host", "127.0.0.1", "--port", "8599"],
+      { currentDirectory: root, registryPath: subsetRegistry, qmdCommand },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--select names not registered on this host: nope");
+    expect(result.stderr).toContain("available: alpha-sub, beta-sub, gamma-sub");
+    expect(result.stderr).toContain("Usage: ukp serve");
+  });
+
+  test("parse: --select mirrors register --select list semantics; --endpoint excludes it", () => {
+    expect(parseServeArgs(["--select", " a , b ,, "]).select).toEqual(["a", "b"]);
+    expect(() => parseServeArgs(["--select", " ,"])).toThrow("--select requires at least one endpoint name");
+    expect(() => parseServeArgs(["--endpoint", "a", "--select", "b"])).toThrow(
+      "--endpoint and --select cannot be used together",
     );
   });
 });

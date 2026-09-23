@@ -56,6 +56,9 @@ export type ServeTaskTls = ServeTaskTlsSelfSigned | ServeTaskTlsCertificates;
 export interface ServeTaskInput {
   /** Present = single-endpoint mode; absent = host door mode. */
   endpoint?: string;
+  /** Subset door (ADR-REM-010): the mirrored --select names; the §1 serve
+   * line carries them so the resident door serves the same subset. */
+  select?: readonly string[];
   host: string;
   port: number;
   tls?: ServeTaskTls;
@@ -96,6 +99,7 @@ function serveCommandLine(input: ServeTaskInput): string {
   return [
     "ukp serve",
     ...(input.endpoint !== undefined ? [`--endpoint ${input.endpoint}`] : []),
+    ...(input.select !== undefined ? [`--select ${input.select.join(",")}`] : []),
     `--host ${input.host}`,
     `--port ${input.port}`,
     ...tls,

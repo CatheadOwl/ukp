@@ -7,6 +7,7 @@ import {
   type KitParsed,
   type UkpCommandSpec,
 } from "./kit.ts";
+import { readRegistry } from "../registry.ts";
 import { normalizeTlsSanEntry } from "../capabilities/tls-identity.ts";
 import { DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
 import { printTaskPreflightError, renderServeTaskArtifacts, type ServeTaskTls } from "./serve-task.ts";
@@ -30,17 +31,19 @@ function parseServeTokens(raw: string | undefined): string[] {
  * Bun.serve listener keeps the process alive after runCli returns its exit
  * code; SIGINT/SIGTERM stop the listener so the process exits with it.
  * `--endpoint` is optional (W7 / ADR-REM-004): present = the original
- * single-endpoint mode; absent = host door mode serving the whole registry
- * over `/e/<name>/` routing. */
+ * single-endpoint mode; absent = host door mode serving the registry over
+ * `/e/<name>/` routing — every local binding, or the `--select` whitelist
+ * subset (ADR-REM-010). */
 export const SERVE_SPEC: UkpCommandSpec = {
   name: "serve",
-  summary: "serve one endpoint - or the whole registry as a host door, one HTTP server for every endpoint - for remote UKP clients",
+  summary: "serve one endpoint, a selected subset, or the whole registry as a host door - one HTTP server, one port - for remote UKP clients",
   group: "operations",
   description:
-    "Expose a registered endpoint over HTTP using the ukp-remote wire, or - without --endpoint - serve every local endpoint as one host door routed by name.",
-  usage: "[--endpoint <name>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task]",
+    "Expose a registered endpoint over HTTP using the ukp-remote wire, or - without --endpoint - serve local endpoints as one host door routed by name: all of them, or just the ones --select names.",
+  usage: "[--endpoint <name>] [--select <names>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task]",
   options: [
-    { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve the whole registry as a host door (/e/<name>/ routing, all endpoints, one port)" },
+    { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve a host door (/e/<name>/ routing, one port) instead" },
+    { flags: "--select <names>", help: "host door serving ONLY the named endpoints (comma-separated): one port, /e/<name>/ routing, and a door document that declares just this subset - unselected local endpoints are not served, routed, or declared; mutually exclusive with --endpoint" },
     { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
     { flags: "--port <n>", help: "listen port (default 8570)" },
     { flags: "--tls", help: "serve HTTPS with a self-signed identity (auto-generated under .ukp/tls/, SAN covers this host's addresses; clients pin it at registration)" },
@@ -63,7 +66,8 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "  GET  /v1/rg?query=...        lexical search (ukp.rg.v1, ukp_uri handoff)",
     "",
     "Wire (ukp-remote v1), host door (no --endpoint):",
-    `  GET  ${DISCOVERY_PATH}        door document (scope:"host", endpoint roster)`,
+    `  GET  ${DISCOVERY_PATH}        door document (scope:"host", endpoint roster -`,
+    "                                the --select subset when --select is given)",
     "  GET  /e/<name>/.well-known/ukp.json   per-endpoint document (same shape",
     "                                as single-endpoint mode; TOFU pins anchor here)",
     "  POST /e/<name>/v1/search     capabilities routed by endpoint name",
@@ -103,6 +107,12 @@ export const SERVE_SPEC: UkpCommandSpec = {
 export interface ParsedServe {
   /** Present = single-endpoint mode; absent = host door mode (W7). */
   endpoint?: string;
+  /** `--select` names (ADR-REM-010): present next to an absent endpoint =
+   * subset door — the door serves, routes, and declares only these
+   * endpoints. Parsed here exactly the way register --select parses its
+   * list (comma-separated, trimmed, empty entries dropped); the execute
+   * layer's eager check (usage error with the roster) is the admission. */
+  select?: string[];
   host: string;
   port: number;
   /** Present = the --max-idle self-reap timer is armed (W9). */
@@ -120,10 +130,23 @@ export interface ParsedServe {
 }
 
 function toParsedServe(parsed: KitParsed): ParsedServe {
-  const options = parsed.options as { host?: string; port?: string; endpoint?: string; maxIdle?: string; systemdSocket?: boolean; printTask?: boolean; tlsSan?: string[] };
+  const options = parsed.options as { host?: string; port?: string; endpoint?: string; select?: string; maxIdle?: string; systemdSocket?: boolean; printTask?: boolean; tlsSan?: string[] };
   const endpoint = options.endpoint;
   if (endpoint !== undefined && endpoint.length === 0) {
     throw new KitUsageError("--endpoint <name> must not be empty (omit it to serve a host door)");
+  }
+  // --select parses with register --select's exact list semantics (the same
+  // operation's other side): comma-separated, trimmed, empties dropped. A
+  // flag that parses to nothing is a usage error, not an empty whitelist.
+  let select: string[] | undefined;
+  if (options.select !== undefined) {
+    select = options.select.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+    if (select.length === 0) {
+      throw new KitUsageError("--select requires at least one endpoint name");
+    }
+  }
+  if (endpoint !== undefined && select !== undefined) {
+    throw new KitUsageError("--endpoint and --select cannot be used together (--endpoint is the N=1 form; --select narrows a host door)");
   }
   const host = options.host ?? "127.0.0.1";
   const port = Number(options.port ?? "8570");
@@ -160,6 +183,7 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
   }
   return {
     ...(endpoint !== undefined ? { endpoint } : {}),
+    ...(select !== undefined ? { select } : {}),
     host,
     port,
     ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
@@ -184,6 +208,9 @@ export function renderServeBanner(info: ServeInfo): string {
       `  listening: ${info.url}`,
       `  discovery: ${info.url.startsWith("http") ? `${info.url}${DISCOVERY_PATH}` : info.url} (host door)`,
       `  endpoints: ${info.door!.endpoints.length > 0 ? info.door!.endpoints.join(", ") : "(none - register endpoints on this host)"}`,
+      ...(info.door!.select !== undefined
+        ? [`  select: ${info.door!.select.join(", ")} (subset door - unselected local endpoints are not served, routed, or declared)`]
+        : []),
       `  write: ${info.door!.write.length > 0 ? info.door!.write.join(", ") + " (propose via PUT /e/<name>/v1/propose/<id>)" : "(no endpoint declares propose)"}`,
       `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback bind; ssh-forwarded clients authenticate by SSH key)"}`,
       `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning - install ripgrep on this door's PATH)"}`,
@@ -241,7 +268,7 @@ export function executeServeCommand(
   context: ServeCommandContext,
 ): KitCommandResult {
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
-    const { endpoint, host, port, maxIdleSeconds, systemdSocket, tlsSan = [] } = toParsedServe(parsed);
+    const { endpoint, select, host, port, maxIdleSeconds, systemdSocket, tlsSan = [] } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
     const printTask = (parsed.options as { printTask?: boolean }).printTask === true;
     const options = parsed.options as { tls?: boolean; tlsCert?: string; tlsKey?: string };
@@ -257,6 +284,30 @@ export function executeServeCommand(
     }
     if (tlsSan.length > 0 && options.tls !== true) {
       throw new KitUsageError("--tls-san is only used with --tls (an explicit --tls-cert certificate carries its own SAN)");
+    }
+    // Subset-door admission (ADR-REM-010): a name not among the local
+    // bindings is a usage error with the roster — the eager check mirrors
+    // register --select's door-import behavior and the ingress admission
+    // precedent (a typo silently narrowing the door is a zero-signal
+    // misconfiguration). An unreadable registry skips the check: that
+    // failure surface is the door's own, shown per request like today.
+    if (select !== undefined && endpoint === undefined) {
+      let localNames: string[] | undefined;
+      try {
+        localNames = readRegistry(context.registryPath)
+          .filter((binding) => binding.kind !== "remote")
+          .map((binding) => binding.name);
+      } catch {
+        localNames = undefined;
+      }
+      if (localNames !== undefined) {
+        const unknown = select.filter((name) => !localNames!.includes(name));
+        if (unknown.length > 0) {
+          throw new KitUsageError(
+            `--select names not registered on this host: ${unknown.join(", ")} (available: ${localNames.join(", ")})`,
+          );
+        }
+      }
     }
     // W12 print-only branch: render the Windows artifacts and stop. No
     // listener, no admission token check (the token is pasted into the
@@ -284,6 +335,7 @@ export function executeServeCommand(
           host,
           port,
           ...(endpoint !== undefined ? { endpoint } : {}),
+          ...(select !== undefined ? { select } : {}),
           ...(tls !== undefined ? { tls } : {}),
         }),
         stderr: "",
@@ -310,6 +362,7 @@ export function executeServeCommand(
       host,
       port,
       ...(endpoint !== undefined ? { endpointName: endpoint } : {}),
+      ...(select !== undefined ? { select } : {}),
       ...(tokens.length > 0 ? { tokens } : {}),
       ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
       ...(systemdSocket !== undefined && systemdSocket ? { systemdSocket } : {}),

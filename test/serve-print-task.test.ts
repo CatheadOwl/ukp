@@ -238,6 +238,16 @@ describe("serve --print-task rendering (W12)", () => {
     expect(out).toContain("ukp serve --endpoint notes --host 0.0.0.0 --port 8570 --tls");
   });
 
+  test("subset door carries --select into the serve line (ADR-REM-010)", () => {
+    const out = renderServeTaskArtifacts({
+      select: ["skill-dev", "agent-eval"],
+      host: "0.0.0.0",
+      port: 8570,
+      tls: { mode: "self-signed", sanEntries: [] },
+    });
+    expect(out).toContain("ukp serve --select skill-dev,agent-eval --host 0.0.0.0 --port 8570 --tls");
+  });
+
   test("explicit certificates: quoted paths, openssl once-step, mkdir guard", () => {
     const out = renderServeTaskArtifacts({
       host: "0.0.0.0",

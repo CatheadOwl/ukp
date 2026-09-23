@@ -516,3 +516,27 @@ The first public release.
   Client Scope with aliases, visibility, inheritance, or profiles; automatic
   artifact browsing, cleanup, or result-selection references; standalone binary
   distribution.
+- `ukp serve --select <names>`: a subset host door - the host door's
+  one-port `/e/<name>/` routing serving ONLY the named endpoints, for
+  registries that mix shareable knowledge with internal project folders
+  (one port and one scheduled task instead of one per endpoint; K8s
+  Ingress "only add backends you intend to expose" shape). Discovery,
+  routing, the public per-endpoint documents, and the 404 available-list
+  all carry the same effective roster (select ∩ current registry), and an
+  excluded endpoint's 404 is byte-identical to an unknown name's - the
+  door never betrays that a hidden endpoint exists (CWE-204 / GitHub's
+  404-not-404-avoiding-existence-confirmation posture; hiding a name from
+  discovery while still routing it is rejected as rsync-style obscurity).
+  Flag semantics mirror `register --select` (comma-separated, empty or
+  unknown names are usage errors with the roster, mutually exclusive with
+  --endpoint); membership still reconciles per request, so a selected
+  endpoint unregistered later just disappears from every face. The serve
+  banner gains a `select:` line, `--print-task` mirrors the flag into the
+  start script, and `ukp diagnose --door` reports subset doors as
+  `serve: subset a,b` (ADR-REM-010).
+- Remote guide: "Prefer host door mode" keeps its condition (the whole
+  Registry safe to declare) but a Registry mixing in endpoints the operator
+  will not declare now takes `ukp serve --select a,b,c` - one port, one
+  door, only the named subset, with unselected endpoints not served,
+  routed, or declared - replacing the retired per-endpoint `--endpoint`
+  door advice (O-020 ruling D companion wording change).
