@@ -1,7 +1,11 @@
 import { describe, test, expect } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   printTaskPreflightError,
   renderServeTaskArtifacts,
+  unsafeTokenReason,
 } from "../src/commands/serve-task.ts";
 import {
   parseServeArgs,
@@ -270,6 +274,13 @@ describe("serve --print-task rendering (W12)", () => {
     expect(hostDoorSelfSigned).not.toMatch(/\t/);
   });
 
+  test("print form never carries the write-mode provenance (one body source, two sinks)", () => {
+    // The print embed keeps the paste placeholder; the written-file rem
+    // (token interpolated by --write) belongs to disk artifacts only.
+    expect(hostDoorSelfSigned).toContain("<paste-your-token>");
+    expect(hostDoorSelfSigned).not.toContain("--write interpolated it");
+  });
+
   test("static template text stays free of drive letters and handbook locator points at the package", () => {
     // The template's own lines must use %USERPROFILE% (no machine-absolute
     // paths); user-supplied cert paths are echoed as given, so assert on the
@@ -362,5 +373,132 @@ describe("serve --print-task guards", () => {
     const help = renderServeHelp();
     expect(help).toContain("--print-task");
     expect(help).not.toMatch(/ADR-|RQ-\d|\bW\d+\b/);
+  });
+});
+
+describe("serve --print-task --write (O-020 ruling C: secret-free scopes to the print surface)", () => {
+  test("parse: --write without --print-task is a usage error", () => {
+    expect(() => parseServeArgs(["--write", "--host", "0.0.0.0"])).toThrow(KitUsageError);
+    expect(parseServeArgs(["--print-task", "--write", "--host", "0.0.0.0"]).write).toBe(true);
+  });
+
+  test("unsafe token characters are refused before any byte lands, value never echoed", () => {
+    // A quote breaks the set quoting, a % pairs into cmd parse-time
+    // expansion, a control character tears the file - the printf-\b class
+    // (2026-09-23 production round) refused by construction.
+    for (const bad of ['abc"def', "abc%def", "abc\tdef"]) {
+      expect(unsafeTokenReason(bad)).toBeDefined();
+    }
+    expect(unsafeTokenReason("0af3191c".repeat(4))).toBeUndefined();
+  });
+
+  test("write mode: files land CRLF with the real token, stdout stays secret-free, next steps present", () => {
+    if (process.platform !== "win32") return; // the generator is Windows-only; FS asserts run on the win32 leg
+    const home = mkdtempSync(join(tmpdir(), "ukp-write-"));
+    const token = "9f1c0drill2e7b4a5d6c8f0e1d2c3b4a5";
+    process.env.UKP_SERVE_TOKEN = token;
+    try {
+      const result = executeServeCommand(["--print-task", "--write", "--host", "0.0.0.0", "--tls"], {
+        currentDirectory: process.cwd(),
+        registryPath: "unused-for-write",
+        homeDir: home,
+      });
+      expect(result.exitCode).toBe(0);
+      const cmdBytes = readFileSync(join(home, ".ukp", "start-door.cmd"), "utf8");
+      const vbsBytes = readFileSync(join(home, ".ukp", "start-door-hidden.vbs"), "utf8");
+      // The token exists in exactly one place: the cmd file's bytes.
+      expect(cmdBytes).toContain(`set "UKP_SERVE_TOKEN=${token}"`);
+      // The written file describes its own provenance, truthfully.
+      expect(cmdBytes).toContain("--write interpolated it");
+      expect(vbsBytes).not.toContain(token);
+      // CRLF by construction - the ending the print form begs operators
+      // to preserve by hand (the third hand-error class).
+      expect(cmdBytes.includes("\n")).toBe(true);
+      expect(cmdBytes.match(/[^\r]\n/)).toBeNull();
+      expect(vbsBytes.match(/[^\r]\n/)).toBeNull();
+      // The stdout report never carries the secret (both directions).
+      expect(result.stdout).not.toContain(token);
+      expect(result.stderr).not.toContain(token);
+      expect(result.stdout).not.toContain("<paste-your-token>");
+      // The report carries the unapplied steps and the verify line.
+      expect(result.stdout).toContain("start-door.cmd");
+      expect(result.stdout).toContain("start-door-hidden.vbs");
+      expect(result.stdout).toContain("Register-ScheduledTask -TaskName 'ukp-door'");
+      expect(result.stdout).toContain('netsh advfirewall firewall add rule name="ukp-door"');
+      expect(result.stdout).toContain("ukp diagnose --door");
+      // The red line restated: nothing was registered, started, or opened.
+      expect(result.stdout).toContain("Nothing was registered, started, or opened");
+      // The pointer back to the print-only form (notes + section 5).
+      expect(result.stdout).toContain("ukp serve --print-task --host 0.0.0.0 --port 8570 --tls");
+    } finally {
+      delete process.env.UKP_SERVE_TOKEN;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("write mode refuses existing files and leaves them byte-identical (operator edits live there)", () => {
+    if (process.platform !== "win32") return;
+    const home = mkdtempSync(join(tmpdir(), "ukp-write-"));
+    process.env.UKP_SERVE_TOKEN = "9f1c0drill2e7b4a5d6c8f0e1d2c3b4a5";
+    try {
+      mkdirSync(join(home, ".ukp"), { recursive: true });
+      const cmdPath = join(home, ".ukp", "start-door.cmd");
+      const operatorEdit = "@echo off\r\nrem my own PATH patch lives here\r\n";
+      writeFileSync(cmdPath, operatorEdit);
+      const result = executeServeCommand(["--print-task", "--write", "--host", "0.0.0.0", "--tls"], {
+        currentDirectory: process.cwd(),
+        registryPath: "unused-for-write",
+        homeDir: home,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("refusing to overwrite");
+      expect(result.stderr).toContain("start-door.cmd");
+      expect(readFileSync(cmdPath, "utf8")).toBe(operatorEdit);
+      // All-or-nothing: the vbs (not yet existing) must not have been
+      // written behind the refusal.
+      expect(existsSync(join(home, ".ukp", "start-door-hidden.vbs"))).toBe(false);
+    } finally {
+      delete process.env.UKP_SERVE_TOKEN;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("write mode without a token in the environment is a usage error, no files written", () => {
+    if (process.platform !== "win32") return;
+    const home = mkdtempSync(join(tmpdir(), "ukp-write-"));
+    delete process.env.UKP_SERVE_TOKEN;
+    try {
+      const result = executeServeCommand(["--print-task", "--write", "--host", "0.0.0.0", "--tls"], {
+        currentDirectory: process.cwd(),
+        registryPath: "unused-for-write",
+        homeDir: home,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("UKP_SERVE_TOKEN");
+      expect(result.stderr).not.toContain("<paste-your-token>");
+      expect(existsSync(join(home, ".ukp"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("write mode refuses an unsafe token with the remedy, value never echoed", () => {
+    if (process.platform !== "win32") return;
+    const home = mkdtempSync(join(tmpdir(), "ukp-write-"));
+    process.env.UKP_SERVE_TOKEN = "has%percentinside";
+    try {
+      const result = executeServeCommand(["--print-task", "--write", "--host", "0.0.0.0", "--tls"], {
+        currentDirectory: process.cwd(),
+        registryPath: "unused-for-write",
+        homeDir: home,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("percent sign");
+      expect(result.stderr).not.toContain("has%percentinside");
+      expect(existsSync(join(home, ".ukp"))).toBe(false);
+    } finally {
+      delete process.env.UKP_SERVE_TOKEN;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

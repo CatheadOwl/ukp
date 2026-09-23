@@ -8,9 +8,10 @@ import {
   type UkpCommandSpec,
 } from "./kit.ts";
 import { readRegistry } from "../registry.ts";
+import { homedir } from "node:os";
 import { normalizeTlsSanEntry } from "../capabilities/tls-identity.ts";
 import { DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
-import { printTaskPreflightError, renderServeTaskArtifacts, type ServeTaskTls } from "./serve-task.ts";
+import { printTaskPreflightError, renderServeTaskArtifacts, writeServeTaskArtifacts, type ServeTaskTls } from "./serve-task.ts";
 
 export interface ServeCommandContext {
   currentDirectory: string;
@@ -18,6 +19,10 @@ export interface ServeCommandContext {
   qmdCommand?: readonly string[];
   /** Overrides `process.env.UKP_SERVE_TOKEN` for tests. */
   tokens?: readonly string[];
+  /** Overrides the home directory `--print-task --write` writes into
+   * (tests point this at a scratch home; production resolves the real
+   * user home). */
+  homeDir?: string;
 }
 
 /** `UKP_SERVE_TOKEN=a,b,c` (RQ-16): comma-separated, trimmed, empty entries
@@ -40,7 +45,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
   group: "operations",
   description:
     "Expose a registered endpoint over HTTP using the ukp-remote wire, or - without --endpoint - serve local endpoints as one host door routed by name: all of them, or just the ones --select names.",
-  usage: "[--endpoint <name>] [--select <names>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task]",
+  usage: "[--endpoint <name>] [--select <names>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task [--write]]",
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve a host door (/e/<name>/ routing, one port) instead" },
     { flags: "--select <names>", help: "host door serving ONLY the named endpoints (comma-separated): one port, /e/<name>/ routing, and a door document that declares just this subset - unselected local endpoints are not served, routed, or declared; mutually exclusive with --endpoint" },
@@ -54,6 +59,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
     { flags: "--max-idle <seconds>", help: "exit after <seconds> without requests (self-reap; the orphan backstop for on-demand-woken doors - fractional values accepted for tests)" },
     { flags: "--systemd-socket", help: "serve on the systemd socket-activation listener (LISTEN_FDS fd 3) instead of binding a port - the port belongs to your .socket unit; Linux-only" },
     { flags: "--print-task", help: "Windows: print this door's process-manager artifacts (start script, hidden launcher, Task Scheduler command, firewall rule) instead of serving - review and apply them yourself; nothing is installed or started for you, and the token is yours to paste (never printed)" },
+    { flags: "--write", help: "with --print-task: write the two artifact files (%USERPROFILE%\\.ukp\\start-door.cmd with the token interpolated from UKP_SERVE_TOKEN, plus the hidden launcher) instead of printing them - existing files are never overwritten, the token is never displayed, and the task/firewall steps stay on stdout for you to apply" },
   ],
   helpSuffix: [
     "",
@@ -122,6 +128,10 @@ export interface ParsedServe {
   /** Present = render the Windows process-manager artifacts instead of
    * serving (W12; Windows-only, print-only, never starts a listener). */
   printTask?: boolean;
+  /** Present = the print-task artifacts' file pair lands on disk with the
+   * env token interpolated (O-020 ruling C); only valid next to
+   * --print-task, and the print surface stays secret-free. */
+  write?: boolean;
   /** `--tls-san` values, normalized to `IP:x`/`DNS:y` SAN form (repeatable);
    * valid only next to `--tls` — the execute layer enforces the pairing.
    * Absent when the flag is not passed (parse output stays byte-identical
@@ -130,7 +140,7 @@ export interface ParsedServe {
 }
 
 function toParsedServe(parsed: KitParsed): ParsedServe {
-  const options = parsed.options as { host?: string; port?: string; endpoint?: string; select?: string; maxIdle?: string; systemdSocket?: boolean; printTask?: boolean; tlsSan?: string[] };
+  const options = parsed.options as { host?: string; port?: string; endpoint?: string; select?: string; maxIdle?: string; systemdSocket?: boolean; printTask?: boolean; write?: boolean; tlsSan?: string[] };
   const endpoint = options.endpoint;
   if (endpoint !== undefined && endpoint.length === 0) {
     throw new KitUsageError("--endpoint <name> must not be empty (omit it to serve a host door)");
@@ -161,6 +171,10 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
   if (printTask && systemdSocket) {
     throw new KitUsageError("--print-task is the Windows resident form; --systemd-socket is the Linux one (systemd holds the port - see the deployment handbook)");
   }
+  const write = options.write === true;
+  if (write && !printTask) {
+    throw new KitUsageError("--write modifies --print-task: run ukp serve --print-task --write (without --print-task, serve just serves)");
+  }
   let maxIdleSeconds: number | undefined;
   if (options.maxIdle !== undefined) {
     maxIdleSeconds = Number(options.maxIdle);
@@ -189,6 +203,7 @@ function toParsedServe(parsed: KitParsed): ParsedServe {
     ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
     ...(systemdSocket ? { systemdSocket } : {}),
     ...(printTask ? { printTask } : {}),
+    ...(write ? { write } : {}),
     ...(tlsSan.length > 0 ? { tlsSan } : {}),
   };
 }
@@ -268,7 +283,7 @@ export function executeServeCommand(
   context: ServeCommandContext,
 ): KitCommandResult {
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
-    const { endpoint, select, host, port, maxIdleSeconds, systemdSocket, tlsSan = [] } = toParsedServe(parsed);
+    const { endpoint, select, host, port, maxIdleSeconds, systemdSocket, write, tlsSan = [] } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
     const printTask = (parsed.options as { printTask?: boolean }).printTask === true;
     const options = parsed.options as { tls?: boolean; tlsCert?: string; tlsKey?: string };
@@ -309,10 +324,13 @@ export function executeServeCommand(
         }
       }
     }
-    // W12 print-only branch: render the Windows artifacts and stop. No
-    // listener, no admission token check (the token is pasted into the
-    // generated script later), and the env token is deliberately not read
-    // — the output is secret-free by construction.
+    // W12 print branch: render the Windows artifacts and stop. No listener,
+    // no admission token check. Print mode never reads the env token - the
+    // output is secret-free by construction. Write mode (O-020 ruling C:
+    // the D-090 secret-free clause scopes to the print surface) reads
+    // UKP_SERVE_TOKEN to interpolate it into the files it writes - the
+    // token exists in exactly one place, the cmd file's bytes; stdout stays
+    // secret-free in both modes.
     if (printTask) {
       const preflight = printTaskPreflightError({
         platform: process.platform,
@@ -329,14 +347,25 @@ export function executeServeCommand(
           : options.tlsCert !== undefined && options.tlsKey !== undefined
             ? { mode: "certificates", certPath: options.tlsCert, keyPath: options.tlsKey }
             : undefined;
+      const input = {
+        host,
+        port,
+        ...(endpoint !== undefined ? { endpoint } : {}),
+        ...(select !== undefined ? { select } : {}),
+        ...(tls !== undefined ? { tls } : {}),
+      };
+      if (!write) {
+        return {
+          exitCode: 0,
+          stdout: renderServeTaskArtifacts(input),
+          stderr: "",
+        };
+      }
       return {
         exitCode: 0,
-        stdout: renderServeTaskArtifacts({
-          host,
-          port,
-          ...(endpoint !== undefined ? { endpoint } : {}),
-          ...(select !== undefined ? { select } : {}),
-          ...(tls !== undefined ? { tls } : {}),
+        stdout: writeServeTaskArtifacts(input, {
+          token: process.env.UKP_SERVE_TOKEN,
+          homeDir: context.homeDir ?? homedir(),
         }),
         stderr: "",
       };

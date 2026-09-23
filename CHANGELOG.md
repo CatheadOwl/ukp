@@ -6,6 +6,19 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp serve --print-task --write`: the door artifact generator can now
+  write its two file artifacts directly to `%USERPROFILE%\.ukp\`
+  (CRLF by construction) with the token interpolated from your
+  `UKP_SERVE_TOKEN` — the token is never displayed, never passed in argv,
+  and refused outright if it contains characters that would corrupt a cmd
+  file (quotes, percent signs, control characters); minted hex tokens
+  always pass. Existing files are never overwritten — manual edits (a
+  PATH patch) are safe, and regeneration goes through the removal recipe.
+  stdout reports what was written plus the remaining steps (task
+  registration, firewall rule, `ukp diagnose --door` verification); the
+  print-only form is unchanged and stays the default (full notes and the
+  removal section). Nothing is registered, started, or opened by UKP in
+  either mode.
 - `ukp diagnose --door`: a read-only health check for this host's resident
   doors (Windows scheduled tasks running the print-task hidden launcher),
   merged into diagnose per the doctor convention rather than a new verb.

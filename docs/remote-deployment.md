@@ -131,7 +131,15 @@ Steps 3–6 are exactly what
 (or `--tls-cert/--tls-key`) prints for you — the generator assembles the
 mechanical half (start script, hidden launcher, Task Scheduler command,
 firewall rule, token placeholder); this section keeps the judgment calls
-and the pitfalls the verification run caught:
+and the pitfalls the verification run caught. A fast path exists for the
+two file artifacts: `ukp serve --print-task --write ...` writes
+`start-door.cmd` (token interpolated from your `UKP_SERVE_TOKEN` — never
+displayed) and the hidden launcher straight into `%USERPROFILE%\.ukp\`,
+CRLF by construction; existing files are never overwritten (manual edits
+— a PATH patch, say — are safe; regeneration means removing the old files
+first, as the removal section prescribes). The task-registration and
+firewall steps stay on stdout for you to run; the print-only form remains
+the full playbook (its Notes and the removal section):
 
 1. Install the usual way (bun's official installer + `npm i -g
    @catheadowl/ukp` — the npm shim needs bun on PATH, both land in
