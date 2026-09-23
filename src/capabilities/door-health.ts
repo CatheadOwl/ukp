@@ -4,7 +4,7 @@
  * wscript.exe on a hidden launcher (start-*-hidden.vbs) under
  * %USERPROFILE%\.ukp, which runs the start script (start-*.cmd, carrying
  * the serve line and the token) and owns door.log. Multi-door hosts rename
- * the trio per door (field shape: ukp-door / ukp-door-agent-eval), so
+ * the trio per door (field shape: ukp-door / ukp-door-<name>), so
  * discovery matches the task ACTION (wscript + a .vbs under .ukp), never a
  * fixed task name.
  *
