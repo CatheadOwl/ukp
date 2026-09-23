@@ -2,7 +2,7 @@
 
 All notable public changes to UKP will be documented in this file.
 
-## [Unreleased]
+## [0.2.6] - 2026-09-23
 
 ### Added
 
@@ -26,8 +26,8 @@ All notable public changes to UKP will be documented in this file.
   process tree, its port (who holds it - inside the tree, an outside
   leftover, or free), and a door.log tail triage where only the latest
   evidence counts (failure signatures warn only when they follow the
-  newest serving banner, so ISSUE-016-era scar lines under a healthy
-  restart stay silent). Discovery matches the launcher shape, not a fixed
+  newest serving banner, so stale scar lines from earlier failed runs
+  stay silent under a healthy restart). Discovery matches the launcher shape, not a fixed
   task name, so renamed second doors are found. Strictly read-only: the
   port verdict comes from the listener table (never a real bind, which
   could pop a firewall prompt), the start script's token line is never
