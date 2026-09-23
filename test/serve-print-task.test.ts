@@ -121,6 +121,44 @@ describe("serve --print-task rendering (W12)", () => {
     expect(hostDoorSelfSigned).not.toContain("/SC ONLOGON");
   });
 
+  test("door-family riders (O-020 ruling A): topology hint, task-PATH openssl gap, edit hazard", () => {
+    const single = renderServeTaskArtifacts({
+      endpoint: "notes",
+      host: "0.0.0.0",
+      port: 8570,
+      tls: { mode: "self-signed", sanEntries: [] },
+    });
+    // Subset FR candidate c: an operator copying this once per endpoint
+    // proliferates ports - the note surfaces the whole-registry
+    // alternative in serve-help wording. Host-door prints must not
+    // carry it (the sentence is meaningless once --endpoint is gone).
+    expect(single).toContain("omit --endpoint to serve the whole registry as one host door");
+    expect(hostDoorSelfSigned).not.toContain("omit --endpoint");
+    // Frictionless FR new-observation 1: the logged-on task's PATH may
+    // lack the openssl source the interactive shell has (provider
+    // round: --tls re-sign failed until PATH was extended). The note
+    // names the common source without hardcoding a path.
+    expect(single).toContain("The task's PATH is not your shell's");
+    expect(single).toContain('set "PATH=%PATH%;<git>\\mingw64\\bin"');
+    // Explicit certificates have no runtime openssl dependency (the
+    // once-step runs interactively), so the note stays self-signed-only.
+    const certOut = renderServeTaskArtifacts({
+      host: "0.0.0.0",
+      port: 9000,
+      tls: {
+        mode: "certificates",
+        certPath: "%USERPROFILE%\\.ukp\\tls\\cert.pem",
+        keyPath: "%USERPROFILE%\\.ukp\\tls\\key.pem",
+      },
+    });
+    expect(certOut).not.toContain("mingw64");
+    // Frictionless FR new-observation 2, promoted one sentence from the
+    // handbook pitfall: a running cmd re-reads the script at a stale
+    // byte offset, so an in-place edit above can execute torn fragments.
+    expect(single).toContain("Stop the door before editing start-door.cmd");
+    expect(single).toContain("stale byte offset");
+  });
+
   test("single-endpoint mode carries --endpoint into the serve line", () => {
     const out = renderServeTaskArtifacts({
       endpoint: "notes",

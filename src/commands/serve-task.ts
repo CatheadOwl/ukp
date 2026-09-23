@@ -18,7 +18,15 @@
  * restart-on-failure does not fire on exit codes (disproven on liku). The
  * scheduled task registers unelevated via a per-user logon trigger with
  * no execution time limit (the scheduler's 72h default silently kills
- * resident doors). */
+ * resident doors).
+ *
+ * Riders 2026-09-23 (O-020 ruling A, copy-only): single-endpoint prints
+ * name the whole-registry host-door alternative (one door instead of one
+ * port per endpoint), the self-signed notes add the task-PATH openssl gap
+ * (the logged-on task may lack the shell's openssl source; Git for
+ * Windows' mingw64\bin is named as the common remedy, no hardcoded path),
+ * and every print carries the stop-before-editing hazard (a running cmd
+ * re-reads the script at a stale byte offset). */
 
 export interface ServeTaskTlsSelfSigned {
   mode: "self-signed";
@@ -177,6 +185,13 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
     `   netsh advfirewall firewall add rule name="ukp-door" dir=in action=allow protocol=TCP localport=${input.port}`,
     "",
     "Notes:",
+    ...(input.endpoint !== undefined
+      ? [
+          "- Single-endpoint door (one port, task, and token per endpoint):",
+          "  omit --endpoint to serve the whole registry as one host door",
+          "  (/e/<name>/ routing, all endpoints, one port).",
+        ]
+      : []),
     ...(input.tls?.mode === "self-signed"
       ? [
           "- --tls self-signs at first start using an openssl on PATH (Git",
@@ -184,6 +199,11 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
           "  anywhere, pre-generate the certificate once instead: re-run with",
           "  --tls-cert/--tls-key - the handbook's Windows section carries",
           "  that recipe.",
+          "- The task's PATH is not your shell's: the logged-on task",
+          "  environment may lack the openssl source your interactive shell",
+          "  sees (--tls then fails to self-sign or re-sign). The common",
+          "  source is Git for Windows' mingw64\\bin - extend PATH inside",
+          "  start-door.cmd: set \"PATH=%PATH%;<git>\\mingw64\\bin\".",
         ]
       : []),
     "- No visible window, by design: the hidden launcher starts the console",
@@ -217,6 +237,10 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
     "  logged on means no door. Unattended-boot always-on needs a service",
     "  wrapper (WinSW-class) - deliberately outside this recipe; prefer the",
     "  ssh:// path or a Linux host (systemd socket activation) for that.",
+    "- Stop the door before editing start-door.cmd: a running cmd",
+    "  re-reads the script from a stale byte offset when the current",
+    "  line's child exits, so editing lines above can make it execute",
+    "  torn fragments of the edit.",
     "- Re-run ukp serve --print-task with different flags to regenerate;",
     "  edits land by saving the files and starting the task again",
     "  (Start-ScheduledTask -TaskName ukp-door).",

@@ -5,7 +5,7 @@ Goal: expose registered Services from one machine and consume them from another 
 Current model:
 - The ssh:// path needs nothing running on the host: each invocation wakes a loopback door over the SSH connection (it serves the host Registry fresh and self-reaps when idle). Host prerequisites: the host is ssh reachable and has ukp installed the usual way (npm i -g or bun add -g - the wake finds the standard locations).
 - The https path (LAN, public IP, or behind a reverse proxy) uses a resident door: run ukp serve under your process manager. Arbitrary consumers have no SSH credentials, so the listener itself is the trust boundary (TLS + bearer token).
-- Prefer host door mode: run ukp serve without --endpoint to expose every local endpoint behind one port.
+- Prefer host door mode when the whole Registry is safe to declare: run ukp serve without --endpoint to expose every local endpoint behind one port. A Registry that mixes in endpoints you do not want to expose cannot use it (host-door discovery declares everything registered) - serve those with --endpoint <name> doors instead, one port, task, and token each.
 - The door reads the host Registry fresh on each request, so newly registered local endpoints appear without restarting the door.
 - Declared endpoint names come from the host Service Manifest or discovery document; your registry binds each one under a local handle - the declared name by default, or --name <handle> when that name is already taken (two hosts both declaring 'notes' become your 'notes' and 'ali-notes'). --endpoint during register stays an expected-name assertion on the declared name.
 

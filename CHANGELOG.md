@@ -4,6 +4,21 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- print-task Notes carry three door-family copy riders: single-endpoint
+  prints name the alternative ("omit --endpoint to serve the whole
+  registry as one host door" - one door instead of one port per
+  endpoint); self-signed prints note that the scheduled task's PATH may
+  lack the openssl source the interactive shell has (Git for Windows'
+  mingw64\bin named as the common remedy, no hardcoded path); every
+  print says to stop the door before editing start-door.cmd (a running
+  cmd re-reads the script at a stale byte offset).
+- `ukp guide remote` no longer prefers host door mode unconditionally:
+  the preference now applies when the whole Registry is safe to declare,
+  and a Registry mixing in endpoints you do not want to expose is pointed
+  at --endpoint doors (with their per-door port/task/token cost named).
+
 ### Fixed
 
 - `ukp serve --print-task` on Windows: the generated start-door.cmd no
