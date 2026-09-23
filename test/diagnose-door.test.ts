@@ -146,6 +146,7 @@ function doorContext(
       return content;
     },
     homeDir: HOME,
+    platform: "win32",
   };
 }
 

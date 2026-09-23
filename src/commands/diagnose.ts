@@ -46,6 +46,9 @@ export interface DiagnoseCommandContext {
   readTextFile?: (path: string) => string;
   /** Overrides the %USERPROFILE% expansion root for tests (--door mode). */
   homeDir?: string;
+  /** Overrides the door-mode platform admission for tests (--door mode);
+   * process.platform in production. */
+  platform?: string;
 }
 
 export interface DiagnoseCommandResult {
@@ -323,7 +326,7 @@ export function executeDiagnoseCommand(
       if (parsed.explicitEndpoints !== undefined || parsed.global) {
         throw new KitUsageError("--door checks this host's resident doors and cannot be combined with --endpoint or -g");
       }
-      const gate = doorModePlatformError(process.platform);
+      const gate = doorModePlatformError(context.platform ?? process.platform);
       if (gate !== undefined) {
         throw new Error(gate);
       }
