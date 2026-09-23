@@ -139,6 +139,31 @@ function renderServiceManifest(options: { name?: string; description?: string; d
   return encoded.endsWith("\n") ? encoded : `${encoded}\n`;
 }
 
+/** Self-ignore guard for `.ukp/` (O-020 door-family B-b): the folder holds
+ * machine-local Service state (manifest, instance identity, TLS private
+ * keys) that must never enter version control or folder sync. `*` inside
+ * the tool-owned directory is the virtualenv / Python 3.13 venv / Meson
+ * precedent — it never touches the user's repo-root `.gitignore`. An
+ * existing file is never touched, so operators who pre-write their own
+ * ignore policy keep it (e.g. tracking service.toml on purpose). */
+const UKP_SELF_IGNORE = [
+  "# UKP local Service state (manifest, identity, TLS keys) is machine-local:",
+  "# self-ignored to keep it out of version control and folder sync.",
+  "*",
+  "",
+].join("\n");
+
+function ensureUkpSelfIgnore(ukpDirectory: string): void {
+  const gitignorePath = join(ukpDirectory, ".gitignore");
+  if (existsSync(gitignorePath)) return;
+  try {
+    writeFileSync(gitignorePath, UKP_SELF_IGNORE, { flag: "wx", mode: 0o644 });
+  } catch (error) {
+    // Concurrent writer installed the same guard — in place either way.
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+}
+
 function createServiceManifest(
   currentDirectory: string,
   options: InitServiceOptions,
@@ -168,6 +193,8 @@ function createServiceManifest(
     if (existsSync(manifestPath)) unlinkSync(manifestPath);
     throw error;
   }
+
+  ensureUkpSelfIgnore(ukpDirectory);
 
   return { folder, manifestPath, name, nameSource };
 }

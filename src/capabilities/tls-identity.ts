@@ -124,8 +124,9 @@ export interface SelfSignedIdentity {
 }
 
 /** Idempotent self-signed identity for `ukp serve --tls`: persisted under
- * `<serviceFolder>/.ukp/tls/` (machine-local, gitignored — the instance-uid
- * posture). openssl signs it because node:crypto cannot issue X.509; the
+ * `<serviceFolder>/.ukp/tls/` (machine-local; `init service` self-ignores
+ * `.ukp/` via its `.gitignore` — the instance-uid posture). openssl signs
+ * it because node:crypto cannot issue X.509; the
  * identity is the keypair, so losing the key loses the identity (clients
  * re-register). `extraSanEntries` (the `--tls-san` flag, already normalized
  * `IP:x`/`DNS:y`) merges into the SAN coverage; when a persisted certificate

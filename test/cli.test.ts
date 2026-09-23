@@ -654,6 +654,48 @@ describe("CLI bootstrap", () => {
     }
   });
 
+  test("init service writes a self-ignoring .ukp/.gitignore guard", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-self-ignore-"));
+    // Fixed lowercase folder name: the mkdtemp suffix is random-cased and
+    // would fail the endpoint-slug grammar before the guard is reached.
+    const service = join(root, "guard-service");
+    const output: string[] = [];
+    mkdirSync(service);
+    try {
+      expect(runCli(["init", "service"], (message) => output.push(message), undefined, {
+        currentDirectory: service,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(0);
+      const gitignore = readFileSync(join(service, ".ukp", ".gitignore"), "utf8");
+      // `*` self-ignore inside the tool-owned directory (virtualenv / venv /
+      // Meson precedent): the guard must cover the whole folder, including
+      // the tls/ private keys serve writes later, without ever touching the
+      // repo-root .gitignore.
+      expect(gitignore.split("\n")).toContain("*");
+      expect(existsSync(join(root, ".gitignore"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("init service leaves an existing .ukp/.gitignore untouched", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-self-ignore-keep-"));
+    mkdirSync(join(root, ".ukp"));
+    // Operator-owned policy wins: e.g. deliberately tracking service.toml
+    // while ignoring only tls/ — init must not overwrite it (idempotence).
+    writeFileSync(join(root, ".ukp", ".gitignore"), "tls/\n");
+    try {
+      expect(runCli(["init", "service", "--name", "custom-ignore"], undefined, undefined, {
+        currentDirectory: root,
+        registryPath: join(root, "registry.toml"),
+      })).toBe(0);
+      expect(readFileSync(join(root, ".ukp", ".gitignore"), "utf8")).toBe("tls/\n");
+      expect(existsSync(join(root, ".ukp", "service.toml"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("init service notes an existing provider index without provider command names", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-service-qmd-note-"));
     const service = join(root, "kb-like");
@@ -798,6 +840,10 @@ describe("CLI bootstrap", () => {
       })).toBe(1);
       expect(errors.join("\n")).toContain("Service Manifest already exists");
       expect(readFileSync(join(root, ".ukp", "service.toml"), "utf8")).not.toContain("again");
+      // Guard installs only after a successful manifest commit: the early
+      // exit must not leave a .gitignore behind in a folder that stays
+      // without a Service Manifest.
+      expect(existsSync(join(root, ".ukp", ".gitignore"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

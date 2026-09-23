@@ -18,6 +18,12 @@ All notable public changes to UKP will be documented in this file.
   the preference now applies when the whole Registry is safe to declare,
   and a Registry mixing in endpoints you do not want to expose is pointed
   at --endpoint doors (with their per-door port/task/token cost named).
+- `ukp init service` now installs a self-ignoring `.gitignore` (`*`)
+  inside `.ukp/` on fresh inits: the folder holds machine-local Service
+  state (manifest, instance identity, TLS private keys) that must never
+  enter version control or folder sync. An existing `.ukp/.gitignore` is
+  never touched (operator policy wins) and the repo-root `.gitignore` is
+  never modified.
 
 ### Fixed
 
