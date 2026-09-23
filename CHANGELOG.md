@@ -6,6 +6,21 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp diagnose --door`: a read-only health check for this host's resident
+  doors (Windows scheduled tasks running the print-task hidden launcher),
+  merged into diagnose per the doctor convention rather than a new verb.
+  Every door is reported with its task state, the wscript->cmd->bun
+  process tree, its port (who holds it - inside the tree, an outside
+  leftover, or free), and a door.log tail triage where only the latest
+  evidence counts (failure signatures warn only when they follow the
+  newest serving banner, so ISSUE-016-era scar lines under a healthy
+  restart stay silent). Discovery matches the launcher shape, not a fixed
+  task name, so renamed second doors are found. Strictly read-only: the
+  port verdict comes from the listener table (never a real bind, which
+  could pop a firewall prompt), the start script's token line is never
+  echoed, and every repair hint points at `ukp serve --print-task`
+  section 5 or the restart posture. A door that is down is a finding
+  (exit 1); a host with no doors is healthy.
 - print-task Notes carry three door-family copy riders: single-endpoint
   prints name the alternative ("omit --endpoint to serve the whole
   registry as one host door" - one door instead of one port per

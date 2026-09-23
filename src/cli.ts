@@ -95,6 +95,10 @@ export interface CliContext {
   artifactRoot?: string;
   artifactRunId?: string;
   now?: Date;
+  /** Overrides the door system snapshot behind `diagnose --door` for tests. */
+  doorProbe?: () => import("./capabilities/door-health.ts").DoorSystemSnapshot;
+  /** Overrides door-file reads behind `diagnose --door` for tests. */
+  readTextFile?: (path: string) => string;
 }
 
 interface CliCommandResult {
@@ -353,6 +357,8 @@ export function runCli(
       currentDirectory,
       registryPath,
       resolveProvider: context.resolveProvider,
+      doorProbe: context.doorProbe,
+      readTextFile: context.readTextFile,
     }), stdout, stderr);
   }
 

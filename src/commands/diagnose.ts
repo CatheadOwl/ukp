@@ -8,6 +8,15 @@ import { HelpRequestError, isHelpRequest } from "./flags.ts";
 import { defaultQmdCommand } from "../capabilities/qmd.ts";
 import { resolveProposeFolder } from "../capabilities/propose.ts";
 import { rgExecutableAvailable } from "../capabilities/rg.ts";
+import {
+  defaultDoorSystemProbe,
+  defaultReadDoorFile,
+  evaluateDoorSnapshot,
+  renderDoorHealthReport,
+  type DoorSystemProbe,
+  type DoorSystemSnapshot,
+} from "../capabilities/door-health.ts";
+import { homedir } from "node:os";
 
 export interface ProviderCheck {
   supported: boolean;
@@ -31,6 +40,12 @@ export interface DiagnoseCommandContext {
   currentDirectory: string;
   registryPath: string;
   resolveProvider?: ProviderResolver;
+  /** Overrides the PowerShell door snapshot for tests (--door mode). */
+  doorProbe?: DoorSystemProbe;
+  /** Overrides file reads of the operator-authored door files for tests. */
+  readTextFile?: (path: string) => string;
+  /** Overrides the %USERPROFILE% expansion root for tests (--door mode). */
+  homeDir?: string;
 }
 
 export interface DiagnoseCommandResult {
@@ -52,8 +67,11 @@ export const DIAGNOSE_SPEC: UkpCommandSpec = {
   name: "diagnose",
   summary: "check a Service or endpoints for wiring problems (manifest, provider setup)",
   group: "operations",
-  description: "Validate a Service folder or selected registered Service endpoints.",
-  usage: "[--endpoint <name> ... | -g]",
+  description: "Validate a Service folder or selected registered Service endpoints, or this host's resident doors (--door).",
+  usage: "[--door] [--endpoint <name> ... | -g]",
+  options: [
+    { flags: "--door", help: "check this host's resident doors (Windows scheduled tasks running the print-task hidden launcher): task state, process tree, port holder, door.log tail - read-only" },
+  ],
   scope: {
     endpointHelp: "validate one registered endpoint; repeat to validate multiple endpoints",
     globalHelp: "validate every endpoint in the Host Registry; takes no value",
@@ -64,6 +82,16 @@ export const DIAGNOSE_SPEC: UkpCommandSpec = {
     "  With no --endpoint or -g, diagnose validates the current folder as a",
     "  Service (Manifest and provider wiring). -g validates every registered",
     "  endpoint; -g cannot be combined with --endpoint.",
+    "",
+    "Doors:",
+    "  --door skips Service validation and checks this host's resident doors",
+    "  (Windows): every scheduled task running the print-task hidden launcher",
+    "  is reported with its task state, the wscript->cmd->bun process tree,",
+    "  its port (and who holds it), and the door.log tail. Read-only -",
+    "  repairs live in 'ukp serve --print-task' section 5 and the deployment",
+    "  handbook. A door that is down is a finding (exit 1); a host with no",
+    "  doors is healthy. Not combinable with --endpoint or -g; on Linux the",
+    "  door is a systemd socket-activation unit (see the handbook).",
     "",
   ].join("\n"),
 };
@@ -208,15 +236,52 @@ export function renderDependencyRegistryWarnings(
 }
 
 function parseDiagnoseArgs(args: readonly string[]): {
+  door: boolean;
   explicitEndpoints?: string[];
   global: boolean;
   warnings: string[];
 } {
   const parsed = parseKitArgs(DIAGNOSE_SPEC, args);
   return {
+    door: (parsed.options as { door?: boolean }).door === true,
     explicitEndpoints: parsed.scope.explicitEndpoints,
     global: parsed.scope.global,
     warnings: parsed.scope.warnings,
+  };
+}
+
+/** Door-mode platform admission (mirrors printTaskPreflightError: pure,
+ * `process.platform` in production). Linux doors are systemd units with
+ * their own check surface; running the Windows probe there is meaningless. */
+export function doorModePlatformError(platform: string): string | undefined {
+  if (platform !== "win32") {
+    return "--door is Windows-only; on Linux the door is a systemd socket-activation unit - check it with systemctl --user status ukp-door.socket (the deployment handbook carries the recipes)";
+  }
+  return undefined;
+}
+
+function executeDoorDiagnose(context: DiagnoseCommandContext): DiagnoseCommandResult {
+  const probe = context.doorProbe ?? defaultDoorSystemProbe;
+  const readTextFile = context.readTextFile ?? defaultReadDoorFile;
+  let snapshot: DoorSystemSnapshot;
+  try {
+    snapshot = probe();
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp diagnose: door snapshot failed: ${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
+  const doors = evaluateDoorSnapshot(snapshot, {
+    homeDir: context.homeDir ?? homedir(),
+    readTextFile,
+  });
+  const unhealthy = doors.some((door) => door.status !== "ok");
+  return {
+    exitCode: unhealthy ? 1 : 0,
+    stdout: renderDoorHealthReport(doors),
+    stderr: "",
   };
 }
 
@@ -254,6 +319,16 @@ export function executeDiagnoseCommand(
 
   try {
     const parsed = parseDiagnoseArgs(args);
+    if (parsed.door) {
+      if (parsed.explicitEndpoints !== undefined || parsed.global) {
+        throw new KitUsageError("--door checks this host's resident doors and cannot be combined with --endpoint or -g");
+      }
+      const gate = doorModePlatformError(process.platform);
+      if (gate !== undefined) {
+        throw new Error(gate);
+      }
+      return executeDoorDiagnose(context);
+    }
     if (!parsed.explicitEndpoints && !parsed.global) {
       try {
         const report = diagnoseService(context.currentDirectory, context.resolveProvider);
