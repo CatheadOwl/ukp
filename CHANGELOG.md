@@ -24,6 +24,20 @@ All notable public changes to UKP will be documented in this file.
   enter version control or folder sync. An existing `.ukp/.gitignore` is
   never touched (operator policy wins) and the repo-root `.gitignore` is
   never modified.
+- print-task now prints its own inverse as section 5 ("To remove the
+  door"), in three levels - stop now is not disabling, and disabling is
+  not erasing: stop now (the same launcher-root taskkill; the scheduler's
+  Stop/End-Task route is deliberately absent - it does not kill the
+  tree), stop for good (`Unregister-ScheduledTask -Confirm:$false`, which
+  neither confirms silently nor stops the running instance), and erase
+  everything as the reverse of the setup steps (firewall rule delete,
+  the by-name files with the token-bearing cmd called out - a file that
+  ever left the machine burns the token; certificate material by TLS
+  shape - a single-endpoint door's self-signed identity sits inside the
+  served folder, so sync carries the private key out - and the
+  host/consumer `ukp unregister` calls). The deployment handbook
+  carries the mirrored teardown section plus the Linux
+  socket-activation inverse (disable --now, unit files, ~/.ukp/tls).
 
 ### Fixed
 

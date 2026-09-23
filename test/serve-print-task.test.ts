@@ -121,6 +121,75 @@ describe("serve --print-task rendering (W12)", () => {
     expect(hostDoorSelfSigned).not.toContain("/SC ONLOGON");
   });
 
+  test("teardown section 5 (O-020 ruling B1): three levels, reverse erase checklist, no End-Task route", () => {
+    // Stopping != disabling != erasing (teardown FR; the systemd
+    // stop/disable/purge taxonomy). Level 1 reuses the Notes'
+    // launcher-root kill verbatim - the same command, not a new one.
+    expect(hostDoorSelfSigned).toContain("5) To remove the door");
+    expect(hostDoorSelfSigned).toContain("taskkill /PID <wscript-pid> /T /F");
+    // Level 2: the cmdlet confirms by default (Microsoft Learn) and does
+    // not stop the running instance - both facts stated, kill not optional.
+    expect(hostDoorSelfSigned).toContain(
+      "Unregister-ScheduledTask -TaskName ukp-door -Confirm:$false",
+    );
+    expect(hostDoorSelfSigned).toContain("not optional");
+    // Level 3 is the reverse of 4 -> 0: the firewall rule first (the §4
+    // mirror - the original checklist gap), then the by-name files.
+    expect(hostDoorSelfSigned).toContain(
+      'netsh advfirewall firewall delete rule name="ukp-door"',
+    );
+    // Comma-separated paths: space-separated del binds only the first
+    // path in PowerShell (positional-parameter error, caught live in the
+    // 2026-09-23 drill) - the comma form runs in both shells.
+    expect(hostDoorSelfSigned).toContain(
+      'del "%USERPROFILE%\\.ukp\\start-door.cmd", "%USERPROFILE%\\.ukp\\door.log"',
+    );
+    expect(hostDoorSelfSigned).toContain('del "%USERPROFILE%\\.ukp\\start-door-hidden.vbs"');
+    // The token callout: the file IS the local copy; one that ever left
+    // the machine burns the token.
+    expect(hostDoorSelfSigned).toContain("carries the token in plaintext");
+    expect(hostDoorSelfSigned).toContain("burned");
+    // Both registries named: host-side (opt-in - local use survives) and
+    // every consumer (token sits there in plaintext).
+    expect(hostDoorSelfSigned).toContain("ukp unregister --endpoint <name>");
+    // Absence lock: the scheduler's Stop/End-Task route does not kill the
+    // wscript tree (disproven in the field 2026-09-23) - the generic
+    // tutorial recipe must not creep into the removal advice.
+    expect(hostDoorSelfSigned).not.toContain("Stop-ScheduledTask");
+  });
+
+  test("teardown section 5: certificate erasure matches the door's TLS shape", () => {
+    // Explicit certificates: the del line names exactly the paths step 0
+    // printed (generator knows its own outputs).
+    const certOut = renderServeTaskArtifacts({
+      host: "0.0.0.0",
+      port: 9000,
+      tls: {
+        mode: "certificates",
+        certPath: "%USERPROFILE%\\.ukp\\tls\\cert.pem",
+        keyPath: "%USERPROFILE%\\.ukp\\tls\\key.pem",
+      },
+    });
+    expect(certOut).toContain('del "%USERPROFILE%\\.ukp\\tls\\key.pem" "%USERPROFILE%\\.ukp\\tls\\cert.pem"');
+    expect(certOut).toContain("the certificate paths step 0 printed");
+    // Self-signed single-endpoint door: the identity sits INSIDE the
+    // served folder - the sync-carries-the-private-key-out warning and
+    // the init-service self-ignore pointer are the load-bearing lines.
+    const single = renderServeTaskArtifacts({
+      endpoint: "notes",
+      host: "0.0.0.0",
+      port: 8570,
+      tls: { mode: "self-signed", sanEntries: [] },
+    });
+    expect(single).toContain("served folder's .ukp\\tls\\");
+    expect(single).toContain("carries the private key out");
+    expect(single).toContain("self-ignoring");
+    // Host door instead: the identity is host-local - no
+    // inside-the-KB-folder warning for this shape.
+    expect(hostDoorSelfSigned).toContain("host-local");
+    expect(hostDoorSelfSigned).not.toContain("carries the private key out");
+  });
+
   test("door-family riders (O-020 ruling A): topology hint, task-PATH openssl gap, edit hazard", () => {
     const single = renderServeTaskArtifacts({
       endpoint: "notes",

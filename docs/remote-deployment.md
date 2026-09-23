@@ -211,6 +211,34 @@ Pitfalls the verification run caught:
 - `rg` on the host is the host's business — no ripgrep installed means
   the remote `rg` capability reports unavailable (everything else works).
 
+To remove the door — the inverse of steps 4–0, in three levels (stopping
+is not disabling, and disabling is not erasing; `ukp serve --print-task`
+prints this checklist as its §5):
+
+1. **Stop now**: `taskkill /PID <wscript-pid> /T /F` on the launcher
+   root (same lookup as the restart pitfall above). With the task still
+   registered, the next logon brings the door back.
+2. **Stop for good**:
+   `Unregister-ScheduledTask -TaskName ukp-door -Confirm:$false` from a
+   plain shell — the same zero-elevation path as registering it. The
+   cmdlet confirms by default (hence the flag), and unregistering does
+   **not** stop a running instance: the kill in step 1 is not optional.
+3. **Erase everything**: `netsh advfirewall firewall delete rule
+   name="ukp-door"` (the elevated shell again), then delete
+   `%USERPROFILE%\.ukp\start-door.cmd` (**it carries the token in
+   plaintext** — deleting it destroys this copy; if it ever left the
+   machine, treat the token as burned), `start-door-hidden.vbs`, and
+   `door.log`, plus the certificate material: your `--tls-cert` /
+   `--tls-key` paths, or — with `--tls` — the identity in the served
+   folder's `.ukp\tls\` (single-endpoint door: *inside* the KB folder,
+   so git or cloud sync carries the private key out;
+   `ukp init service` drops a self-ignoring `.ukp\.gitignore` there) or
+   beside the host registry (host door). The endpoints stay registered
+   on the host for local use — `ukp unregister --endpoint <name>` per
+   endpoint only if you are done with them; and every consumer that
+   registered holds the token in plaintext in its own registry —
+   `ukp unregister --endpoint <name>` there too.
+
 ## Socket activation (Linux — no resident process on the https path either)
 
 systemd can hold the listening port itself and spawn the door on first
@@ -269,6 +297,15 @@ Notes:
   addresses — a public EIP is not among them, and registration would fail
   CERT_ALTNAME_INVALID. Add `--tls-san <public-ip>` next to `--tls`
   (see Native TLS above): the SAN grows, the key (and pin) does not.
+- **Removing the door** (the setup block's inverse — the same three
+  levels as the Windows teardown above, in one gesture):
+  `systemctl --user disable --now ukp-door.socket` (a door still
+  running stops with `systemctl --user stop ukp-door.service`), then
+  delete the two unit files and the token env file, and
+  `rm -rf ~/.ukp/tls` if you are done with the self-signed identity;
+  `loginctl disable-linger "$USER"` too if nothing else on the host
+  needs it. Nothing else is resident — consumer and host registry
+  bindings come off exactly as on the Windows side.
 
 ## Host door (one host, many endpoints — one gesture, zero tokens)
 

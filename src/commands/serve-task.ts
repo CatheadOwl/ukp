@@ -26,7 +26,19 @@
  * (the logged-on task may lack the shell's openssl source; Git for
  * Windows' mingw64\bin is named as the common remedy, no hardcoded path),
  * and every print carries the stop-before-editing hazard (a running cmd
- * re-reads the script at a stale byte offset). */
+ * re-reads the script at a stale byte offset).
+ *
+ * §5 "To remove the door" (2026-09-23, O-020 ruling B1 / teardown FR):
+ * the print's own inverse, three levels — stop now (the same launcher-root
+ * kill as the restart note), stop for good (Unregister-ScheduledTask:
+ * confirms by default, and does NOT stop the running instance), erase
+ * everything (the reverse of steps 4→0, firewall rule included, the
+ * token-bearing cmd named, self-signed identity located by door shape —
+ * the single-endpoint identity sits INSIDE the served folder, so sync
+ * carries the private key out). The scheduler's own End/Stop task route
+ * is deliberately absent: it does not kill the tree (disproven in the
+ * field). Print-only as ever — the removal advice documents, never
+ * executes. */
 
 export interface ServeTaskTlsSelfSigned {
   mode: "self-signed";
@@ -183,6 +195,63 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
     "4) Firewall rule for the port (from an elevated shell)",
     "",
     `   netsh advfirewall firewall add rule name="ukp-door" dir=in action=allow protocol=TCP localport=${input.port}`,
+    "",
+    "5) To remove the door - stopping it is not disabling it, and",
+    "   disabling it is not erasing it. Three levels; go as far as you",
+    "   mean to.",
+    "",
+    "   Stop it NOW: kill the LAUNCHER root - the same command as the",
+    "   restart note in the Notes below:",
+    "   taskkill /PID <wscript-pid> /T /F",
+    "   The door stays down until the next logon or a manual Start; with",
+    "   the task still registered, the next logon brings it back.",
+    "",
+    "   Stop it FOR GOOD: delete the scheduled task step 3 registered",
+    "   (ukp-door in this printout - a renamed second door has its own",
+    "   name), from a plain shell, the same zero-elevation path as",
+    "   registering it:",
+    "   Unregister-ScheduledTask -TaskName ukp-door -Confirm:$false",
+    "   The cmdlet asks for confirmation by default; unregistering does",
+    "   NOT kill a running door - the kill above is not optional.",
+    "",
+    "   Erase EVERYTHING - the reverse of steps 4 -> 0 (the firewall",
+    "   delete needs the elevated shell again):",
+    '   netsh advfirewall firewall delete rule name="ukp-door"',
+    // Comma-separated paths: cmd's native delimiter AND PowerShell's
+    // array argument (a space-separated del line binds only the first
+    // path in PowerShell - caught live in the 2026-09-23 drill).
+    '   del "%USERPROFILE%\\.ukp\\start-door.cmd", "%USERPROFILE%\\.ukp\\door.log"',
+    '   del "%USERPROFILE%\\.ukp\\start-door-hidden.vbs"',
+    "   start-door.cmd carries the token in plaintext: deleting it",
+    "   destroys this copy, but if it ever left this machine (a backup,",
+    "   a copy), treat the token as burned and mint a fresh one for any",
+    "   future door.",
+    ...(input.tls?.mode === "certificates"
+      ? [
+          `   del "${input.tls.keyPath}" "${input.tls.certPath}"`,
+          "   (the certificate paths step 0 printed)",
+        ]
+      : []),
+    ...(input.tls?.mode === "self-signed" && input.endpoint !== undefined
+      ? [
+          "   The --tls identity lives in the served folder's .ukp\\tls\\ -",
+          "   INSIDE the knowledge folder. Git or cloud sync",
+          "   carries the private key out with it. Delete it when the folder",
+          "   leaves this machine; ukp init service drops a self-ignoring",
+          "   .ukp\\.gitignore there for exactly this reason.",
+        ]
+      : []),
+    ...(input.tls?.mode === "self-signed" && input.endpoint === undefined
+      ? [
+          "   The --tls identity is host-local: the tls\\ folder beside the",
+          "   host registry - delete it with the door if you are done.",
+        ]
+      : []),
+    "   The endpoints stay registered on the host for local use;",
+    "   unregister them too only if you are done with them, one per",
+    "   endpoint: ukp unregister --endpoint <name>. Every consumer that",
+    "   ran ukp register --url holds the token in plaintext in its own",
+    "   registry - run ukp unregister --endpoint <name> there as well.",
     "",
     "Notes:",
     ...(input.endpoint !== undefined
