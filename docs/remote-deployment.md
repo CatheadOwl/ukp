@@ -123,7 +123,10 @@ one bun process always running — with **no visible window** (a hidden
 launcher owns the console; a popping cmd box is not an acceptable product
 form) and bounded crash retry. Verified end to end (register/TOFU →
 read → nav, plus zero-flash and crash-recovery drills) on a Windows 11
-host with a plain user-level install. Steps 3–6 are exactly what
+host with a plain user-level install; the task recipe and the log
+ownership were re-verified end to end on 2026-09-23 (unelevated
+per-user registration, no execution time limit, whole-tree restart).
+Steps 3–6 are exactly what
 `ukp serve --print-task --host 0.0.0.0 --tls`
 (or `--tls-cert/--tls-key`) prints for you — the generator assembles the
 mechanical half (start script, hidden launcher, Task Scheduler command,
@@ -143,8 +146,11 @@ and the pitfalls the verification run caught:
    -subj "/CN=ukp" -addext "subjectAltName=IP:<lan-ip>,DNS:localhost"`
 4. `%USERPROFILE%\.ukp\start-door.cmd` (CRLF!) — set UKP_SERVE_TOKEN,
    run `ukp serve --host 0.0.0.0 --port 8570 --tls-cert ... --tls-key ...`
-   with the door.log redirect. No PATH export: the launcher finds bun
-   itself, and the logged-on task carries the per-user PATH. Write it
+   with **no redirect on the serve line** — door.log is owned solely by
+   the vbs launcher's outer redirect; a second redirect here deadlocks
+   the nested append-open and the door never starts. No PATH export: the
+   launcher finds bun itself, and the logged-on task carries the
+   per-user PATH. Write it
    with a real editor (writing cmd files over ssh echo mangles `%`
    escaping — copy the file instead).
 5. `%USERPROFILE%\.ukp\start-door-hidden.vbs` (CRLF, real editor) — the
@@ -152,11 +158,16 @@ and the pitfalls the verification run caught:
    at process creation (nothing ever flashes), captures everything to
    door.log, propagates the exit code, and retries a crashed door
    3 times, 30s apart. `ukp serve --print-task` prints it verbatim.
-6. `schtasks /Create /TN ukp-door /TR "wscript.exe
-   \"%USERPROFILE%\.ukp\start-door-hidden.vbs\"" /SC ONLOGON /F` (from an
-   elevated shell — creating an ONLOGON task from a plain one fails with
-   Access denied) + a firewall rule for the port; `schtasks /Run /TN
-   ukp-door` to start now.
+6. Scheduled task — register from a **plain PowerShell shell** (no
+   elevation needed: a per-user logon trigger is the OneDrive/Teams-class
+   autostart path; a machine-level logon trigger or another user's
+   session still needs the elevated schtasks route). Use the
+   `Register-ScheduledTask` block `ukp serve --print-task` prints —
+   per-user `AtLogOn -User` trigger, battery flags, `IgnoreNew`, and
+   deliberately **no execution time limit**
+   (`-ExecutionTimeLimit ([TimeSpan]::Zero)`). Then the firewall rule
+   for the port (that one does need an elevated shell), and
+   `Start-ScheduledTask -TaskName ukp-door` to start now.
 7. Client: `ukp register --url https://<host>:8570 --token <token>` —
    TOFU pins the certificate; re-registering refreshes the pin.
 
@@ -168,13 +179,35 @@ Pitfalls the verification run caught:
 - ONLOGON starts at LOGON, not boot, and the launcher's crash retry is
   bounded (3×30s): after an unattended reboot nobody logs into, or after
   exhausted retries, the door is down until the next logon or a manual
-  `schtasks /Run`. Unattended-boot always-on would need WinSW/NSSM-class
-  wrapping — or prefer ssh:// there. (Task Scheduler's own
-  restart-on-failure setting does not fire on exit codes — do not rely
-  on it.)
-- To restart the door by hand (new token, ukp upgrade, new cert):
-  `taskkill /PID <door-pid> /T /F`, then `schtasks /Run /TN ukp-door` —
-  `schtasks /End` does not reliably kill the process tree.
+  `Start-ScheduledTask -TaskName ukp-door`. Unattended-boot always-on
+  would need WinSW/NSSM-class wrapping — or prefer ssh:// there. (Task
+  Scheduler's own restart-on-failure setting does not fire on exit
+  codes — do not rely on it.)
+- **The 72-hour default**: a task without an explicit execution time
+  limit is stopped by Task Scheduler 72 hours after it starts — for a
+  resident door that is a silent kill (no window, no log line). The
+  recipe pins `-ExecutionTimeLimit ([TimeSpan]::Zero)` (PT0S in the task
+  XML); keep it when editing the task by hand.
+- To restart the door by hand (new token, ukp upgrade, new cert): kill
+  the **launcher root**, not just the serve leaf — `taskkill /PID
+  <wscript-pid> /T /F` on the `wscript.exe` running
+  `start-door-hidden.vbs`, then `Start-ScheduledTask -TaskName
+  ukp-door`. A leaf-only kill leaves the launcher's bounded retry to
+  re-grab the port within 30 seconds, racing the manual start (which
+  `IgnoreNew` turns into a no-op while the old launcher lives); the
+  scheduler's End-Task does not reliably kill the tree either. Each
+  door has its own wscript — in PowerShell, `Get-CimInstance
+  Win32_Process -Filter "Name='wscript.exe'" | Select-Object
+  ProcessId,CommandLine` and match the vbs name.
+- **Git Bash path conversion**: MSYS rewrites slash-style arguments into
+  Git paths (`taskkill /PID …` fails with a misleading
+  Invalid-argument error that reads like a permission problem). Prefix
+  such commands with `MSYS_NO_PATHCONV=1`.
+- **Do not edit start-door.cmd while the door runs**: cmd.exe resumes
+  reading a running batch file at a stale byte offset, so an in-place
+  edit above the current line makes it execute garbled fragments when
+  the current command returns (observed live: a mid-comment `a` ran as
+  a command). Stop the door first, edit, then restart.
 - `rg` on the host is the host's business — no ripgrep installed means
   the remote `rg` capability reports unavailable (everything else works).
 

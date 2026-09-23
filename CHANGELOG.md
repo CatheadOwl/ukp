@@ -2,6 +2,32 @@
 
 All notable public changes to UKP will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `ukp serve --print-task` on Windows: the generated start-door.cmd no
+  longer redirects to door.log itself - the hidden launcher (vbs) is the
+  sole log owner. Both layers redirecting to the same file deadlocked
+  every first run (a nested append-open sharing violation: the door
+  never started, and door.log showed only "process cannot access the
+  file" lines). Affected 0.2.3-0.2.5.
+
+### Changed
+
+- print-task section 3 now defaults to an unelevated per-user PowerShell
+  Register-ScheduledTask recipe (AtLogOn trigger for the current user;
+  the elevated schtasks route is demoted to a note for machine-level
+  triggers). The recipe deliberately sets no execution time limit: the
+  Task Scheduler default stops a task 72 hours after it starts, silently
+  killing a resident door.
+- Manual restart now kills the launcher root (the wscript.exe running
+  start-door-hidden.vbs) before Start-ScheduledTask - a serve-leaf-only
+  kill leaves the launcher's retry to re-grab the port within 30
+  seconds, racing the restart (no schtasks commands remain in the
+  printed artifacts); a Git Bash note covers MSYS_NO_PATHCONV=1 for
+  slash-style arguments.
+
 ## [0.2.5] - 2026-09-22
 
 ### Added

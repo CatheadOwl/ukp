@@ -6,14 +6,19 @@
  * real token (the script line carries a placeholder; the operator pastes the
  * token into the file they save, under their own permission regime).
  *
- * The emitted shapes mirror the machine-verified liku recipe (deployment
- * handbook, Windows section): a bare `ukp` resolves through the logged-on
- * task's per-user PATH and the self-locating launcher finds bun itself, so
- * no PATH export is emitted. The hidden launcher is the product default
- * (owner ruling 2026-09-21: a visibly popping cmd window is not a correct
- * product form): zero flash (hidden at process creation), door.log capture,
+ * The emitted shapes mirror the field-verified recipes (deployment
+ * handbook, Windows section; provider round 2026-09-23): a bare `ukp`
+ * resolves through the logged-on task's per-user PATH and the
+ * self-locating launcher finds bun itself, so no PATH export is emitted.
+ * The hidden launcher is the product default (owner ruling 2026-09-21: a
+ * visibly popping cmd window is not a correct product form): zero flash
+ * (hidden at process creation), sole door.log capture (ISSUE-016: a
+ * redirect on the cmd's serve line too deadlocks the nested append-open),
  * exit-code propagation, bounded crash retry — Task Scheduler's own
- * restart-on-failure does not fire on exit codes (disproven on liku). */
+ * restart-on-failure does not fire on exit codes (disproven on liku). The
+ * scheduled task registers unelevated via a per-user logon trigger with
+ * no execution time limit (the scheduler's 72h default silently kills
+ * resident doors). */
 
 export interface ServeTaskTlsSelfSigned {
   mode: "self-signed";
@@ -127,7 +132,9 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
     "   rem ukp resolves through the logged-on task's per-user PATH; the",
     "   rem launcher finds bun itself - no PATH export needed.",
     "   if not exist \"%USERPROFILE%\\.ukp\" mkdir \"%USERPROFILE%\\.ukp\"",
-    `   ${serveLine} >> "%USERPROFILE%\\.ukp\\door.log" 2>&1`,
+    "   rem logging is owned by start-door-hidden.vbs (outer redirect) - a",
+    "   rem second redirect to the same file here deadlocks the append open",
+    `   ${serveLine}`,
     "",
     "2) Hidden launcher - save as %USERPROFILE%\\.ukp\\start-door-hidden.vbs",
     "   (CRLF and a real editor again: the vbs carries literal % signs that",
@@ -151,11 +158,19 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
     "   WScript.Quit rc",
     "",
     "3) Scheduled task - starts the door at LOGON, hidden",
-    "   (create it from an elevated shell: creating an ONLOGON task from a",
-    "    plain shell fails with Access denied)",
+    "   (run this block in PowerShell; no elevation needed: this per-user",
+    "   logon trigger registers from a plain shell. A machine-level logon",
+    "   trigger or another user's session still needs the elevated",
+    "   schtasks route)",
     "",
-    "   schtasks /Create /TN ukp-door /TR \"wscript.exe \\\"%USERPROFILE%\\.ukp\\start-door-hidden.vbs\\\"\" /SC ONLOGON /F",
-    "   schtasks /Run /TN ukp-door",
+    "   $t = New-ScheduledTaskTrigger -AtLogOn -User \"$env:USERDOMAIN\\$env:USERNAME\"",
+    "   $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `",
+    "   -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `",
+    "   -ExecutionTimeLimit ([TimeSpan]::Zero)",
+    "   Register-ScheduledTask -TaskName 'ukp-door' -Action (New-ScheduledTaskAction `",
+    "   -Execute 'wscript.exe' -Argument '\"%USERPROFILE%\\.ukp\\start-door-hidden.vbs\"') `",
+    "   -Trigger $t -Settings $s -Force",
+    "   Start-ScheduledTask -TaskName ukp-door",
     "",
     "4) Firewall rule for the port (from an elevated shell)",
     "",
@@ -180,15 +195,31 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
     "  failure visible (non-zero task result + door.log). Do not rely on",
     "  Task Scheduler's restart-on-failure setting - it does not fire on",
     "  exit codes.",
+    "- The task recipe pins no execution time limit on purpose: the Task",
+    "  Scheduler default stops a task 72 hours after it starts, which",
+    "  would silently kill a resident door (no window, no log line).",
     "- To restart the door by hand (new token, ukp upgrade, new cert):",
-    "  taskkill /PID <door-pid> /T /F, then schtasks /Run /TN ukp-door",
-    "  (schtasks /End does not reliably kill the process tree).",
+    "  kill the LAUNCHER root, not just the serve leaf. The kill command:",
+    "  taskkill /PID <wscript-pid> /T /F - where <wscript-pid> is the",
+    "  wscript.exe running start-door-hidden.vbs; then",
+    "  Start-ScheduledTask -TaskName ukp-door. A leaf-only kill lets",
+    "  the launcher's bounded retry re-grab the port within 30s, racing",
+    "  your Start (which IgnoreNew no-ops while the old launcher lives);",
+    "  the scheduler's End-Task does not kill the tree either. Each door",
+    "  has its own wscript - in PowerShell, list them and match the vbs",
+    "  name: Get-CimInstance Win32_Process -Filter \"Name='wscript.exe'\"",
+    "  | Select-Object ProcessId,CommandLine",
+    "- Git Bash users: prefix slash-style commands with MSYS_NO_PATHCONV=1",
+    "  (e.g. MSYS_NO_PATHCONV=1 taskkill /PID <pid> /T /F), or MSYS rewrites",
+    "  the slash arguments into Git paths and the command fails with a",
+    "  misleading Invalid-argument error.",
     "- LOGON, not boot: the door starts when someone logs on - nobody",
     "  logged on means no door. Unattended-boot always-on needs a service",
     "  wrapper (WinSW-class) - deliberately outside this recipe; prefer the",
     "  ssh:// path or a Linux host (systemd socket activation) for that.",
     "- Re-run ukp serve --print-task with different flags to regenerate;",
-    "  edits land by saving the files and re-running schtasks /Run.",
+    "  edits land by saving the files and starting the task again",
+    "  (Start-ScheduledTask -TaskName ukp-door).",
     "- Full recipes and hardening: the deployment handbook -",
     "  docs/remote-deployment.md in this package, or",
     "  https://github.com/CatheadOwl/ukp/blob/main/docs/remote-deployment.md",

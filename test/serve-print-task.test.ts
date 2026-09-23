@@ -23,12 +23,24 @@ describe("serve --print-task rendering (W12)", () => {
     );
     expect(hostDoorSelfSigned).toContain("set \"UKP_SERVE_TOKEN=<paste-your-token>\"");
     // The task runs the hidden launcher (owner ruling 2026-09-21: a visibly
-    // popping cmd window is not a correct product form) — /TR points at
-    // wscript + vbs, with escaped inner quotes so USERPROFILE paths with
-    // spaces survive.
+    // popping cmd window is not a correct product form). Recipe flip
+    // 2026-09-23 (provider round): an unelevated per-user logon trigger
+    // registers from a plain shell via Register-ScheduledTask - the old
+    // "elevated schtasks" claim was too broad (only the schtasks ONLOGON
+    // form needs elevation). PT0S rides along: the Task Scheduler default
+    // stops a task 72 hours after it starts, silently killing a door.
     expect(hostDoorSelfSigned).toContain(
-      "schtasks /Create /TN ukp-door /TR \"wscript.exe \\\"%USERPROFILE%\\.ukp\\start-door-hidden.vbs\\\"\" /SC ONLOGON /F",
+      "New-ScheduledTaskTrigger -AtLogOn -User \"$env:USERDOMAIN\\$env:USERNAME\"",
     );
+    expect(hostDoorSelfSigned).toContain("-AllowStartIfOnBatteries");
+    expect(hostDoorSelfSigned).toContain("-DontStopIfGoingOnBatteries");
+    expect(hostDoorSelfSigned).toContain("-MultipleInstances IgnoreNew");
+    expect(hostDoorSelfSigned).toContain("-ExecutionTimeLimit ([TimeSpan]::Zero)");
+    expect(hostDoorSelfSigned).toContain("Register-ScheduledTask -TaskName 'ukp-door'");
+    expect(hostDoorSelfSigned).toContain(
+      "-Execute 'wscript.exe' -Argument '\"%USERPROFILE%\\.ukp\\start-door-hidden.vbs\"'",
+    );
+    expect(hostDoorSelfSigned).toContain("Start-ScheduledTask -TaskName ukp-door");
     expect(hostDoorSelfSigned).toContain(
       "2) Hidden launcher - save as %USERPROFILE%\\.ukp\\start-door-hidden.vbs",
     );
@@ -39,16 +51,29 @@ describe("serve --print-task rendering (W12)", () => {
     expect(hostDoorSelfSigned).toContain("rc = shell.Run(cmdline, 0, True)");
     expect(hostDoorSelfSigned).toContain("WScript.Sleep 30000");
     expect(hostDoorSelfSigned).toContain("WScript.Quit rc");
-    // Elevation honesty (2026-09-20 real-machine probe: creating an ONLOGON
-    // task from a plain shell fails with Access denied; a ONCE task does
-    // not — the ONLOGON trigger class is what needs the elevated shell).
-    expect(hostDoorSelfSigned).toContain("elevated shell");
+    // Elevation honesty, now scoped to what still needs it: only the
+    // firewall rule claims an elevated shell (the task recipe above
+    // registers unelevated - a per-user logon trigger from a plain shell).
+    expect(hostDoorSelfSigned).toContain(
+      "4) Firewall rule for the port (from an elevated shell)",
+    );
     expect(hostDoorSelfSigned).toContain(
       'netsh advfirewall firewall add rule name="ukp-door" dir=in action=allow protocol=TCP localport=8570',
     );
-    // Paper trail (the silent-EADDRINUSE lesson) and the honest lifecycle
-    // statements ride along.
-    expect(hostDoorSelfSigned).toContain(">> \"%USERPROFILE%\\.ukp\\door.log\" 2>&1");
+    // Log single ownership (ISSUE-016, provider round 2026-09-23): exactly
+    // one append redirect and one 2>&1 in the whole artifact - the vbs
+    // launcher's outer redirect. A redirect on the cmd's serve line too
+    // deadlocks the nested append-open (sharing violation) and the door
+    // never starts.
+    expect(hostDoorSelfSigned.match(/>>/g)).toHaveLength(1);
+    expect(hostDoorSelfSigned.match(/2>&1/g)).toHaveLength(1);
+    expect(hostDoorSelfSigned).toContain(
+      '" >> " & q & home & "\\.ukp\\door.log" & q & " 2>&1"',
+    );
+    // The cmd states the ownership split so nobody re-adds a redirect.
+    expect(hostDoorSelfSigned).toContain(
+      "logging is owned by start-door-hidden.vbs",
+    );
     expect(hostDoorSelfSigned).toContain("LOGON, not boot");
     expect(hostDoorSelfSigned).toContain("CRLF");
     // The door.log directory is guaranteed by the script itself.
@@ -65,12 +90,35 @@ describe("serve --print-task rendering (W12)", () => {
     // (drills 2026-09-20: restart-on-failure does not fire on exit codes).
     expect(hostDoorSelfSigned).toContain("does not fire on");
     expect(hostDoorSelfSigned).toContain("exit codes");
-    // The manual restart recipe replaces schtasks /End (does not kill the
-    // tree — the liku orphan lesson).
-    expect(hostDoorSelfSigned).toContain("taskkill /PID <door-pid> /T /F");
+    // The manual restart recipe replaces End-Task (does not kill the
+    // tree — the liku orphan lesson) and pins the kill target to the
+    // LAUNCHER root: a serve-leaf-only kill leaves the vbs retry loop
+    // to re-grab the port within 30s, racing the manual Start (which
+    // IgnoreNew no-ops while the old launcher lives) — retest race,
+    // 2026-09-23. The start command stays the PowerShell form so no
+    // schtasks slash-arguments remain anywhere in the recipe.
+    expect(hostDoorSelfSigned).toContain("taskkill /PID <wscript-pid> /T /F");
+    expect(hostDoorSelfSigned).toContain(
+      "wscript.exe running start-door-hidden.vbs",
+    );
+    expect(hostDoorSelfSigned).not.toContain("<door-pid>");
     // Unattended boot stays honestly out of the recipe.
     expect(hostDoorSelfSigned).toContain("nobody");
     expect(hostDoorSelfSigned).toContain("logged on means no door");
+  });
+
+  test("resident-door Notes: 72h trap named, Git Bash conversion noted, one task recipe only", () => {
+    // The Task Scheduler default execution limit (72h) would silently
+    // stop the door; the Notes must say why the recipe pins PT0S.
+    expect(hostDoorSelfSigned).toContain("72 hours");
+    // Git Bash rewrites slash-style arguments into Git paths (observed
+    // live on the provider: schtasks /Query became .../Git/Query); the
+    // note names the prefix that keeps taskkill honest from Git Bash.
+    expect(hostDoorSelfSigned).toContain("MSYS_NO_PATHCONV=1");
+    // Exactly one task-creation recipe: the elevated schtasks route is
+    // demoted to prose, never reprinted as a runnable command.
+    expect(hostDoorSelfSigned).not.toContain("schtasks /");
+    expect(hostDoorSelfSigned).not.toContain("/SC ONLOGON");
   });
 
   test("single-endpoint mode carries --endpoint into the serve line", () => {

@@ -158,7 +158,7 @@ export interface ServeInfo {
    * consumer-channel only. The banner line is the operator channel, and the
    * probe environment is by construction the one that matters (ukp diagnose
    * measures the invoking shell instead, which can differ from the door's
-   * schtasks / wake environment). */
+   * Task Scheduler / wake environment). */
   rg: "ok" | "missing";
   /** TLS identity summary (W5' / D-079) when serving over HTTPS; the pin is
    * what remote clients TOFU-pin at registration. `source` "re-signed" marks
