@@ -2,6 +2,19 @@
 
 All notable public changes to UKP will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Security policy and posture declaration: the package now ships a
+  `SECURITY.md` (scope, private vulnerability reporting via GitHub
+  security advisories, coordinated disclosure) and the README gained a
+  Security section — local by default, deny-by-default serving,
+  registration-time TLS pinning or SSH transport, byte-identical 404s for
+  unselected endpoints on a subset door — with the accepted tradeoffs
+  disclosed (client-side plaintext 0600 token storage, the token-bearing
+  Windows door artifact, the trust-on-first-use window).
+
 ## [0.2.6] - 2026-09-23
 
 ### Added

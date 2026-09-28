@@ -219,6 +219,30 @@ registry), Caddy and Tailscale fronting, the certificate pinning lifecycle,
 and the hardening posture — lives in the
 [deployment guide](https://github.com/CatheadOwl/ukp/blob/main/docs/remote-deployment.md).
 
+## Security
+
+UKP is local-first: nothing listens on the network until you run
+`ukp serve`. When you do, the surface is deny-by-default — serving beyond
+loopback without `UKP_SERVE_TOKEN` is refused, and anonymous serving is an
+explicit flag that only works on loopback. Transport is `https://`, pinned
+automatically at registration (a certificate that renews on the same key
+re-pins silently; a different key hard-blocks with both fingerprints), or
+`ssh://`, where SSH carries both encryption and authentication. A
+`--select` door neither routes, declares, nor lists unselected endpoints —
+excluded and unknown names return byte-identical 404s.
+
+Accepted tradeoffs, disclosed rather than hidden: tokens are long-lived
+static bearer secrets stored client-side in the 0600 registry file or an
+environment variable (the same tradeoff as `~/.aws/credentials`); the
+Windows door generator embeds the token in a 0600 `start-door.cmd` it
+never prints; identity pinning is trust-on-first-use (an SSH-style
+first-connect window). Hardening guidance — token strength, reverse
+proxies and their same-machine blind spot, firewalls — is in the
+[deployment guide](https://github.com/CatheadOwl/ukp/blob/main/docs/remote-deployment.md).
+
+Found something? Report it privately — see [SECURITY.md](SECURITY.md);
+please don't use public issues for security reports.
+
 ## Not Yet
 
 - remote operation of `update`, and a formally specified network protocol
