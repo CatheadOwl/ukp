@@ -4,6 +4,38 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Trailing separators in endpoint-relative references are now
+  address-encoding noise instead of a syntax error (ADR 0023 amendment,
+  D-099): `ukp read --endpoint X "docs/"` addresses the same slot as
+  `docs` and stat decides — a directory tail reports the friendly
+  "is a directory, not a readable resource" failure instead of
+  "reference must not contain empty path segments", and a file tail
+  reads normally. Applies uniformly to `ukp read` (both the plain and
+  `ukp://` tiers) and `ukp nav` routes; interior empty segments
+  (`a//b`) are still rejected as a grammar error.
+- Windows: tool stderr routed through the win32 spawn relay no longer
+  leaks a `#< CLIXML` serialization header ahead of the real error.
+  The relay's first cmdlet (the not-found `Get-Command` guard) made
+  PowerShell emit its one-time "Preparing modules for first use"
+  progress record, which a redirected stderr serializes as CLIXML —
+  so `ukp rg "{{template:"` (a pattern rg itself rejects as a regex)
+  surfaced `status: failed: #< CLIXML` instead of rg's readable parse
+  error. The relay now suppresses the progress stream; native tool
+  stderr passes through byte-clean with the exit code preserved
+  (rg and the ssh wake transport both benefit). Literal `{{...}}`
+  searches keep working via the passthrough form
+  (`ukp rg "{{seedcast:" -- -F`).
+- Windows: the spawn relay's not-found guard actually fires again. The
+  guard's `Get-Command -LiteralName` used a parameter that Windows
+  PowerShell 5.1 does not have — the unknown parameter is silently
+  swallowed and the check returns every command, so the guard was
+  vacuous: on a machine without ripgrep, `ukp rg` silently reported an
+  empty result instead of the intended "rg unavailable" skip with a
+  warning (a missing tool even exited 0 through the relay). The guard
+  now resolves via `-Name` and a live test pins the 127 sentinel.
+
 ### Added
 
 - Security policy and posture declaration: the package now ships a

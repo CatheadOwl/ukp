@@ -1179,6 +1179,53 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
     }
   });
 
+  test("treats a trailing separator as address-encoding noise across both address tiers", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-get-trailing-sep-"));
+    const registryPath = join(root, "registry.toml");
+    const service = createService(root, "notes");
+    registerAt(registryPath, "notes", service);
+    try {
+      // Directory tail: `docs/` addresses the same slot as `docs`, so stat
+      // decides — the friendly is-a-directory failure, never the
+      // empty-segment syntax error that grammar-before-stat used to hide
+      // it behind (TODO read-trailing-slash-semantics). The intake
+      // normalization (D-099) echoes the canonical route everywhere.
+      const uriTier = executeReadCommand(["ukp://notes/docs/"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(uriTier.exitCode).toBe(1);
+      expect(uriTier.stderr).toContain("'docs' is a directory, not a readable resource");
+
+      const pathTier = executeReadCommand(["--endpoint", "notes", "docs/"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(pathTier.exitCode).toBe(1);
+      expect(pathTier.stderr).toContain("'docs' is a directory, not a readable resource");
+
+      // File tail: the slot resolves and the read succeeds.
+      const fileTier = executeReadCommand(["--endpoint", "notes", "docs/note.md/"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(fileTier).toEqual({ exitCode: 0, stdout: "one\ntwo\nthree\nfour\n", stderr: "" });
+
+      // Miss with a trailing tail sees the canonical route downstream: the
+      // did-you-mean suffix scan must work identically to the no-slash miss
+      // (review P2 — the raw reference used to degrade the scan to an empty
+      // filename and kill both candidates and rename recovery).
+      const suffixTier = executeReadCommand(["--endpoint", "notes", "note.md/"], {
+        currentDirectory: root,
+        registryPath,
+      });
+      expect(suffixTier.exitCode).toBe(0);
+      expect(suffixTier.stdout).toBe("one\ntwo\nthree\nfour\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("does not delegate a ukp:// URI miss to a QMD-backed provider", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-get-uri-qmd-"));
     const registryPath = join(root, "registry.toml");

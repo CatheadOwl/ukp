@@ -634,6 +634,18 @@ describe("nav capability failures", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("route trailing separator addresses the same route (docs/ == docs)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-trailing-sep-"));
+    try {
+      const context = setup(root, [{ path: "docs/guide.md" }]);
+      const result = executeNavCommand(["--endpoint", "kb", "docs/"], context);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("docs/guide.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("nav command surface", () => {

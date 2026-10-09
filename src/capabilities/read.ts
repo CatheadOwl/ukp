@@ -721,6 +721,18 @@ export function runRead(request: ReadRequest, context: ReadContext): ReadOutcome
     request = { ...request, path: resolved, sourceReference: request.path };
   }
 
+  // Trailing separators are address-encoding noise (ADR 0023 / D-099): strip
+  // once here so every downstream consumer — grammar validation, the
+  // miss-path did-you-mean scan, rename recovery, the envelope echo — sees
+  // the canonical route. The tolerant pre-pass above has already run: its
+  // rewritten routes never carry trailing separators, and absolute shapes
+  // were routed before this point (an input that is only separators is
+  // absolute-shaped and never reaches here).
+  const canonicalPath = request.path.replace(/[\\/]+$/, "");
+  if (canonicalPath !== request.path) {
+    request = { ...request, path: canonicalPath };
+  }
+
   const outcome = executeResolvedRead(request, context, registry);
   if (resolution === undefined) return outcome;
   return outcome.ok

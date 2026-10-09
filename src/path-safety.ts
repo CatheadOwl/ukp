@@ -27,14 +27,19 @@ export type EndpointRelativeSegments =
   | { ok: false; reason: "absolute" | "empty-segment" | "dot-segment" };
 
 /** Segment-level validation of an endpoint-relative reference: rejects
- * absolute shapes, empty segments (`a//b`), and `.`/`..` segments. Accepts
- * both `/` and `\` separators; callers own separator normalization. The
- * reason field lets each capability map its own error wording. */
+ * absolute shapes, interior empty segments (`a//b`), and `.`/`..` segments.
+ * Trailing separators are address-encoding noise, not a segment claim —
+ * POSIX resolves `docs/` as `docs` — so they are stripped and stat decides
+ * the outcome (a directory tail lands on the caller's friendly
+ * is-a-directory failure, never on the grammar error that used to run
+ * before it). Accepts both `/` and `\` separators; callers own separator
+ * normalization. The reason field lets each capability map its own error
+ * wording. */
 export function splitEndpointRelativeSegments(reference: string): EndpointRelativeSegments {
   if (isAbsoluteShapedPath(reference)) {
     return { ok: false, reason: "absolute" };
   }
-  const segments = reference.split(/[\\/]/);
+  const segments = reference.replace(/[\\/]+$/, "").split(/[\\/]/);
   if (segments.some((segment) => segment.length === 0)) {
     return { ok: false, reason: "empty-segment" };
   }

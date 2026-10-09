@@ -18,7 +18,7 @@ import {
   wakeFailureMessage,
   wakeNotReadyMessage,
 } from "../../src/capabilities/remote-client.ts";
-import { toolRelayScript } from "../../src/spawn-relay.ts";
+import { toolRelayArgv, toolRelayScript } from "../../src/spawn-relay.ts";
 import { executeSearchCommand } from "../../src/commands/search.ts";
 import { createHash } from "node:crypto";
 import { executeReadCommand } from "../../src/commands/read.ts";
@@ -1168,14 +1168,53 @@ describe("win32 ssh relay (2026-09-22 Defender tax)", () => {
     ];
     const script = toolRelayScript(argv);
     expect(script).toContain("exit $LASTEXITCODE");
-    const match = script.match(/^\$a = @\((.*)\); & \$a\[0\] \$a\[1\.\.\(\$a\.Count-1\)\]; exit \$LASTEXITCODE$/);
+    const match = script.match(/^\$ProgressPreference = 'SilentlyContinue'; \$a = @\((.*)\); & \$a\[0\] \$a\[1\.\.\(\$a\.Count-1\)\]; exit \$LASTEXITCODE$/);
     expect(match).not.toBeNull();
     expect(psParseArray(match![1]!)).toEqual(argv);
   });
 
   test("relay script pins the powershell -EncodedCommand carrier shape", () => {
     const script = toolRelayScript(["ssh", "-V"]);
-    expect(script).toBe("$a = @('ssh','-V'); & $a[0] $a[1..($a.Count-1)]; exit $LASTEXITCODE");
+    expect(script).toBe("$ProgressPreference = 'SilentlyContinue'; $a = @('ssh','-V'); & $a[0] $a[1..($a.Count-1)]; exit $LASTEXITCODE");
+  });
+
+  test("relay script suppresses the first-cmdlet progress record (CLIXML stderr leak)", () => {
+    // 2026-10-09 finding (TODO rg-clixml-pattern-failure-windows): the
+    // not-found guard's Get-Command is the relay's first cmdlet, which makes
+    // the engine emit its one-time "Preparing modules for first use" progress
+    // record; with a redirected stderr powershell.exe serializes that record
+    // as a `#< CLIXML` stream ahead of the tool's own stderr — the consumer
+    // then surfaces `status: failed: #< CLIXML` instead of the real tool
+    // error. $ProgressPreference = 'SilentlyContinue' at the script head
+    // keeps the channel tool-stderr-only (verified live: rg's regex parse
+    // error passes through byte-clean, exit code preserved).
+    const script = toolRelayScript(["rg", "--version"], { notFoundGuard: true });
+    expect(script.startsWith("$ProgressPreference = 'SilentlyContinue'; ")).toBe(true);
+    // Guard resolution must be -Name: PS 5.1's Get-Command has no
+    // -LiteralName and silently swallows the unknown parameter (the call
+    // then returns every command, making the guard vacuous — review P1,
+    // live-verified 2026-10-09).
+    expect(script).toContain("Get-Command -Name $a[0]");
+    // Live pins are Windows-only. The CLIXML pin is genuinely discriminative
+    // only while this machine's module-analysis cache is cold enough for the
+    // one-time progress record to fire; on a warm machine it passes
+    // vacuously on regression (accepted limitation, review P3).
+    if (process.platform !== "win32") return;
+    const argv = toolRelayArgv(["cmd", "/d", "/c", "echo relay-clixml-probe 1>&2"], { notFoundGuard: true });
+    const result = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0);
+    const stderr = new TextDecoder().decode(result.stderr);
+    expect(stderr).toContain("relay-clixml-probe");
+    expect(stderr).not.toContain("CLIXML");
+  });
+
+  test("relay not-found guard exits 127 before any invocation (live pin)", () => {
+    if (process.platform !== "win32") return; // live pin is Windows-only
+    const argv = toolRelayArgv(["no-such-tool-xyz-ukp-test", "--version"], { notFoundGuard: true });
+    const result = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(127);
+    const stderr = new TextDecoder().decode(result.stderr);
+    expect(stderr).toBe("");
   });
 });
 

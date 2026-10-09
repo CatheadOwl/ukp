@@ -40,6 +40,15 @@ describe("splitEndpointRelativeSegments (T2)", () => {
     expect(splitEndpointRelativeSegments("a\\b.md")).toEqual({ ok: true, segments: ["a", "b.md"] });
     expect(splitEndpointRelativeSegments("README.md")).toEqual({ ok: true, segments: ["README.md"] });
   });
+
+  test("strips trailing separators as address-encoding noise (docs/ addresses docs)", () => {
+    expect(splitEndpointRelativeSegments("docs/")).toEqual({ ok: true, segments: ["docs"] });
+    expect(splitEndpointRelativeSegments("docs//")).toEqual({ ok: true, segments: ["docs"] });
+    expect(splitEndpointRelativeSegments("a/b/")).toEqual({ ok: true, segments: ["a", "b"] });
+    expect(splitEndpointRelativeSegments("docs\\")).toEqual({ ok: true, segments: ["docs"] });
+    // Interior empty segments stay a grammar error — `a//b` hides a real typo.
+    expect(splitEndpointRelativeSegments("a//b")).toEqual({ ok: false, reason: "empty-segment" });
+  });
 });
 
 describe("isInsideRealRoot (T3)", () => {
