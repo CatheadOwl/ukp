@@ -37,6 +37,7 @@
   ],
   "scripts": {
     "dev": "bun run src/cli.ts",
+    "prepack": "bun ./scripts/pack-audit.mjs",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
