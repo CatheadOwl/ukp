@@ -867,6 +867,36 @@ describe("remote TLS identity (W5' / D-079)", () => {
     expect(spkiPinOf).toBeDefined();
   });
 
+  test("refreshRemoteTlsCert swaps the certificate and keeps the pin (INV-04)", async () => {
+    // Renewal re-anchor: a binding refresh may only swap the trust-anchor
+    // PEM; the SPKI pin is the identity and never moves — pin churn on
+    // renewal is the failure mode the invariant forbids.
+    const { refreshRemoteTlsCert } = await import("../../src/registry.ts");
+    const own = mkdtempSync(join(tmpdir(), "ukp-tls-refresh-"));
+    const registryFile = join(own, "registry.toml");
+    try {
+      const pinned = {
+        name: "pinned",
+        kind: "remote" as const,
+        url: "https://x.example:8570",
+        instance_uid: "0b0c0d0e-1111-2222-3333-444455556666",
+        tls_cert: "-----BEGIN CERTIFICATE-----\nold\n-----END CERTIFICATE-----",
+        tls_pin: "sha256/QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=",
+      };
+      writeFileSync(registryFile, serializeRegistry([pinned]));
+      refreshRemoteTlsCert(registryFile, "pinned", "-----BEGIN CERTIFICATE-----\nnew\n-----END CERTIFICATE-----");
+      const refreshed = readRegistry(registryFile).find((binding) => binding.name === "pinned")!;
+      expect(refreshed.tls_cert).toContain("new");
+      expect(refreshed.tls_pin).toBe("sha256/QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=");
+      // A pinless binding is not re-anchorable — that path is re-registration.
+      const unpinned = { name: "unpinned", kind: "remote" as const, url: "https://y.example:8570" };
+      writeFileSync(registryFile, serializeRegistry([unpinned]));
+      expect(() => refreshRemoteTlsCert(registryFile, "unpinned", "x")).toThrow("carries no TLS pin");
+    } finally {
+      rmSync(own, { recursive: true, force: true });
+    }
+  });
+
   test.skipIf(!opensslAvailable)(
     "register pins a self-signed identity; renewal keeps going; identity change blocks until re-register",
     async () => {

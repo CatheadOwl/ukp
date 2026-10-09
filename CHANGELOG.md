@@ -47,6 +47,19 @@ All notable public changes to UKP will be documented in this file.
   disclosed (client-side plaintext 0600 token storage, the token-bearing
   Windows door artifact, the trust-on-first-use window).
 
+### Security
+
+- The serve bearer gate now compares tokens in constant time: the
+  presented `Authorization` header and each expected `Bearer <token>`
+  string are SHA-256-digested before a `crypto.timingSafeEqual`
+  comparison (hash-then-compare). Operator-chosen tokens are arbitrary
+  lengths, so digesting first makes the comparison length-uniform —
+  unequal lengths neither throw nor leak through early exits, and every
+  auth-failure class (missing / malformed / wrong token) runs the same
+  path. The auth outcome surface (status codes, messages, headers) is
+  unchanged, and the byte-identical 401 across failure classes is now
+  pinned by a wire test.
+
 ## [0.2.6] - 2026-09-23
 
 ### Added

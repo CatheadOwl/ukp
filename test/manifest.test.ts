@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadManifest } from "../src/config/manifest.ts";
+import { loadClientConfig } from "../src/config/client.ts";
 import { defaultProviderResolver, diagnoseService, renderDiagnose } from "../src/commands/diagnose.ts";
 
 const fixture = join(import.meta.dir, "fixtures", "qmd-provider");
@@ -151,6 +152,24 @@ describe("Service Manifest and diagnose", () => {
     try {
       const loaded = loadManifest(root);
       expect(loaded.manifest.capabilities.search?.provider).toBe("qmd");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("workspace config carries no credential fields (INV-10): strict schemas reject token keys", () => {
+    // service.toml and client.toml are the workspace-side configs, the ones
+    // that travel with a folder (sync, VCS). Credentials live only in
+    // ~/.ukp/registry.toml and process env — and the strict zod schemas ARE
+    // the guard: any credential-shaped key is an unknown key and the load
+    // fails, so a credential cannot drift into a shareable file unnoticed.
+    const root = mkdtempSync(join(tmpdir(), "ukp-test-inv10-"));
+    try {
+      mkdirSync(join(root, ".ukp"));
+      writeFileSync(join(root, ".ukp", "service.toml"), 'token = "must-not-live-here"\n\n[capabilities]\n');
+      expect(() => loadManifest(root)).toThrow("Service Manifest schema is invalid");
+      writeFileSync(join(root, ".ukp", "client.toml"), 'default_endpoints = ["docs"]\ntoken = "must-not-live-here"\n');
+      expect(() => loadClientConfig(join(root, ".ukp", "client.toml"))).toThrow("Client Config schema is invalid");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

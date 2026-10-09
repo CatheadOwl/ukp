@@ -24,6 +24,37 @@ describe("Registry", () => {
     expect(parseRegistry(encoded)).toEqual([{ name: "cad", path: absPath }]);
   });
 
+  test("serializes remote bindings credentials-last (INV-12 canonical field order)", () => {
+    // A fully-loaded remote row must serialize in the canonical order:
+    // routing/provenance first, then the credential block with the pin
+    // last — eye-scan and redaction both cut at one place
+    // (configuration-contracts canonical serialization form).
+    const encoded = serializeRegistry([{
+      name: "notes",
+      kind: "remote",
+      url: "https://ali.example",
+      declared_name: "notes",
+      instance_uid: "6f1c2b3a-1111-4000-8000-000000000000",
+      token: "t0",
+      tls_cert: "-----BEGIN CERTIFICATE-----",
+      tls_pin: "sha256/AAAA",
+    }]);
+    const keys = [
+      "name =",
+      "kind =",
+      "url =",
+      "declared_name =",
+      "instance_uid =",
+      "token =",
+      "tls_cert =",
+      "tls_pin =",
+    ];
+    const positions = keys.map((key) => encoded.indexOf(key));
+    for (const position of positions) expect(position).toBeGreaterThanOrEqual(0);
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
+    expect(encoded.trimEnd().endsWith('tls_pin = "sha256/AAAA"')).toBe(true);
+  });
+
   test("register is idempotent and rejects both conflict dimensions", () => {
     const { registry, service } = tempRegistry();
     const first = registerAt(registry, "cad", service);

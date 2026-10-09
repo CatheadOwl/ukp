@@ -701,6 +701,27 @@ describe("CLI bootstrap", () => {
     }
   });
 
+  test("init service failure leaves no guard residue (a refused init writes nothing)", () => {
+    // Third state of the VCS guard triad (INV-14): an init refused at
+    // validation (invalid derived name from the folder) must leave no
+    // .ukp/.gitignore and no manifest behind — failure residue would be a
+    // half-initialized Service folder the operator never agreed to.
+    const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-self-ignore-fail-"));
+    // Fixed invalid folder name: uppercase/underscore fails the endpoint
+    // slug grammar before any file write (validation precedes mkdir).
+    const service = join(root, "Bad_Name");
+    mkdirSync(service);
+    try {
+      expect(runCli(["init", "service"], undefined, undefined, {
+        currentDirectory: service,
+        registryPath: join(root, "registry.toml"),
+      })).not.toBe(0);
+      expect(existsSync(join(service, ".ukp"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("init service notes an existing provider index without provider command names", () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-cli-init-service-qmd-note-"));
     const service = join(root, "kb-like");

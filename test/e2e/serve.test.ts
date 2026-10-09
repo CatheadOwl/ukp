@@ -21,6 +21,7 @@ import {
   DISCOVERY_PATH,
   buildDiscoveryDocument,
   startUkpServer,
+  timingSafeBearerMatch,
   type DiscoveryDocument,
   type DoorDocument,
   type StartedServe,
@@ -422,6 +423,68 @@ describe("serve multi-token (RQ-16)", () => {
       body: JSON.stringify({ query: "fixture-cad-search-token" }),
     });
     expect(rejected.status).toBe(401);
+  });
+});
+
+describe("serve auth: timing-safe bearer comparison (CHK-01 / D-100)", () => {
+  test("hash-then-compare: any presented shape answers without throwing; scheme stays exact", () => {
+    // The comparison digests both sides (SHA-256) and runs
+    // crypto.timingSafeEqual over the fixed 32-byte digests, so a
+    // presented header of ANY length — including adversarial ones far
+    // from the token length — must answer false without throwing
+    // (the raw API requires equal lengths) and true only for the exact
+    // `Bearer <token>` form. This is the mechanism pin behind INV-06;
+    // the timing argument itself (constant-work failure path) is the
+    // ADR record, not something a single response can show.
+    expect(timingSafeBearerMatch(null, ["s3cret-token"])).toBe(false);
+    expect(timingSafeBearerMatch("", ["s3cret-token"])).toBe(false);
+    expect(timingSafeBearerMatch("Bearer s3cret-token", ["s3cret-token"])).toBe(true);
+    expect(timingSafeBearerMatch(`Bearer ${"x".repeat(4096)}`, ["s3cret-token"])).toBe(false);
+    expect(timingSafeBearerMatch("Bearer ", ["s3cret-token"])).toBe(false);
+    // Scheme and value are matched as one string: case and scheme stay
+    // exact (RFC 9110 auth-scheme semantics preserved by the hardening).
+    expect(timingSafeBearerMatch("bearer s3cret-token", ["s3cret-token"])).toBe(false);
+    expect(timingSafeBearerMatch("Basic s3cret-token", ["s3cret-token"])).toBe(false);
+    // Multi-token any-hit (RQ-16) survives unchanged.
+    expect(timingSafeBearerMatch("Bearer bob", ["alice", "bob"])).toBe(true);
+    expect(timingSafeBearerMatch("Bearer carol", ["alice", "bob"])).toBe(false);
+  });
+});
+
+describe("serve auth: 401 path uniformity (CHK-02 / CWE-204 family)", () => {
+  test("missing, malformed, and wrong-value bearer 401s are byte-identical on both faces", async () => {
+    const single = start({ tokens: ["uniform-token"] });
+    const door = startDoor({ tokens: ["uniform-token"] });
+    const faces = [
+      `${single.info.url}/v1/read?ref=documents/cad-notes.md`,
+      `${door.info.url}/e/serve-fixture/v1/read?ref=documents/cad-notes.md`,
+    ];
+    for (const face of faces) {
+      // Three credential-guessing input classes plus an adversarial-length
+      // variant: every auth failure must come back as the SAME bytes
+      // (status + content-type + body) — the response must never tell an
+      // enumerator which class it hit (no credential oracle).
+      const headerClasses: Array<Record<string, string>> = [
+        {},
+        { authorization: "Basic dW5pZm9ybS10b2tlbg==" },
+        { authorization: "Bearer not-the-token" },
+        { authorization: `Bearer ${"x".repeat(4096)}` },
+      ];
+      const snapshots = [];
+      for (const headers of headerClasses) {
+        const response = await fetch(face, { headers });
+        snapshots.push({
+          status: response.status,
+          contentType: response.headers.get("content-type"),
+          body: await response.text(),
+        });
+      }
+      expect(snapshots[0]!.status).toBe(401);
+      expect(((JSON.parse(snapshots[0]!.body) as { error: { class: string } }).error.class)).toBe("auth-failure");
+      for (const snapshot of snapshots.slice(1)) {
+        expect(snapshot).toEqual(snapshots[0]);
+      }
+    }
   });
 });
 

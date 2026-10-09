@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { readFileSync, writeFileSync, fstatSync, constants as fsConstants } from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer as netCreateServer, connect as netConnect, type Server as NetServer } from "node:net";
 import { ENDPOINT_NAME, loadManifest, type LoadedManifest } from "./config/manifest.ts";
 import { localPathOf, readRegistry } from "./registry.ts";
@@ -759,13 +760,34 @@ function resolveTlsMaterial(
   }
 }
 
+/** CHK-01 ruling (D-100 / ADR 0027): the bearer check hashes both sides
+ * with SHA-256 and compares the fixed 32-byte digests via
+ * `crypto.timingSafeEqual`. Hashing first makes the comparison
+ * length-uniform — operator-chosen tokens (`UKP_SERVE_TOKEN`, arbitrary
+ * length — not fixed-length hex) and attacker-chosen header values can
+ * never reach the raw API's equal-length requirement, and no early exit
+ * (length mismatch, first differing byte) shapes the failure timing.
+ * Every failure class — missing header, non-Bearer scheme, wrong value —
+ * runs this one path and then the single 401 below, so responses stay
+ * byte-identical across classes (CHK-02, CWE-204 family: the gate is
+ * not a credential oracle). */
+export function timingSafeBearerMatch(
+  authorization: string | null,
+  tokens: readonly string[],
+): boolean {
+  const presented = createHash("sha256").update(authorization ?? "").digest();
+  return tokens.some((token) =>
+    timingSafeEqual(createHash("sha256").update(`Bearer ${token}`).digest(), presented)
+  );
+}
+
 function bearerGate(
   request: Request,
   tokens: readonly string[] | undefined,
 ): Response | undefined {
   if ((tokens?.length ?? 0) === 0) return undefined;
   const authorization = request.headers.get("authorization");
-  if (!tokens!.some((token) => authorization === `Bearer ${token}`)) {
+  if (!timingSafeBearerMatch(authorization, tokens!)) {
     return jsonResponse(
       errorBody("auth-failure", "missing or invalid bearer token (Authorization: Bearer <token>)"),
       401,
