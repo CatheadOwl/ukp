@@ -202,6 +202,8 @@ export function renderHelp(): string {
     ]),
     "Endpoint names for --endpoint come from 'ukp list'.",
     "",
+    "ukp:// references (ukp://<endpoint>/<path>) address registered endpoints, not web pages; open one with 'ukp read <uri>'.",
+    "",
     "A Service's declared capabilities are backed by a provider (QMD, an external tool, backs search and update today); rg and nav work on endpoint files directly, no provider needed.",
     "",
     "A Service is a folder with a manifest (a name plus optional declared capabilities); registering it binds that name as an endpoint you address with --endpoint. The scope is which endpoints commands use when no --endpoint is given; -g widens a command to every registered endpoint; 'ukp guide client' shows how to set the workspace default.",

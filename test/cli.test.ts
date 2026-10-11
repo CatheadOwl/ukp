@@ -114,6 +114,16 @@ describe("CLI bootstrap", () => {
     expect(help).toContain("remove a registered endpoint binding (files on disk are untouched)");
   });
 
+  // Zero-prior URI signage (TODO 20261011-0814, option B): agents that
+  // pattern-match scheme:// strings to web URLs learn, at the help surface,
+  // that ukp:// references resolve through ukp read instead. Body-line
+  // addition, not a summary wording change (the sweep probe rule governs
+  // the command summaries).
+  test("root help states that ukp:// references resolve via ukp read", () => {
+    const help = renderHelp();
+    expect(help).toContain("ukp:// references (ukp://<endpoint>/<path>) address registered endpoints, not web pages; open one with 'ukp read <uri>'.");
+  });
+
   // Probe 20260912-root-gloss-and-roles (promoted): the gloss line and the
   // diagnose/inspect/propose role summaries carry the wiring/scope/write-path
   // criteria verbatim.

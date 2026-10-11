@@ -32,6 +32,9 @@ $ ukp propose --endpoint notes --id typo-fix --file typo-fix.md
 proposal typo-fix created (revision 1)
 ```
 
+A `ukp://` reference is not a web link — it names a registered endpoint
+(local or remote); open one with `ukp read <uri>`.
+
 ## Why UKP
 
 Knowledge work starts in folders, but repeated use needs stable names,
@@ -78,7 +81,8 @@ predictable scope, and a single command surface. Use UKP when:
   `[capabilities]` table still registers one (derived `read`/`nav` only).
 - Give agents JSON output (`--json`; `ukp read` uses `--format json`),
   reference sidecars, docid handoff keys, and durable `ukp://` references
-  when they need machine-readable results.
+  when they need machine-readable results; every `ukp://` reference opens
+  with `ukp read <uri>`.
 
 UKP owns endpoint names, Registry bindings, scope, and output shape; the
 provider owns collection setup, indexes, ranking, and maintenance. UKP
