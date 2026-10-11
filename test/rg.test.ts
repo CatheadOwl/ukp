@@ -86,6 +86,9 @@ describe("ukp rg command surface", () => {
     expect(() => validateRgPassthrough(["--json"])).toThrow(/allowlist/);
     expect(() => validateRgPassthrough(["-r", "x"])).toThrow(/allowlist/);
     expect(() => validateRgPassthrough(["--config", "x"])).toThrow(/allowlist/);
+    // The compound the 2026-10-11 help-copy fix stopped advertising: its
+    // components (--hidden/--no-ignore) pass individually, -uu never does.
+    expect(() => validateRgPassthrough(["-uu"])).toThrow(/allowlist/);
     expect(() => validateRgPassthrough(["docs/guide.md"])).toThrow(/path operands/);
     expect(() => validateRgPassthrough(["-C"])).toThrow(/requires a value/);
   });
