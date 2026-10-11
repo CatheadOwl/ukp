@@ -957,6 +957,9 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("case-insensitive");
     expect(guide).toContain("including the .ukp/ wiring");
     expect(guide).toContain("-- --hidden after '--'");
+    // Visibility copy stays inside the passthrough allowlist: no -uu claim.
+    expect(guide).toContain("--no-ignore also lifts .gitignore rules");
+    expect(guide).not.toContain("-uu");
   });
 
   test("guide rejects unknown topics with recovery guidance", () => {

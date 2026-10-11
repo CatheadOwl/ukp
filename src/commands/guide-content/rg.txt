@@ -27,8 +27,8 @@ Model:
 
 4. Visibility (every rg mode)
    Hidden files (dot-prefixed, including the .ukp/ wiring) are skipped by
-   default. Add -- --hidden after '--' to include them; -uu also lifts
-   .gitignore rules. 'ukp read' can address hidden files directly either way.
+   default. Add -- --hidden after '--' to include them; --no-ignore also
+   lifts .gitignore rules. 'ukp read' can address hidden files directly either way.
 
 Remember:
 - Exact flags and the passthrough allowlist live in 'ukp rg --help'.

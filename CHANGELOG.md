@@ -35,6 +35,12 @@ All notable public changes to UKP will be documented in this file.
   empty result instead of the intended "rg unavailable" skip with a
   warning (a missing tool even exited 0 through the relay). The guard
   now resolves via `-Name` and a live test pins the 127 sentinel.
+- `ukp rg --help` and the rg guide topic no longer advertise `-uu`: the
+  passthrough allowlist (ADR-RG-002 frozen set) rejects that compound
+  form with exit 2, so agents following the visibility note hit a dead
+  end. The wording now teaches the equivalent allowlisted form
+  (`-- --no-ignore` to lift .gitignore rules; `--hidden` + `--no-ignore`
+  together cover the full `-uu` semantics).
 
 ### Added
 

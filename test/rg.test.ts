@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import {
   parseRgArgs,
   executeRgCommand as executeRgCommandMaybeAsync,
+  renderRgHelp,
   splitRgPassthrough,
   type RgCommandResult,
 } from "../src/commands/rg.ts";
@@ -87,6 +88,16 @@ describe("ukp rg command surface", () => {
     expect(() => validateRgPassthrough(["--config", "x"])).toThrow(/allowlist/);
     expect(() => validateRgPassthrough(["docs/guide.md"])).toThrow(/path operands/);
     expect(() => validateRgPassthrough(["-C"])).toThrow(/requires a value/);
+  });
+
+  // 2026-10-11 eval-surfaced mismatch: the Visibility note claimed -uu,
+  // which the frozen allowlist rejects with exit 2. Help copy must stay
+  // inside the allowlist (--hidden + --no-ignore cover the -uu semantics).
+  test("help visibility wording advertises only allowlisted flags", () => {
+    const help = renderRgHelp();
+    expect(help).toContain("-- --hidden after '--' to include them, and");
+    expect(help).toContain("-- --no-ignore to also lift .gitignore rules");
+    expect(help).not.toContain("-uu");
   });
 
   test("splits argv at the first --", () => {
