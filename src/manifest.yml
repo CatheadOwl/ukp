@@ -1,0 +1,15 @@
+schema_version: 1
+kind: directory
+
+metadata:
+  name: ukp-src
+  description: The ukp source publish face - the shipped src subtree (package.json files whitelist); design records live in the dev-side control plane (workunits ADRs) and do not ship, so src comments citing them are publish-face vocabulary for the write-time tip layer
+
+publication:
+  enabled: false
+  mode: closed
+  root: .
+  include:
+    - "**/*"
+  exclude:
+    - "manifest.yml"
