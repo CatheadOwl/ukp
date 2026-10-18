@@ -2,6 +2,7 @@ import {
   executeKitCommand,
   parseKitArgs,
   renderKitHelp,
+  renderKitUsageError,
   KitUsageError,
   type KitCommandResult,
   type KitParsed,
@@ -9,9 +10,22 @@ import {
 } from "./kit.ts";
 import { readRegistry } from "../registry.ts";
 import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+import { mkdirSync } from "node:fs";
 import { normalizeTlsSanEntry } from "../capabilities/tls-identity.ts";
 import { DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
 import { printTaskPreflightError, renderServeTaskArtifacts, writeServeTaskArtifacts, type ServeTaskTls } from "./serve-task.ts";
+import { acquireLock, releaseLock, LockBusyError } from "../fslock.ts";
+import {
+  appendTokenLine,
+  loadTokenFile,
+  mintTokenFileKey,
+  parseTokenFileText,
+  removeTokenLines,
+  storeTokenFile,
+  TokenFileUsageError,
+  type TokenFileEntry,
+} from "../plumbing/token-file.ts";
 
 export interface ServeCommandContext {
   currentDirectory: string;
@@ -19,9 +33,9 @@ export interface ServeCommandContext {
   qmdCommand?: readonly string[];
   /** Overrides `process.env.UKP_SERVE_TOKEN` for tests. */
   tokens?: readonly string[];
-  /** Overrides the home directory `--print-task --write` writes into
-   * (tests point this at a scratch home; production resolves the real
-   * user home). */
+  /** Overrides the home directory the serve token file and the
+   * `--print-task --write` artifacts resolve into (tests point this at a
+   * scratch home; production resolves the real user home). */
   homeDir?: string;
 }
 
@@ -30,6 +44,207 @@ export interface ServeCommandContext {
 function parseServeTokens(raw: string | undefined): string[] {
   if (raw === undefined) return [];
   return raw.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+}
+
+/** W13 / RQ-16c rehearsal point A: the labeled token file lives at
+ * `~/.ukp/tokens` (0600, hash-only rows) beside the registry — the app-dot
+ * directory plus 0600 is the CLI credential-file standard shape. */
+export function serveTokenFilePath(context: ServeCommandContext): string {
+  return join(context.homeDir ?? homedir(), ".ukp", "tokens");
+}
+
+/** W13 chain order (rehearsal point D), as one testable resolution: env
+ * tokens win outright — while set, the file is not consulted at all (AWS/
+ * gh/kubectl chain order; an empty env value parses to no tokens and falls
+ * through to the file, the same mainstream treatment of empty-as-unset).
+ * Otherwise the file arms the gate ONLY when it exists AND holds at least
+ * one parseable key — a missing or keyless file leaves admission exactly
+ * where RQ-18 put it (both sources absent ⇒ --allow-anonymous decides), so
+ * an anonymous door is not walled off by an empty file. A present but
+ * malformed file is a loud startup refusal instead (never half-arm). The
+ * source decision is startup-time; once armed, the file's CONTENT is
+ * fresh per request (delete every line ⇒ everyone 401s, fail closed). */
+export function resolveServeAuthSources(
+  envTokens: readonly string[],
+  homeDir: string,
+): { tokens: readonly string[]; tokenFilePath?: string } | { error: string } {
+  if (envTokens.length > 0) return { tokens: envTokens };
+  const path = join(homeDir, ".ukp", "tokens");
+  const loaded = loadTokenFile(path);
+  if ("error" in loaded) return { error: loaded.error };
+  if ("missing" in loaded) return { tokens: [] };
+  const parsed = parseTokenFileText(loaded.text);
+  if ("error" in parsed) {
+    return {
+      error: `token file ${path} line ${parsed.error.line}: ${parsed.error.message} (fix the line, or move the file away and reissue with 'ukp serve token add')`,
+    };
+  }
+  return parsed.entries.length > 0 ? { tokens: [], tokenFilePath: path } : { tokens: [] };
+}
+
+/** Read the current managed text under the write-discipline lock. A missing
+ * file is the empty state; anything else (unreadable, over-open
+ * permissions, format errors) is a loud failure — the token file is a
+ * credential store, and silent degradation here would half-arm a gate. */
+function loadManagedTokenText(path: string): { text: string; entries: TokenFileEntry[] } {
+  const loaded = loadTokenFile(path);
+  if ("missing" in loaded) return { text: "", entries: [] };
+  if ("error" in loaded) throw new Error(loaded.error);
+  const parsed = parseTokenFileText(loaded.text);
+  if ("error" in parsed) {
+    throw new Error(
+      `token file ${path} line ${parsed.error.line}: ${parsed.error.message} (fix the line, or move the file away and reissue with 'ukp serve token add')`,
+    );
+  }
+  return { text: loaded.text, entries: parsed.entries };
+}
+
+/** `ukp serve token add|list|revoke` (W13 / RQ-16c, rehearsal point B):
+ * the issuance face for the labeled token file — minting, hashing, and the
+ * 0600 discipline are not hand-editing material, so the command owns the
+ * file's managed rewrites (append/remove preserve comment lines) under the
+ * same write-discipline lock propose uses. The raw key is printed exactly
+ * once, at mint time; the file never holds it. */
+function executeServeTokenCommand(
+  args: readonly string[],
+  context: ServeCommandContext,
+): KitCommandResult {
+  const [verb, ...rest] = args;
+  const path = serveTokenFilePath(context);
+  const usage = "usage: ukp serve token add <label> <scopes> | ukp serve token list | ukp serve token revoke <label> (scopes: notes:ro,cad:rw - Docker-registry style; full access is '*:rw')";
+  if (verb === undefined) throw new KitUsageError(usage);
+
+  if (verb === "add") {
+    const [label, scopesSpec] = rest;
+    if (rest.length !== 2 || label === undefined || scopesSpec === undefined) {
+      throw new KitUsageError(`serve token add takes <label> <scopes> (${usage})`);
+    }
+    let minted;
+    try {
+      minted = mintTokenFileKey(label, scopesSpec);
+    } catch (error) {
+      if (error instanceof TokenFileUsageError) throw new KitUsageError(error.message);
+      throw error;
+    }
+    const { sameLabel } = withTokenFileLock(path, () => {
+      const current = loadManagedTokenText(path);
+      const sameLabel = current.entries.filter((entry) => entry.label === label).length;
+      storeTokenFile(path, appendTokenLine(current.text, minted.line));
+      return { sameLabel };
+    });
+    const rotation = sameLabel > 0
+      ? `\nlabel '${label}' already had ${sameLabel} active key(s); both remain valid until revoked (zero-downtime rotation).`
+      : "";
+    return {
+      exitCode: 0,
+      stdout: [
+        `issued key for '${label}' (scopes: ${scopesSpec})`,
+        "",
+        `  ${minted.token}`,
+        "",
+        `stored in ${path} (0600, hash-only). The raw key is shown ONCE - hand it to the client now.${rotation}`,
+        "The serve gate re-reads the file on every request: revoking needs no restart",
+        `('ukp serve token revoke ${label}' or delete the line).`,
+        "",
+      ].join("\n"),
+      stderr: "",
+    };
+  }
+
+  if (verb === "list") {
+    if (rest.length > 0) throw new KitUsageError(`serve token list takes no arguments (${usage})`);
+    const loaded = loadTokenFile(path);
+    if ("missing" in loaded) {
+      return {
+        exitCode: 0,
+        stdout: `no token file at ${path} - issue a key with 'ukp serve token add <label> <scopes>'\n`,
+        stderr: "",
+      };
+    }
+    if ("error" in loaded) throw new Error(loaded.error);
+    const parsed = parseTokenFileText(loaded.text);
+    if ("error" in parsed) {
+      throw new Error(`token file ${path} line ${parsed.error.line}: ${parsed.error.message}`);
+    }
+    if (parsed.entries.length === 0) {
+      return {
+        exitCode: 0,
+        stdout: `token file ${path} holds no keys (only comments) - issue one with 'ukp serve token add <label> <scopes>'\n`,
+        stderr: "",
+      };
+    }
+    const labelWidth = Math.max(...parsed.entries.map((entry) => entry.label.length), "label".length);
+    const idWidth = Math.max(...parsed.entries.map((entry) => entry.keyId.length), "key-id".length);
+    const rows = parsed.entries.map((entry) =>
+      `  ${entry.label.padEnd(labelWidth)}  ${entry.keyId.padEnd(idWidth)}  ${
+        Object.entries(entry.scopes).map(([name, access]) => `${name}:${access}`).join(",")
+      }`);
+    return {
+      exitCode: 0,
+      stdout: [
+        `token file ${path} - ${parsed.entries.length} key(s) (hashes omitted; revoke deletes the whole label)`,
+        `  ${"label".padEnd(labelWidth)}  ${"key-id".padEnd(idWidth)}  scopes`,
+        ...rows,
+        "",
+      ].join("\n"),
+      stderr: "",
+    };
+  }
+
+  if (verb === "revoke") {
+    const [label] = rest;
+    if (rest.length !== 1 || label === undefined) {
+      throw new KitUsageError(`serve token revoke takes <label> (${usage})`);
+    }
+    const removed = withTokenFileLock(path, () => {
+      const current = loadManagedTokenText(path);
+      const result = removeTokenLines(current.text, label);
+      if (result.removed === 0) {
+        const labels = [...new Set(current.entries.map((entry) => entry.label))];
+        throw new KitUsageError(
+          `no key with label '${label}' in ${path}${labels.length > 0 ? ` (labels present: ${labels.join(", ")})` : " (the file holds no keys)"}`,
+        );
+      }
+      storeTokenFile(path, result.text);
+      return result.removed;
+    });
+    return {
+      exitCode: 0,
+      stdout: [
+        `revoked ${removed} key(s) with label '${label}' from ${path}`,
+        "a running gate stops accepting them on the next request (fresh read - no restart needed).",
+        "",
+      ].join("\n"),
+      stderr: "",
+    };
+  }
+
+  throw new KitUsageError(`unknown serve token verb '${verb}' (${usage})`);
+}
+
+/** Cross-process read-modify-write discipline for the token file (the same
+ * fslock propose uses): two concurrent `token add` runs must not lose a
+ * line to a last-writer-wins rename. Serving itself never takes the lock —
+ * fresh readers observe atomic replaces, never partial files. */
+function withTokenFileLock<T>(path: string, work: () => T): T {
+  const lockPath = `${path}.lock`;
+  // The lock file's directory must exist before the exclusive create —
+  // a first-ever `token add` on a machine without ~/.ukp yet.
+  mkdirSync(dirname(path), { recursive: true });
+  let descriptor: number;
+  try {
+    descriptor = acquireLock(lockPath);
+  } catch (error) {
+    if (error instanceof LockBusyError) {
+      throw new Error(`another ukp process is editing the token file (${lockPath} is locked): retry shortly`);
+    }
+    throw error;
+  }
+  try {
+    return work();
+  } finally {
+    releaseLock(lockPath, descriptor);
+  }
 }
 
 /** Single-source command spec (ADR 0024): long-running host command — the
@@ -45,7 +260,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
   group: "operations",
   description:
     "Expose a registered endpoint over HTTP using the ukp-remote wire, or - without --endpoint - serve local endpoints as one host door routed by name: all of them, or just the ones --select names.",
-  usage: "[--endpoint <name>] [--select <names>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task [--write]]",
+  usage: "[--endpoint <name>] [--select <names>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task [--write]] | token add <label> <scopes> | token list | token revoke <label>",
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve a host door (/e/<name>/ routing, one port) instead" },
     { flags: "--select <names>", help: "host door serving ONLY the named endpoints (comma-separated): one port, /e/<name>/ routing, and a door document that declares just this subset - unselected local endpoints are not served, routed, or declared; mutually exclusive with --endpoint" },
@@ -80,12 +295,28 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "  GET  /e/<name>/v1/read|nav|rg",
     "",
     "Auth (deny by default):",
-    "  Serving requires UKP_SERVE_TOKEN (comma-separate several: alice,bob;",
-    "  any listed token authorizes). Tokenless serving is an explicit opt-in:",
-    "  --allow-anonymous, loopback binds only. The discovery document stays",
-    "  public. A reverse proxy on the same host forwards from the public side",
-    "  to the loopback bind, so proxy deployments treat the token as",
-    "  mandatory - serve cannot see past its own bind address.",
+    "  Serving requires a credential: UKP_SERVE_TOKEN (comma-separate",
+    "  several: alice,bob; any listed token authorizes - full power) or a",
+    "  labeled key from the token file. Tokenless serving is an explicit",
+    "  opt-in: --allow-anonymous, loopback binds only. The discovery",
+    "  document stays public. A reverse proxy on the same host forwards",
+    "  from the public side to the loopback bind, so proxy deployments",
+    "  treat the credential as mandatory - serve cannot see past its own",
+    "  bind address.",
+    "",
+    "  UKP_SERVE_TOKEN is the token file's full-power shortcut form and",
+    "  takes precedence when set (AWS/gh/kubectl chain order): the file is",
+    "  not consulted while the env is present.",
+    "",
+    "  Token file (labeled, scoped, revocable keys):",
+    "    ukp serve token add <label> <scopes>   issue a key (raw shown once)",
+    "    ukp serve token list                   labels, key ids, scopes",
+    "    ukp serve token revoke <label>         revoke every key of a label",
+    "  Scopes are Docker-registry style, required per key: notes:ro,cad:rw",
+    "  ('*' is the explicit full-power name: '*:rw'). The file lives at",
+    "  ~/.ukp/tokens (0600, hash-only rows) and is re-read on every request",
+    "  - deleting a line revokes without a restart. Out-of-scope endpoints",
+    "  answer exactly like nonexistent ones (no 403 class exists).",
     "",
     "  Loopback-without-token covers testing/dogfood AND the ssh door",
     "  deployment: bind the door on the remote host's loopback and let ssh",
@@ -216,6 +447,19 @@ function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
 }
 
+/** The banner auth line, both sources (W13): the token-file form names the
+ * fresh-read revocation idiom so the operator knows deleting a line is the
+ * whole lifecycle. */
+function authBannerLine(info: ServeInfo): string {
+  if (info.tokenFile !== undefined) {
+    return `  auth: bearer token required (token file: ${info.tokenFile.keys} key(s) - re-read per request, revoke with 'ukp serve token revoke <label>')`;
+  }
+  if (info.authRequired) return "  auth: bearer token required";
+  return info.mode === "door"
+    ? "  auth: no token (loopback bind; ssh-forwarded clients authenticate by SSH key)"
+    : "  auth: no token (loopback only)";
+}
+
 export function renderServeBanner(info: ServeInfo): string {
   if (info.mode === "door") {
     return [
@@ -227,7 +471,7 @@ export function renderServeBanner(info: ServeInfo): string {
         ? [`  select: ${info.door!.select.join(", ")} (subset door - unselected local endpoints are not served, routed, or declared)`]
         : []),
       `  write: ${info.door!.write.length > 0 ? info.door!.write.join(", ") + " (propose via PUT /e/<name>/v1/propose/<id>)" : "(no endpoint declares propose)"}`,
-      `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback bind; ssh-forwarded clients authenticate by SSH key)"}`,
+      authBannerLine(info),
       `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning - install ripgrep on this door's PATH)"}`,
       ...(info.maxIdleSeconds !== undefined
         ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
@@ -242,7 +486,7 @@ export function renderServeBanner(info: ServeInfo): string {
     `serving endpoint '${info.endpoint}' (ukp-remote v1)`,
     `  listening: ${info.url}`,
     `  discovery: ${info.url.startsWith("http") ? `${info.url}${DISCOVERY_PATH}` : info.url}`,
-    `  auth: ${info.authRequired ? "bearer token required" : "no token (loopback only)"}`,
+    authBannerLine(info),
     `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning - install ripgrep on this door's PATH)"}`,
     ...(info.maxIdleSeconds !== undefined
       ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
@@ -254,27 +498,29 @@ export function renderServeBanner(info: ServeInfo): string {
   ].join("\n");
 }
 
-/** Auth admission (RQ-18, web-standard deny-by-default): a token is required
- * to start serving; tokenless access is an explicit, loopback-only opt-in.
- * A reverse proxy on the same host forwards from the public side to the
- * loopback bind, so the proxy recipes treat UKP_SERVE_TOKEN as mandatory —
- * serve itself cannot see past its own bind address. */
+/** Auth admission (RQ-18, web-standard deny-by-default): a credential is
+ * required to start serving — an env token or at least one token-file key
+ * (W13: both sources feed the same `authArmed` bit); tokenless access is an
+ * explicit, loopback-only opt-in. A reverse proxy on the same host
+ * forwards from the public side to the loopback bind, so the proxy recipes
+ * treat the bearer requirement as mandatory — serve itself cannot see past
+ * its own bind address. */
 export function serveAuthDecision(
   host: string,
-  tokens: readonly string[],
+  authArmed: boolean,
   allowAnonymous: boolean,
 ): { ok: true; authRequired: boolean } | { ok: false; reason: string } {
-  if (tokens.length > 0) return { ok: true, authRequired: true };
+  if (authArmed) return { ok: true, authRequired: true };
   if (!isLoopback(host)) {
     return {
       ok: false,
-      reason: `refusing to serve on non-loopback ${host} without a token: set UKP_SERVE_TOKEN`,
+      reason: `refusing to serve on non-loopback ${host} without a token: set UKP_SERVE_TOKEN, or issue a file key with 'ukp serve token add <label> <scopes>'`,
     };
   }
   if (allowAnonymous) return { ok: true, authRequired: false };
   return {
     ok: false,
-    reason: "serve requires authentication: set UKP_SERVE_TOKEN, or pass --allow-anonymous for tokenless loopback testing (a reverse proxy on the same host still requires UKP_SERVE_TOKEN)",
+    reason: "serve requires authentication: set UKP_SERVE_TOKEN, issue a file key with 'ukp serve token add <label> <scopes>', or pass --allow-anonymous for tokenless loopback testing (a reverse proxy on the same host still requires a token)",
   };
 }
 
@@ -282,6 +528,28 @@ export function executeServeCommand(
   args: readonly string[],
   context: ServeCommandContext,
 ): KitCommandResult {
+  // W13: `ukp serve token …` is the issuance subcommand family — dispatched
+  // ahead of the flag parser (SERVE_SPEC declares no positionals), with the
+  // same error contract executeKitCommand applies (usage errors exit 2 with
+  // the usage line, operational failures exit 1 naming the command). Help
+  // requests route to the same rendered help (which teaches the family).
+  if (args[0] === "token") {
+    if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
+      return { exitCode: 0, stdout: renderKitHelp(SERVE_SPEC), stderr: "" };
+    }
+    try {
+      return executeServeTokenCommand(args.slice(1), context);
+    } catch (error) {
+      if (error instanceof KitUsageError) {
+        return { exitCode: 2, stdout: "", stderr: renderKitUsageError(SERVE_SPEC, error.message) };
+      }
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp serve: ${error instanceof Error ? error.message : String(error)}\n`,
+      };
+    }
+  }
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
     const { endpoint, select, host, port, maxIdleSeconds, systemdSocket, write, tlsSan = [] } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
@@ -371,15 +639,25 @@ export function executeServeCommand(
       };
     }
     const tokens = context.tokens ?? parseServeTokens(process.env.UKP_SERVE_TOKEN);
+    // W13 chain order (rehearsal point D) — see resolveServeAuthSources:
+    // env is the full-power shortcut and wins outright; the file arms the
+    // gate only when it holds at least one key; a malformed file refuses
+    // startup loudly; both sources absent leaves RQ-18's anonymous opt-in
+    // exactly where it was.
+    const authSources = resolveServeAuthSources(tokens, context.homeDir ?? homedir());
+    if ("error" in authSources) throw new Error(authSources.error);
+    const gateTokens = authSources.tokens;
+    const tokenFilePath = authSources.tokenFilePath;
+    const authArmed = gateTokens.length > 0 || tokenFilePath !== undefined;
     // W10: socket activation must not admit tokenless serving — the bind
     // address belongs to the socket unit (possibly public), so the loopback
     // premise of --allow-anonymous is unverifiable here (RQ-18 review P1).
-    if (systemdSocket && tokens.length === 0) {
+    if (systemdSocket && !authArmed) {
       throw new Error(
-        "refusing to serve on --systemd-socket without a token: the listener's bind address belongs to the socket unit and may be public - tokenless loopback serving cannot be verified here; set UKP_SERVE_TOKEN",
+        "refusing to serve on --systemd-socket without a token: the listener's bind address belongs to the socket unit and may be public - tokenless loopback serving cannot be verified here; set UKP_SERVE_TOKEN or issue a file key with 'ukp serve token add'",
       );
     }
-    const decision = serveAuthDecision(host, tokens, allowAnonymous);
+    const decision = serveAuthDecision(host, authArmed, allowAnonymous);
     if (!decision.ok) {
       const target = endpoint === undefined ? "host door" : `'${endpoint}'`;
       throw new Error(`refusing to serve ${target}: ${decision.reason}`);
@@ -392,7 +670,8 @@ export function executeServeCommand(
       port,
       ...(endpoint !== undefined ? { endpointName: endpoint } : {}),
       ...(select !== undefined ? { select } : {}),
-      ...(tokens.length > 0 ? { tokens } : {}),
+      ...(gateTokens.length > 0 ? { tokens: gateTokens } : {}),
+      ...(tokenFilePath !== undefined ? { tokenFilePath } : {}),
       ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
       ...(systemdSocket !== undefined && systemdSocket ? { systemdSocket } : {}),
       ...(options.tls === true

@@ -384,22 +384,25 @@ describe("serve auth", () => {
 describe("serve auth admission (RQ-18, deny by default)", () => {
   test("tokenless startup requires an explicit loopback-only opt-in", async () => {
     const { serveAuthDecision, executeServeCommand } = await import("../../src/commands/serve.ts");
-    // Token present: authorized, auth required.
-    expect(serveAuthDecision("127.0.0.1", ["t1"], false)).toEqual({ ok: true, authRequired: true });
-    // Loopback, no token, no flag: refused with the opt-in hint.
-    const refused = serveAuthDecision("127.0.0.1", [], false);
+    // Credential present (env token or token-file key): authorized, auth required.
+    expect(serveAuthDecision("127.0.0.1", true, false)).toEqual({ ok: true, authRequired: true });
+    // Loopback, no credential, no flag: refused with the opt-in hint.
+    const refused = serveAuthDecision("127.0.0.1", false, false);
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.reason).toContain("--allow-anonymous");
     // Explicit loopback opt-in: allowed, anonymous.
-    expect(serveAuthDecision("127.0.0.1", [], true)).toEqual({ ok: true, authRequired: false });
-    // Non-loopback: token always required; the flag does not help.
-    expect(serveAuthDecision("0.0.0.0", [], true).ok).toBe(false);
+    expect(serveAuthDecision("127.0.0.1", false, true)).toEqual({ ok: true, authRequired: false });
+    // Non-loopback: a credential is always required; the flag does not help.
+    expect(serveAuthDecision("0.0.0.0", false, true).ok).toBe(false);
 
-    // The command layer refuses to start without a token and without the
-    // flag (no server is left behind).
+    // The command layer refuses to start without a credential and without
+    // the flag (no server is left behind). homeDir isolates the token-file
+    // source from the real user home.
     const result = executeServeCommand(["--endpoint", "serve-fixture"], {
       currentDirectory: root,
       registryPath,
+      tokens: [],
+      homeDir: join(root, "no-token-home"),
     });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("serve requires authentication");
@@ -1205,7 +1208,13 @@ describe("serve --systemd-socket (W10 / ADR-REM-006)", () => {
   });
 
   test("tokenless socket activation is refused (the bind belongs to the socket unit)", () => {
-    const result = executeServeCommand(["--systemd-socket"], { currentDirectory: root, registryPath, qmdCommand, tokens: [] });
+    const result = executeServeCommand(["--systemd-socket"], {
+      currentDirectory: root,
+      registryPath,
+      qmdCommand,
+      tokens: [],
+      homeDir: join(root, "no-token-home"),
+    });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--systemd-socket without a token");
     expect(result.stderr).toContain("set UKP_SERVE_TOKEN");

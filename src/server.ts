@@ -41,6 +41,14 @@ import {
   type ParsedRg,
 } from "./capabilities/rg.ts";
 import { KitUsageError } from "./commands/kit.ts";
+import {
+  authenticateBearerKey,
+  loadTokenFile,
+  parseTokenFileText,
+  scopeAllows,
+  type ScopeAccess,
+  type TokenFileEntry,
+} from "./plumbing/token-file.ts";
 
 /** ukp-remote wire v1 server core (ADR-REM-001/002/003, ukp_remote W1/W7):
  * two serving shapes over one wire. Single-endpoint mode exposes ONE
@@ -58,7 +66,12 @@ import { KitUsageError } from "./commands/kit.ts";
  * modes, so client-side TOFU and name-assertion paths are shared. The
  * capability layer runs unchanged behind the routes (provider/transport
  * axes stay orthogonal): search via `runSearch` with a single-endpoint
- * scope, read via `runRead`, nav via `runNav`, rg via `runRg`. There is no
+ * scope, read via `runRead`, nav via `runNav`, rg via `runRg`. The bearer
+ * gate has two sources (W13 / RQ-16c): env tokens — the full-power
+ * shortcut, original RQ-16 semantics — or the labeled token file, read
+ * fresh per request so deleting a line revokes without a restart; a file
+ * key's scopes narrow the door's rosters exactly like `--select` does
+ * (ADR-REM-010 mechanism reuse, no 403 class). There is no
  * session, no streaming, and no server-side artifact: responses inline the
  * reference data (RQ-07) and generate a serve-scoped run id. */
 
@@ -97,6 +110,19 @@ export interface ServeConfig {
    * readable without it). In door mode the same gate covers all
    * `/e/<name>/v1/*` routes (door-level auth, O-2). */
   tokens?: readonly string[];
+  /** W13 / RQ-16c: the labeled token file (`~/.ukp/tokens`). When `tokens`
+   * is absent, the gate arms from this file instead: it is read FRESH on
+   * every request (revocation = deleting the line, no restart), a presented
+   * `ukp_<label>_<id>_<secret>` key is verified against the row's SHA-256,
+   * and the matched row's scopes decide which endpoints the key may touch
+   * (`name:ro|rw`, Docker-registry grammar, required per row). When
+   * `tokens` IS set, env wins outright and the file is not consulted —
+   * env is the full-power shortcut form of the same gate (AWS/gh/kubectl
+   * chain order). Scope enforcement reuses the ADR-REM-010 roster
+   * mechanism: an out-of-scope name shares the roster 404 with an unknown
+   * one, byte-identical, and the roster a scoped 404 carries is the key's
+   * own effective set — no new 403 class exists. */
+  tokenFilePath?: string;
   /** TLS transport (W5' / D-079): `self-signed` generates and persists an
    * identity under the Service folder (`.ukp/tls/`) — in door mode under the
    * registry's directory, since a door has no single Service folder;
@@ -169,6 +195,11 @@ export interface ServeInfo {
   host: string;
   port: number;
   authRequired: boolean;
+  /** Present when the gate armed from the token file instead of env
+   * (W13 / RQ-16c) — feeds the banner's operator line. `keys` is a startup
+   * snapshot for visibility only; the live truth is the per-request fresh
+   * read (delete a line, next request 401s). */
+  tokenFile?: { keys: number };
   /** ripgrep availability probed once at startup IN THE DOOR'S OWN PROCESS
    * (2026-09-20, liku feedback): /v1/rg serves every endpoint and a missing
    * binary degrades per-endpoint on the wire by design — but that truth is
@@ -300,11 +331,18 @@ export function buildDiscoveryDocument(
  * the door's width admits — every one of them, or the `select` whitelist's
  * members (ADR-REM-010) — read fresh by the caller per request (new
  * endpoints appear without a restart). Remote bindings are not servable and
- * never make the roster. */
-function listDoorEndpoints(registryPath: string, select?: readonly string[]): Array<{ name: string; folder: string }> {
+ * never make the roster. W13 adds the per-key narrowing axis: `admit` is
+ * the matched file key's scope predicate for the route's access level, so
+ * the roster a scoped caller can ever see is scope ∩ select ∩ registry. */
+function listDoorEndpoints(
+  registryPath: string,
+  select?: readonly string[],
+  admit?: (name: string) => boolean,
+): Array<{ name: string; folder: string }> {
   return readRegistry(registryPath)
     .filter((binding) => binding.kind !== "remote")
     .filter((binding) => select === undefined || select.includes(binding.name))
+    .filter((binding) => admit === undefined || admit(binding.name))
     .map((binding) => ({ name: binding.name, folder: binding.path! }));
 }
 
@@ -781,19 +819,74 @@ export function timingSafeBearerMatch(
   );
 }
 
+/** What the gate established about the caller (W13 / RQ-16c): an env token
+ * is the full-power shortcut form (its scope is the whole door, original
+ * RQ-16 semantics); a file key carries its row's scopes into authorization.
+ * `undefined` = no gate armed (loopback anonymous serving) — not a failure.
+ * The two never mix: env present means the file is not consulted at all. */
+type GateCredential =
+  | { kind: "env" }
+  | { kind: "file"; entry: TokenFileEntry };
+
+/** The single 401 every gate failure class emits (CHK-02 / CWE-204 family:
+ * the gate is not a credential oracle) — missing header, wrong scheme,
+ * unknown key, wrong secret, out-of-scope key on a single-endpoint gate. */
+function authFailureResponse(): Response {
+  return jsonResponse(
+    errorBody("auth-failure", "missing or invalid bearer token (Authorization: Bearer <token>)"),
+    401,
+  );
+}
+
+/** W13 / RQ-16c: whether ANY auth source is configured — env tokens or the
+ * token file. Drives `authRequired` (banner, discovery security.schemes)
+ * and the gate itself; with neither, serving is anonymous (the command
+ * layer's deny-by-default admission, RQ-18, is what prevents reaching here
+ * unarmed on non-loopback binds). */
+function gateArmed(config: ServeConfig): boolean {
+  return (config.tokens?.length ?? 0) > 0 || config.tokenFilePath !== undefined;
+}
+
+/** The door gate, both sources (W13): env tokens compare through the
+ * CHK-01 digest path unchanged; a token file is fresh-read per request
+ * (missing/unreadable/unparseable file ⇒ no key can pass — fail closed)
+ * and the presented key is verified against exactly its (label, keyId) row
+ * with a timing-safe digest compare inside the plumbing module. */
 function bearerGate(
   request: Request,
-  tokens: readonly string[] | undefined,
-): Response | undefined {
-  if ((tokens?.length ?? 0) === 0) return undefined;
-  const authorization = request.headers.get("authorization");
-  if (!timingSafeBearerMatch(authorization, tokens!)) {
-    return jsonResponse(
-      errorBody("auth-failure", "missing or invalid bearer token (Authorization: Bearer <token>)"),
-      401,
-    );
+  config: ServeConfig,
+): { credential: GateCredential | undefined } | { response: Response } {
+  if (!gateArmed(config)) return { credential: undefined };
+  if ((config.tokens?.length ?? 0) > 0) {
+    return timingSafeBearerMatch(request.headers.get("authorization"), config.tokens!)
+      ? { credential: { kind: "env" } }
+      : { response: authFailureResponse() };
   }
-  return undefined;
+  const loaded = loadTokenFile(config.tokenFilePath!);
+  if (!("text" in loaded)) return { response: authFailureResponse() };
+  const parsed = parseTokenFileText(loaded.text);
+  if ("error" in parsed) return { response: authFailureResponse() };
+  const authorization = request.headers.get("authorization");
+  // Scheme shape is part of the uniform failure path: a non-Bearer header
+  // fails exactly like a missing one (single 401, no early distinctions).
+  const match = /^Bearer (.+)$/.exec(authorization ?? "");
+  if (match === null) return { response: authFailureResponse() };
+  const entry = authenticateBearerKey(match[1]!, parsed.entries);
+  return entry !== undefined ? { credential: { kind: "file", entry } } : { response: authFailureResponse() };
+}
+
+/** Per-request roster admission from the matched key's scopes (rehearsal
+ * point E): read routes demand `ro`, the propose route demands `rw`. A
+ * `ro`-scoped endpoint is therefore absent from the write face's effective
+ * set the same way an unselected name is absent from a subset door — same
+ * roster-404 shape, no new refusal class. Env credentials and anonymous
+ * serving return undefined (the door's own width applies). */
+function scopeAdmit(
+  credential: GateCredential | undefined,
+  access: ScopeAccess,
+): ((name: string) => boolean) | undefined {
+  if (credential?.kind !== "file") return undefined;
+  return (name: string) => scopeAllows(credential.entry.scopes, name, access);
 }
 
 /** Per-request endpoint resolution for door routing (O-2): the registry is
@@ -803,11 +896,15 @@ function bearerGate(
  * single-mode discovery fetch does. A subset door (ADR-REM-010) routes an
  * excluded name into the SAME roster-404 branch as an unknown one — the
  * response is byte-identical either way, so the roster is the only name
- * list any response ever carries. */
+ * list any response ever carries. W13 scopes ride the same branch: an
+ * out-of-scope name for the matched key is indistinguishable from an
+ * unknown one, and the roster it sees is the key's own effective set
+ * (`admit` = scope ∩ select ∩ registry), never the wider door. */
 function resolveDoorRoute(
   registryPath: string,
   name: string,
   select?: readonly string[],
+  admit?: (name: string) => boolean,
 ): { folder: string } | { response: Response } {
   let binding;
   try {
@@ -816,8 +913,13 @@ function resolveDoorRoute(
     const reason = error instanceof Error ? error.message : String(error);
     return { response: jsonResponse(errorBody("provider-unavailable", `Host Registry is not readable: ${reason}`), 503) };
   }
-  if (binding === undefined || binding.kind === "remote" || (select !== undefined && !select.includes(name))) {
-    const roster = listDoorEndpoints(registryPath, select).map((endpoint) => endpoint.name).join(", ");
+  if (
+    binding === undefined
+    || binding.kind === "remote"
+    || (select !== undefined && !select.includes(name))
+    || (admit !== undefined && !admit(name))
+  ) {
+    const roster = listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name).join(", ");
     return {
       response: jsonResponse(
         errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
@@ -857,10 +959,16 @@ function resolveDoorRoute(
  * divide); every `/e/<name>/v1/*` route passes the door-level bearer gate.
  * The roster a 404 carries is the door's effective set — on a subset door
  * (ADR-REM-010) that is the select ∩ registry intersection, never the full
- * registry. */
-function doorNotFound(name: string | undefined, registryPath: string, select?: readonly string[]): Response {
+ * registry; on an authenticated scoped route (W13) it further intersects
+ * with the matched key's scopes via `admit`. */
+function doorNotFound(
+  name: string | undefined,
+  registryPath: string,
+  select?: readonly string[],
+  admit?: (name: string) => boolean,
+): Response {
   if (name !== undefined) {
-    const roster = listDoorEndpoints(registryPath, select).map((endpoint) => endpoint.name).join(", ");
+    const roster = listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name).join(", ");
     return jsonResponse(
       errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
       404,
@@ -889,7 +997,9 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         return jsonResponse(errorBody("method-not-allowed", `the discovery document is a GET resource`), 405);
       }
       try {
-        return jsonResponse(buildDoorDocument(listDoorEndpoints(config.registryPath, select), (config.tokens?.length ?? 0) > 0));
+        // Public door document (ADR-REM-003): no key presented, no scope
+        // narrowing — the door's own width is what the roster declares.
+        return jsonResponse(buildDoorDocument(listDoorEndpoints(config.registryPath, select), gateArmed(config)));
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         return jsonResponse(errorBody("provider-unavailable", `Host Registry is not readable: ${reason}`), 503);
@@ -914,7 +1024,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         try {
           const loaded = loadManifest(resolved.folder);
           return jsonResponse(
-            buildDiscoveryDocument(loaded, readInstanceUid(resolved.folder), (config.tokens?.length ?? 0) > 0),
+            buildDiscoveryDocument(loaded, readInstanceUid(resolved.folder), gateArmed(config)),
           );
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
@@ -922,18 +1032,22 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         }
       }
       if (rest.startsWith("/v1/propose/")) {
-        const denied = bearerGate(request, config.tokens);
-        if (denied !== undefined) return denied;
+        const gate = bearerGate(request, config);
+        if ("response" in gate) return gate.response;
+        // The write face demands the rw bit: a ro-scoped endpoint is not in
+        // this key's effective write roster (rehearsal point E).
+        const admit = scopeAdmit(gate.credential, "rw");
         const id = rest.slice("/v1/propose/".length);
-        if (id.includes("/")) return doorNotFound(undefined, config.registryPath, select);
-        const resolved = resolveDoorRoute(config.registryPath, name, select);
+        if (id.includes("/")) return doorNotFound(undefined, config.registryPath, select, admit);
+        const resolved = resolveDoorRoute(config.registryPath, name, select, admit);
         if ("response" in resolved) return resolved.response;
         return await handlePropose(request, config, name, resolved.folder, id);
       }
       if (rest === "/v1/search" || rest === "/v1/read" || rest === "/v1/nav" || rest === "/v1/rg") {
-        const denied = bearerGate(request, config.tokens);
-        if (denied !== undefined) return denied;
-        const resolved = resolveDoorRoute(config.registryPath, name, select);
+        const gate = bearerGate(request, config);
+        if ("response" in gate) return gate.response;
+        const admit = scopeAdmit(gate.credential, "ro");
+        const resolved = resolveDoorRoute(config.registryPath, name, select, admit);
         if ("response" in resolved) return resolved.response;
         if (rest === "/v1/search") {
           return await handleSearch(request, config, name, resolved.folder);
@@ -960,6 +1074,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
     ...(config.systemdSocket === true ? { systemdSocket: true } : {}),
   });
   const { server } = listener;
+  const tokenFile = tokenFileSnapshot(config);
 
   const info: ServeInfo = {
     mode: "door",
@@ -971,7 +1086,8 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
     url: listener.publicUrl,
     host,
     port: listener.port,
-    authRequired: (config.tokens?.length ?? 0) > 0,
+    authRequired: gateArmed(config),
+    ...(tokenFile !== undefined ? { tokenFile } : {}),
     rg: rgExecutableAvailable() ? "ok" : "missing",
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
@@ -979,6 +1095,19 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
     ...(config.maxIdleSeconds !== undefined ? { maxIdleSeconds: config.maxIdleSeconds } : {}),
   };
   return { server, info, stopAll: listener.stopAll };
+}
+
+/** Startup snapshot of the token file for the banner's operator line
+ * (W13): the live gate re-reads per request; this count is visibility, not
+ * truth. A parse failure here is cosmetic-zero — the command layer's
+ * admission already refused a malformed file, and the gate itself fails
+ * closed on any read/parse problem. */
+function tokenFileSnapshot(config: ServeConfig): { keys: number } | undefined {
+  if (config.tokenFilePath === undefined || (config.tokens?.length ?? 0) > 0) return undefined;
+  const loaded = loadTokenFile(config.tokenFilePath);
+  if (!("text" in loaded)) return { keys: 0 };
+  const parsed = parseTokenFileText(loaded.text);
+  return "error" in parsed ? { keys: 0 } : { keys: parsed.entries.length };
 }
 
 export function startUkpServer(config: ServeConfig): StartedServe {
@@ -1033,7 +1162,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
           );
         }
         return jsonResponse(
-          buildDiscoveryDocument(loaded, readInstanceUid(serviceFolder), (config.tokens?.length ?? 0) > 0),
+          buildDiscoveryDocument(loaded, readInstanceUid(serviceFolder), gateArmed(config)),
         );
       } catch (error) {
         return jsonResponse(
@@ -1044,8 +1173,15 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     }
 
     if (url.pathname.startsWith("/v1/propose/")) {
-      const denied = bearerGate(request, config.tokens);
-      if (denied !== undefined) return denied;
+      const gate = bearerGate(request, config);
+      if ("response" in gate) return gate.response;
+      // Single-endpoint gates have no roster to hide behind: a key that
+      // does not carry this endpoint at rw is simply not valid for this
+      // gate's write face — the same uniform 401, no new refusal class.
+      if (gate.credential?.kind === "file"
+        && !scopeAllows(gate.credential.entry.scopes, binding.name, "rw")) {
+        return authFailureResponse();
+      }
       const id = url.pathname.slice("/v1/propose/".length);
       if (id.includes("/")) {
         return jsonResponse(
@@ -1065,8 +1201,12 @@ export function startUkpServer(config: ServeConfig): StartedServe {
       || url.pathname === "/v1/nav"
       || url.pathname === "/v1/rg"
     ) {
-      const denied = bearerGate(request, config.tokens);
-      if (denied !== undefined) return denied;
+      const gate = bearerGate(request, config);
+      if ("response" in gate) return gate.response;
+      if (gate.credential?.kind === "file"
+        && !scopeAllows(gate.credential.entry.scopes, binding.name, "ro")) {
+        return authFailureResponse();
+      }
       if (url.pathname === "/v1/search") {
         return await handleSearch(request, config, binding.name, serviceFolder);
       }
@@ -1096,6 +1236,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     ...(config.systemdSocket === true ? { systemdSocket: true } : {}),
   });
   const { server } = listener;
+  const tokenFile = tokenFileSnapshot(config);
 
   const info: ServeInfo = {
     mode: "endpoint",
@@ -1105,7 +1246,8 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     url: listener.publicUrl,
     host,
     port: listener.port,
-    authRequired: (config.tokens?.length ?? 0) > 0,
+    authRequired: gateArmed(config),
+    ...(tokenFile !== undefined ? { tokenFile } : {}),
     rg: rgExecutableAvailable() ? "ok" : "missing",
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
