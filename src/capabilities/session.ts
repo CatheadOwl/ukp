@@ -314,6 +314,12 @@ export async function runAgentSubstrate(
     // hosting is the manifest allowlist (ADR-SESSION-001), not codex's
     // directory check.
     "--skip-git-repo-check",
+    // codex exec defaults to a read-only sandbox, which reduces every spawned
+    // session to a read-only scout — delegation tasks cannot land. Writable
+    // scope is codex's workspace, i.e. the spawn cwd (the endpoint folder
+    // above), so this grants writes inside the endpoint and nowhere else.
+    "--sandbox",
+    "workspace-write",
     ...(request.resumeId !== undefined ? ["resume", request.resumeId] : []),
     request.prompt,
   ];
