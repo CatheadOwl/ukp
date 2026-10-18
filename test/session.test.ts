@@ -81,6 +81,8 @@ describe("ukp session · help and dispatch", () => {
     const result = await run(["--help"], createFixture());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("spawn");
+    expect(result.stdout).toContain("final report");
+    expect(result.stdout).toContain("--events");
     expect(result.stdout).toContain("Reserved (app-server tier, not in v0): wait, answer, stop");
   });
 
@@ -155,13 +157,35 @@ describe("ukp session spawn · authorization gate (spec §1/§5)", () => {
 });
 
 describe("ukp session spawn · event stream and address book (spec §3/§4/§6)", () => {
-  test("happy path maps the §4 table, records the address book, exits 0", async () => {
+  test("happy path prints the final report, records the address book, exits 0", async () => {
     const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\n' });
     fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
 
     const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "hello brief"], fixture, "ok");
     expect(result.exitCode).toBe(0);
+    // Default face = the plain-text report (final agent message), pipe-friendly;
+    // no protocol framing for the common delegation case.
+    expect(result.stdout).toBe("echo:hello brief\n");
 
+    const records = loadSessionRecords(sessionStorePath(fixture.registryPath));
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      id: "fix-thread-1",
+      endpoint: "kb",
+      agent: "fixture",
+      tier: "sdk",
+      last_outcome: "finished",
+    });
+    expect(result.stderr).toContain("session fix-thread-1 started (agent fixture, tier sdk, endpoint kb)");
+    expect(result.stderr).toContain("session fix-thread-1 finished");
+  });
+
+  test("--events opts into the AG-UI JSONL stream with the §4 mapping and one boundary pair", async () => {
+    const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\n' });
+    fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
+
+    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "hello brief", "--events"], fixture, "ok");
+    expect(result.exitCode).toBe(0);
     const events = stdoutEvents(result);
     expect(events[0]).toMatchObject({ type: "RUN_STARTED", threadId: "fix-thread-1" });
     const boundaries = events.filter((event) => event.type === "RUN_STARTED" || event.type === "RUN_FINISHED" || event.type === "RUN_ERROR");
@@ -178,24 +202,12 @@ describe("ukp session spawn · event stream and address book (spec §3/§4/§6)"
     const toolArgs = events.find((event) => event.type === "TOOL_CALL_ARGS");
     expect(toolArgs).toMatchObject({ toolCallId: "c1", args: "echo hi" });
     expect(events.some((event) => event.type === "TOOL_CALL_RESULT")).toBe(true);
-
-    const records = loadSessionRecords(sessionStorePath(fixture.registryPath));
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      id: "fix-thread-1",
-      endpoint: "kb",
-      agent: "fixture",
-      tier: "sdk",
-      last_outcome: "finished",
-    });
-    expect(result.stderr).toContain("session fix-thread-1 started (agent fixture, tier sdk, endpoint kb)");
-    expect(result.stderr).toContain("session fix-thread-1 finished");
   });
 
   test("turn.failed followed by a trailing error emits exactly one RUN_ERROR, exit 1", async () => {
     const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\n' });
     fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
-    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "x"], fixture, "failed");
+    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "x", "--events"], fixture, "failed");
     expect(result.exitCode).toBe(1);
     const events = stdoutEvents(result);
     expect(events.filter((event) => event.type === "RUN_ERROR")).toHaveLength(1);
@@ -205,10 +217,19 @@ describe("ukp session spawn · event stream and address book (spec §3/§4/§6)"
     expect(loadSessionRecords(sessionStorePath(fixture.registryPath))[0]?.last_outcome).toBe("failed");
   });
 
+  test("failed run still prints the last agent message as the default face", async () => {
+    const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\n' });
+    fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
+    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "x"], fixture, "failed");
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("about to fail\n");
+    expect(result.stderr).toContain("session fix-thread-1 failed");
+  });
+
   test("stream without a terminal event closes with synthesized RUN_FINISHED (rule 2)", async () => {
     const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\n' });
     fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
-    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "x"], fixture, "no-terminal");
+    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "x", "--events"], fixture, "no-terminal");
     expect(result.exitCode).toBe(0);
     const events = stdoutEvents(result);
     expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
@@ -245,10 +266,11 @@ describe("ukp session send · resume semantics (spec §3/§4 rule 1)", () => {
 
     const result = await run(["send", "fix-thread-1", "--text", "second turn"], fixture, "resume-ok");
     expect(result.exitCode).toBe(0);
-    const events = stdoutEvents(result);
+    expect(result.stdout).toBe("resume:fix-thread-1 echo:second turn\n");
+    const eventsResult = await run(["send", "fix-thread-1", "--text", "third turn", "--events"], fixture, "resume-ok");
+    expect(eventsResult.exitCode).toBe(0);
+    const events = stdoutEvents(eventsResult);
     expect(events[0]).toMatchObject({ type: "RUN_STARTED", threadId: "fix-thread-1" });
-    const content = events.find((event) => event.type === "TEXT_MESSAGE_CONTENT");
-    expect(content).toMatchObject({ content: "resume:fix-thread-1 echo:second turn" });
 
     const record = loadSessionRecords(sessionStorePath(fixture.registryPath))[0]!;
     expect(record.last_outcome).toBe("finished");

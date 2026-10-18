@@ -145,6 +145,10 @@ export interface SessionRunOutcome {
    * substrate never announced one (run failed before the first event). */
   nativeId?: string;
   outcome: "finished" | "failed";
+  /** The turn's final agent message — the default report face (stdout);
+   * undefined when the run produced no agent message. codex SDK
+   * `finalResponse` semantics: the event stream stays substrate. */
+  finalMessage?: string;
   detail?: string;
 }
 
@@ -174,6 +178,8 @@ interface RunBoundaryState {
    * (substrate or synthesized) — drives the address-book outcome. */
   terminalKind?: "finished" | "error";
   nativeId?: string;
+  /** Last agent_message text seen — the report face of the outcome. */
+  finalMessage?: string;
 }
 
 /** Maps one substrate JSONL item to zero or more AG-UI events per the
@@ -244,6 +250,7 @@ export function mapSubstrateItem(
       }
       const inner = isRecord(item.item) ? item.item : {};
       if (inner.type === "agent_message" && typeof inner.text === "string") {
+        state.finalMessage = inner.text;
         const messageId = byId(inner.id);
         events.push(boundary("TEXT_MESSAGE_START", { messageId, role: "assistant" }));
         events.push(boundary("TEXT_MESSAGE_CONTENT", { messageId, content: inner.text }));
@@ -421,6 +428,7 @@ export async function runAgentSubstrate(
   return {
     nativeId: state.nativeId,
     outcome: failed ? "failed" : "finished",
+    ...(state.finalMessage !== undefined ? { finalMessage: state.finalMessage } : {}),
     ...(failed ? { detail: `see RUN_ERROR on run ${state.runId}` } : {}),
   };
 }

@@ -2,8 +2,9 @@
 // group). Two-level dispatch like init/guide: `ukp session <sub>`. The
 // capability core (capabilities/session.ts) owns mechanisms and classified
 // errors; this adapter owns argument surfaces, exit codes and channel text
-// (ADR 0021): stdout = machine channel (AG-UI event JSONL on spawn/send),
-// stderr = human notes and classified error lines.
+// (ADR 0021): stdout prints the agent's final report by default (plain
+// text, pipe-friendly — repo discipline) with the AG-UI event JSONL behind
+// --events; stderr carries human notes and classified error lines.
 
 import { readFileSync } from "node:fs";
 import {
@@ -52,8 +53,8 @@ const SESSION_EXIT_BY_CLASS: Record<SessionErrorClass, number> = {
 };
 
 const SESSION_USAGE_LINES: Record<SessionSubcommand, string> = {
-  spawn: "ukp session spawn --endpoint <name> --agent <handle> (--brief <file> | --text <string>)",
-  send: "ukp session send <id> (--brief <file> | --text <string>)",
+  spawn: "ukp session spawn --endpoint <name> --agent <handle> (--brief <file> | --text <string>) [--events]",
+  send: "ukp session send <id> (--brief <file> | --text <string>) [--events]",
   status: "ukp session status <id>",
   list: "ukp session list [--endpoint <name>]",
 };
@@ -77,15 +78,17 @@ function renderSessionHelp(): string {
     "Usage: ukp session <sub> [options]",
     "",
     "Subcommands:",
-    "  spawn   start a session: launch the authorized agent in the endpoint folder and stream AG-UI events",
-    "  send    continue a session by id (resume run); same event stream as spawn",
+    "  spawn   start a session: launch the authorized agent in the endpoint folder and print its final report",
+    "  send    continue a session by id (resume run); same report output as spawn",
     "  status  show one address-book entry",
     "  list    list sessions, one per line (optional --endpoint filter)",
     "",
     "Reserved (app-server tier, not in v0): wait, answer, stop",
     "",
-    `Events are AG-UI JSONL on stdout (anchored: ag-ui-protocol@0.1.19); stderr carries human notes.`,
-    `Hosting is opt-in: the endpoint manifest must declare [capabilities.session] agents.`,
+    `stdout carries the agent's final report (the turn's last agent message);`,
+    `pass --events for the AG-UI JSONL event stream (anchored: ag-ui-protocol@0.1.19).`,
+    `stderr carries human notes. Hosting is opt-in: the endpoint manifest must`,
+    `declare [capabilities.session] agents.`,
   ].join("\n");
 }
 
@@ -94,13 +97,14 @@ interface ParsedFlags {
   positionals: string[];
 }
 
-/** Minimal flag parser: every supported flag takes a value; anything else
- * starting with '-' is a usage error. Command-specific validation is on the
- * callers so the spec §5 messages stay exact. */
+/** Minimal flag parser: value flags take an argument, boolean flags stand
+ * alone; anything else starting with '-' is a usage error. Command-specific
+ * validation is on the callers so the spec §5 messages stay exact. */
 function parseSessionFlags(
   subcommand: SessionSubcommand,
   args: readonly string[],
   allowed: readonly string[],
+  booleanFlags: readonly string[] = [],
 ): ParsedFlags {
   const values = new Map<string, string>();
   const positionals: string[] = [];
@@ -110,15 +114,19 @@ function parseSessionFlags(
       throw new SessionHelpRequest();
     }
     if (token.startsWith("-")) {
-      if (!allowed.includes(token)) {
+      if (!allowed.includes(token) && !booleanFlags.includes(token)) {
         throw usageError(subcommand, `unknown option '${token}' for 'ukp session ${subcommand}'`);
+      }
+      if (values.has(token)) {
+        throw usageError(subcommand, `'${token}' may only be specified once`);
+      }
+      if (booleanFlags.includes(token)) {
+        values.set(token, "true");
+        continue;
       }
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) {
         throw usageError(subcommand, `'${token}' requires a value`);
-      }
-      if (values.has(token)) {
-        throw usageError(subcommand, `'${token}' may only be specified once`);
       }
       values.set(token, value);
       index += 1;
@@ -223,6 +231,18 @@ function ownerName(): string {
   return process.env.USERNAME ?? process.env.USER ?? "unknown";
 }
 
+/** Default face = the final report (plain text, pipe-friendly — the repo's
+ * plain-default / structured-opt-in discipline); `--events` opts into the
+ * AG-UI JSONL stream. The stream is substrate, not the default surface. */
+function composeRunStdout(
+  events: boolean,
+  lines: readonly string[],
+  finalMessage: string | undefined,
+): string {
+  if (events) return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+  return finalMessage === undefined ? "" : `${finalMessage}\n`;
+}
+
 function renderSessionCommandError(error: unknown): SessionCommandResult {
   if (error instanceof SessionHelpRequest) {
     return { exitCode: 0, stdout: renderSessionHelp(), stderr: "" };
@@ -248,7 +268,7 @@ async function runSpawn(
   args: readonly string[],
   context: SessionCommandContext,
 ): Promise<SessionCommandResult> {
-  const flags = parseSessionFlags("spawn", args, ["--endpoint", "--agent", "--brief", "--text"]);
+  const flags = parseSessionFlags("spawn", args, ["--endpoint", "--agent", "--brief", "--text"], ["--events"]);
   const endpoint = flags.values.get("--endpoint");
   const handle = flags.values.get("--agent");
   if (endpoint === undefined) throw usageError("spawn", "--endpoint <name> is required");
@@ -289,7 +309,7 @@ async function runSpawn(
     : `session ${label} failed${outcome.detail === undefined ? "" : ` — ${outcome.detail}`}`);
   return {
     exitCode: outcome.outcome === "finished" ? 0 : 1,
-    stdout: lines.length === 0 ? "" : `${lines.join("\n")}\n`,
+    stdout: composeRunStdout(flags.values.get("--events") === "true", lines, outcome.finalMessage),
     stderr: `${notes.join("\n")}\n`,
   };
 }
@@ -298,7 +318,7 @@ async function runSend(
   args: readonly string[],
   context: SessionCommandContext,
 ): Promise<SessionCommandResult> {
-  const flags = parseSessionFlags("send", args, ["--brief", "--text"]);
+  const flags = parseSessionFlags("send", args, ["--brief", "--text"], ["--events"]);
   if (flags.positionals.length !== 1) {
     throw usageError("send", "send takes exactly one session id");
   }
@@ -336,7 +356,7 @@ async function runSend(
   updateSessionRecord(storePath, record.id, (context.now?.() ?? new Date()).toISOString(), outcome.outcome);
   return {
     exitCode: outcome.outcome === "finished" ? 0 : 1,
-    stdout: lines.length === 0 ? "" : `${lines.join("\n")}\n`,
+    stdout: composeRunStdout(flags.values.get("--events") === "true", lines, outcome.finalMessage),
     stderr: `session ${record.id} resumed (agent ${record.agent}, tier sdk, endpoint ${record.endpoint})\n`
       + (outcome.outcome === "finished"
         ? `session ${record.id} finished\n`
