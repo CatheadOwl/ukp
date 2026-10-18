@@ -1,3 +1,7 @@
+---
+description: Operational recipes for serving UKP endpoints remotely — ssh wake, native TLS, Windows resident door, socket activation, fronting proxies, scoped keys, and hardening posture
+---
+
 # Remote deployment
 
 Operational guide for exposing UKP endpoints over the network. For the
@@ -114,6 +118,57 @@ only grows: the re-sign keeps everything the certificate already carried
 (so changing the flag list loses nothing), and already-covered or
 narrower requests reuse the certificate untouched. Explicit `--tls-cert` certificates carry their own SAN, so
 `--tls-san` next to them is a usage error, not a no-op.
+
+## Scoped keys (second machines, agents — labeled, revocable)
+
+`UKP_SERVE_TOKEN` is the full-power shortcut: any listed token reaches every
+endpoint and the write face. When you hand access to a second machine or an
+agent, issue a **labeled, scoped key** instead — the issuance face is a serve
+subcommand, and the credential store is a plain file you can audit:
+
+```bash
+# ON THE HOST (run without UKP_SERVE_TOKEN set — while the env token is
+# present it takes precedence and the file is not consulted at all):
+ukp serve token add liku "notes:ro,cad:rw"
+#   issued key for 'liku' (scopes: notes:ro,cad:rw)
+#     ukp_liku_3f9c...TQ  <- the raw key, shown ONCE, never stored
+# stored in ~/.ukp/tokens (0600, hash-only)...
+
+# serve the door with NO env token — the key file arms the gate:
+ukp serve --host 0.0.0.0 --tls
+
+# consumer machine registers with the raw key as the token:
+ukp register --url https://<ip>:8570 --token ukp_liku_...
+```
+
+How the pieces behave:
+
+- **Scopes** are `name:ro|rw`, comma-separated (Docker-registry style); full
+  power is the explicit `*:rw` — a key with no scopes is a usage error, not a
+  wildcard. `rw` adds the propose route; `ro` keys get read/search/nav/rg
+  only. An endpoint outside the key's scope answers exactly like a name that
+  does not exist (same 404, same roster) — the key cannot even learn what it
+  cannot see.
+- **The file** is `~/.ukp/tokens`, one line per key (`label  key-id  sha256$
+  hash  scopes`), 0600, hash-only — a leaked file is not a leaked credential.
+  On POSIX, group/other permissions make the file unusable (machine refusal,
+  OpenSSH-style); Windows relies on the %USERPROFILE% ACLs instead.
+- **Revocation is deleting the line.** `ukp serve token revoke <label>`
+  removes every key carrying that label; the running door re-reads the file
+  on every request, so the next call is a 401 — no restart, no deploy step.
+  Hand-editing (deleting or `#`-commenting a line) works too.
+- **Rotation** is zero-downtime: `token add` with an existing label keeps the
+  old key active; hand out the new one, then revoke the label when the old
+  key's last consumer has switched. `ukp serve token list` shows labels, key
+  ids, and scopes (never hashes).
+- **Chain order**: while `UKP_SERVE_TOKEN` is set, the env token wins and the
+  file is ignored — the env is the shortcut form of the same gate (the same
+  order as `AWS_*` env vars over `~/.aws/credentials`, or `GH_TOKEN` over the
+  stored gh login). An env var set to an empty value counts as unset.
+
+The Windows resident form (`--print-task --write`) interpolates the env token
+into `start-door.cmd`; a file-key door instead wants the cmd's `set
+"UKP_SERVE_TOKEN=..."` line removed so the key file arms the gate.
 
 ## Windows host (https — resident form)
 

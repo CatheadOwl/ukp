@@ -185,9 +185,11 @@ Help commands:
 ## Remote in 60 seconds
 
 `ukp serve` exposes an endpoint over HTTP. Authentication is deny-by-default:
-serving with a `--host` beyond loopback requires `UKP_SERVE_TOKEN` (tokenless
-serving needs an explicit `--allow-anonymous` and is refused off loopback).
-The two fastest paths — each block notes where its commands run:
+serving with a `--host` beyond loopback requires a credential — the
+`UKP_SERVE_TOKEN` env token (full power) or a labeled key issued into
+`~/.ukp/tokens` (tokenless serving needs an explicit `--allow-anonymous` and
+is refused off loopback). The two fastest paths — each block notes where its
+commands run:
 
 ```bash
 # From the consumer machine — SSH between two personal machines; the door is
@@ -202,6 +204,21 @@ ukp read --endpoint <name> notes/x.md                  # just works, like local
 UKP_SERVE_TOKEN=<token> ukp serve --endpoint <name> --host 0.0.0.0 --port 8570 --tls
 ukp register --url https://<ip>:8570 --endpoint <name> --token <token>
 ```
+
+Handing a second machine or an agent a narrower key? Issue labeled, scoped,
+revocable keys instead of sharing the env token (ON THE HOST):
+
+```bash
+ukp serve token add liku "notes:ro,cad:rw"   # prints the raw key ONCE
+ukp serve token list                          # labels, key ids, scopes
+ukp serve token revoke liku                   # next request is a 401
+```
+
+Scopes are `name:ro|rw` comma-separated (full power is the explicit `*:rw`);
+the file stores hashes only, and the door re-reads it on every request —
+deleting a line revokes without a restart. A scoped key sees only its own
+endpoints: out-of-scope names answer exactly like nonexistent ones. While
+`UKP_SERVE_TOKEN` is set it takes precedence and the file is not consulted.
 
 NAT/EIP cloud host (public IP on no NIC)? Name it with
 `ukp serve --tls --tls-san <public-ip>` — the persisted certificate re-signs
@@ -227,13 +244,18 @@ and the hardening posture — lives in the
 
 UKP is local-first: nothing listens on the network until you run
 `ukp serve`. When you do, the surface is deny-by-default — serving beyond
-loopback without `UKP_SERVE_TOKEN` is refused, and anonymous serving is an
-explicit flag that only works on loopback. Transport is `https://`, pinned
+loopback without a credential is refused, and anonymous serving is an
+explicit flag that only works on loopback. Credentials come in two forms:
+the `UKP_SERVE_TOKEN` env token (full power, takes precedence while set)
+and labeled keys in the 0600 `~/.ukp/tokens` file (hash-only storage,
+required per-key scopes, revocation by deleting the line — effective on
+the next request). Transport is `https://`, pinned
 automatically at registration (a certificate that renews on the same key
 re-pins silently; a different key hard-blocks with both fingerprints), or
 `ssh://`, where SSH carries both encryption and authentication. A
 `--select` door neither routes, declares, nor lists unselected endpoints —
-excluded and unknown names return byte-identical 404s.
+excluded and unknown names return byte-identical 404s, and a scoped key's
+out-of-scope endpoints answer the same way.
 
 Accepted tradeoffs, disclosed rather than hidden: tokens are long-lived
 static bearer secrets stored client-side in the 0600 registry file or an

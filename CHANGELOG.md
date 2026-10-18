@@ -4,6 +4,28 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Labeled, scoped, revocable keys for `ukp serve` (RQ-16c / W13):
+  `ukp serve token add <label> <scopes>` issues a
+  `ukp_<label>_<id>_<secret>` key into `~/.ukp/tokens` (0600, SHA-256
+  hash-only storage — the raw key is shown exactly once), `token list`
+  tabulates labels/key-ids/scopes, and `token revoke <label>` deletes
+  every key of a label. Scopes are required per key in Docker-registry
+  grammar (`notes:ro,cad:rw`; full power is the explicit `*:rw`): a
+  scoped key reads only its endpoints, `rw` adds the propose route, and
+  out-of-scope names answer byte-identically to unknown ones (the
+  ADR-REM-010 roster-404 mechanism, no 403 class). The serve gate
+  re-reads the file on every request, so deleting a line revokes without
+  a restart; a malformed or (POSIX) world-permission file refuses
+  startup loudly, and mid-flight corruption fails closed. While
+  `UKP_SERVE_TOKEN` is set it keeps its exact previous full-power
+  semantics and the file is not consulted (env > file chain order, the
+  AWS/gh/kubectl convention); deny-by-default admission now spans both
+  sources. The mechanism lives in a new purity-enforced
+  `src/plumbing/token-file.ts` (zero UKP imports, machine-checked by
+  test).
+
 ### Fixed
 
 - Trailing separators in endpoint-relative references are now
