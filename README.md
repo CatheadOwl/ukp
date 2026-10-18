@@ -134,10 +134,12 @@ For workspace defaults, use `ukp guide client` and `.ukp/client.toml`.
 
 ## Commands
 
-Grouping below follows `ukp --help`; every command stays a flat
-`ukp <verb>`. `--endpoint <name>` is the canonical endpoint selector
-(`ukp unregister <name>` still takes the endpoint as a positional legacy
-form); `-g` selects the full local Host Registry where supported.
+Grouping below follows `ukp --help`; primary capability commands stay a flat
+`ukp <verb>`, while multi-verb capability families appear as object command
+groups (`ukp session`, after the `init`/`guide` precedent). `--endpoint <name>`
+is the canonical endpoint selector (`ukp unregister <name>` still takes the
+endpoint as a positional legacy form); `-g` selects the full local Host
+Registry where supported.
 
 The same five commands — search, read, nav, rg, propose — work on local and
 remote endpoints; consuming a remote endpoint is a one-command gesture
@@ -152,6 +154,12 @@ Endpoint commands:
 | `ukp nav` | Markdown outline of an endpoint (`--depth`, respects `.gitignore`); on by default, configurable via `[capabilities.nav]`. |
 | `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; `--files` enumerates them instead of searching. Results become `read`-ready `ukp://` references. A missing rg binary skips the endpoint with a warning. |
 | `ukp propose` | Submits an idempotent change proposal (suggestion box — the owner decides what happens next). Created/unchanged/updated; the revision bumps only on `updated`. |
+
+Session commands (opt-in per endpoint):
+
+| Command | What it does |
+|---|---|
+| `ukp session` | Spawns and converses with agent sessions anchored to an endpoint — `spawn` / `send` / `status` / `list` (sdk tier). Opt-in: the endpoint manifest must declare `[capabilities.session]` with an `agents` allowlist, and each agent needs a `[[agents]]` entry in the Host Registry. spawn/send stream AG-UI events as JSONL on stdout (exactly one run boundary pair per call); the session id is the agent's native thread id — `ukp session send <id>` resumes it. `wait` / `answer` / `stop` are reserved for the app-server tier. Conversation history stays in the agent's own global space; UKP records only the address book. |
 
 Registry commands:
 
@@ -273,6 +281,9 @@ please don't use public issues for security reports.
 
 - remote operation of `update`, and a formally specified network protocol
   beyond the current ukp-remote wire v1;
+- remote session spawn and the app-server session tier (`wait` / `answer` /
+  `stop`, mid-run steering): sessions today are local-endpoint, sdk-tier
+  only, and the agent binary is invoked with the caller's environment;
 - semantic search tier, query rewrite, reranking, or deduplication;
 - full Client Scope with aliases, visibility, inheritance, or profiles;
 - automatic artifact browsing, cleanup, or "select result N" references;
