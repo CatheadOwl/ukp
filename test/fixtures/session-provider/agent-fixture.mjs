@@ -3,8 +3,10 @@
 // selected via AGENT_FIXTURE_SCENARIO (inherited env, spec §7.2); the thread
 // id via AGENT_FIXTURE_THREAD_ID.
 //
-// argv contract (asserted by the tests): exec --experimental-json --cd
-// <folder> [resume <id>] <prompt>
+// argv contract (asserted by the tests via the "echo-argv" scenario): exec
+// --experimental-json --cd <folder> --skip-git-repo-check --sandbox <tier>
+// [resume <id>] <prompt> — foreign flags are tolerated and ignored, the
+// prompt is always the last argument.
 const args = process.argv.slice(2);
 const resumeIndex = args.indexOf("resume");
 const resumeId = resumeIndex === -1 ? null : args[resumeIndex + 1];
@@ -15,7 +17,7 @@ const threadId = process.env.AGENT_FIXTURE_THREAD_ID ?? "fix-thread-1";
 const lines = [];
 const emit = (item) => lines.push(JSON.stringify(item));
 
-if (scenario === "ok" || scenario === "failed" || scenario === "no-terminal" || scenario === "finish-exit-1") {
+if (scenario === "ok" || scenario === "failed" || scenario === "no-terminal" || scenario === "finish-exit-1" || scenario === "echo-argv") {
   emit({ type: "thread.started", thread_id: threadId });
 }
 // "no-events" prints literally nothing (spec §5: zero events = substrate
@@ -31,6 +33,11 @@ if (scenario === "ok") {
 } else if (scenario === "resume-ok") {
   // Resume streams may omit thread.started — spec §4 synthesis rule 1.
   emit({ type: "item.completed", item: { id: "m2", type: "agent_message", text: `resume:${resumeId} echo:${prompt}` } });
+  emit({ type: "turn.completed", usage: { input_tokens: 1 } });
+} else if (scenario === "echo-argv") {
+  // Reflects the adapter's argv as the final message, so tests can pin the
+  // substrate contract (sandbox tier, resume placement) end to end.
+  emit({ type: "item.completed", item: { id: "m5", type: "agent_message", text: JSON.stringify(args) } });
   emit({ type: "turn.completed", usage: { input_tokens: 1 } });
 } else if (scenario === "failed") {
   emit({ type: "item.completed", item: { id: "m3", type: "agent_message", text: "about to fail" } });

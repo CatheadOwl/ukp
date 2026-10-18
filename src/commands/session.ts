@@ -18,7 +18,7 @@ import {
   type AgentSubstrate,
   type SessionErrorClass,
 } from "../capabilities/session.ts";
-import { resolveSessionAgents } from "../config/agent-backed.ts";
+import { resolveSessionAgents, resolveSessionWriteTier, type SessionWriteTier } from "../config/agent-backed.ts";
 import { loadManifest, ManifestError } from "../config/manifest.ts";
 import { isRemoteBinding, localPathOf, readRegistry, readRegistryAgents, RegistryError } from "../registry.ts";
 import type { RegistryBinding } from "../registry.ts";
@@ -179,17 +179,21 @@ function resolveLocalFolder(registryPath: string, endpoint: string): { binding: 
 }
 
 /** Spec §1/§5 authorization gate + substrate resolution. The manifest is the
- * single trust anchor (ADR-SESSION-001); the registry only names binaries. */
+ * single trust anchor (ADR-SESSION-001); the registry only names binaries.
+ * Returns the substrate plus the write tier — hosting (agents) and write
+ * (write) are two independent opt-in rungs of the same declaration. */
 function authorizedSubstrate(
   registryPath: string,
   folder: string,
   endpoint: string,
   handle: string,
-): AgentSubstrate {
+): { substrate: AgentSubstrate; write: SessionWriteTier } {
   let allowlist: readonly string[];
+  let write: SessionWriteTier;
   try {
     const loaded = loadManifest(folder);
     allowlist = resolveSessionAgents(loaded.manifest);
+    write = resolveSessionWriteTier(loaded.manifest);
   } catch (error) {
     if (error instanceof ManifestError) {
       throw new SessionError(
@@ -224,7 +228,7 @@ function authorizedSubstrate(
       `agent '${handle}' has no [[agents]] entry in the Host Registry (${registryPath}) — add one to spawn sessions with it`,
     );
   }
-  return substrate;
+  return { substrate, write };
 }
 
 function ownerName(): string {
@@ -277,11 +281,11 @@ async function runSpawn(
   const prompt = readPrompt("spawn", flags);
 
   const { folder } = resolveLocalFolder(context.registryPath, endpoint);
-  const substrate = authorizedSubstrate(context.registryPath, folder, endpoint, handle);
+  const { substrate, write } = authorizedSubstrate(context.registryPath, folder, endpoint, handle);
   const storePath = sessionStorePath(context.registryPath);
 
   const lines: string[] = [];
-  const outcome = await runAgentSubstrate(substrate, { folder, prompt }, crypto.randomUUID(), (line) => {
+  const outcome = await runAgentSubstrate(substrate, { folder, prompt, write }, crypto.randomUUID(), (line) => {
     lines.push(line);
   });
 
@@ -344,10 +348,28 @@ async function runSend(
     );
   }
 
+  // Identity is frozen at spawn (the address book); permissions are not —
+  // the write tier is re-read from the endpoint's current declaration every
+  // run, so an owner revoking `write` downgrades the next send, not just the
+  // next spawn (owner ruling 2026-10-18).
+  let write: SessionWriteTier;
+  try {
+    write = resolveSessionWriteTier(loadManifest(folder).manifest);
+  } catch (error) {
+    if (error instanceof ManifestError) {
+      throw new SessionError(
+        "not-authorized",
+        `endpoint '${record.endpoint}' authorization declaration is unreadable: ${error.message}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
   const lines: string[] = [];
   const outcome = await runAgentSubstrate(
     substrate,
-    { folder, prompt, resumeId: record.id },
+    { folder, prompt, write, resumeId: record.id },
     record.id,
     (line) => {
       lines.push(line);

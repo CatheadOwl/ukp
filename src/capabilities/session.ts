@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { SessionWriteTier } from "../config/agent-backed.ts";
 
 // ---- Classified errors (ADR 0021: capability classifies, CLI maps codes)
 
@@ -136,6 +137,10 @@ export interface SessionRunRequest {
   folder: string;
   /** Brief (spawn) or message (send); passed through verbatim (spec §7). */
   prompt: string;
+  /** Write permission tier resolved from the endpoint manifest (owner ruling
+   * 2026-10-18): the capability maps it to the substrate sandbox but never
+   * invents a grant — no default here, the caller decides. */
+  write: SessionWriteTier;
   /** Native id to resume (send); absent on spawn. */
   resumeId?: string;
 }
@@ -314,12 +319,16 @@ export async function runAgentSubstrate(
     // hosting is the manifest allowlist (ADR-SESSION-001), not codex's
     // directory check.
     "--skip-git-repo-check",
-    // codex exec defaults to a read-only sandbox, which reduces every spawned
-    // session to a read-only scout — delegation tasks cannot land. Writable
-    // scope is codex's workspace, i.e. the spawn cwd (the endpoint folder
-    // above), so this grants writes inside the endpoint and nowhere else.
-    "--sandbox",
-    "workspace-write",
+    // codex exec's own default is read-only; the tier is pinned in BOTH
+    // directions so the face stays deterministic across substrate upgrades.
+    // Writable scope is codex's workspace = the spawn cwd (the endpoint
+    // folder above): workspace-write grants writes inside the endpoint and
+    // nowhere else, and read-only keeps sessions as scouts (owner ruling
+    // 2026-10-18 — the grant comes from the endpoint manifest, never from
+    // an adapter default or a runtime approval).
+    ...(request.write === "workspace"
+      ? ["--sandbox", "workspace-write"]
+      : ["--sandbox", "read-only"]),
     ...(request.resumeId !== undefined ? ["resume", request.resumeId] : []),
     request.prompt,
   ];

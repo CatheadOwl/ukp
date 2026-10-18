@@ -100,6 +100,56 @@ describe("ukp session · help and dispatch", () => {
   });
 });
 
+describe("ukp session · write tier (endpoint-declared, owner ruling 2026-10-18)", () => {
+  test("write = \"workspace\" maps to the workspace-write sandbox", async () => {
+    const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\nwrite = "workspace"\n' });
+    fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
+    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "hi"], fixture, "echo-argv");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"--sandbox","workspace-write"');
+  });
+
+  test("absent write = read-only scout default (adapter never invents a grant)", async () => {
+    const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\n' });
+    fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
+    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "hi"], fixture, "echo-argv");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"--sandbox","read-only"');
+  });
+
+  test("foreign write value is a loud manifest error at the authorization gate", async () => {
+    const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\nwrite = "full"\n' });
+    fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
+    const result = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "hi"], fixture);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("authorization declaration is unreadable");
+    expect(result.stderr).toContain("'write' must be \"workspace\"");
+  });
+
+  test("write declared both flat and under .config is a declaration conflict", () => {
+    const fixture = createFixture({
+      manifestSession: '[capabilities.session]\nagents = ["fixture"]\nwrite = "workspace"\n[capabilities.session.config]\nwrite = "workspace"\n',
+    });
+    expect(() => loadManifest(fixture.endpointFolder)).toThrow(ManifestError);
+    expect(() => loadManifest(fixture.endpointFolder)).toThrow("declared both directly and under");
+  });
+
+  test("send re-reads the write tier per run — revoking write downgrades the next send", async () => {
+    const fixture = createFixture({ manifestSession: '[capabilities.session]\nagents = ["fixture"]\nwrite = "workspace"\n' });
+    fixture.extendRegistry(agentsTable([{ handle: "fixture", command: [nodeExecutable, fixtureExecutable] }]));
+    const spawned = await run(["spawn", "--endpoint", "kb", "--agent", "fixture", "--text", "hi"], fixture, "echo-argv");
+    expect(spawned.stdout).toContain('"--sandbox","workspace-write"');
+    // The owner revokes write; identity (the address-book entry) survives.
+    writeFileSync(
+      join(fixture.endpointFolder, ".ukp", "service.toml"),
+      'name = "kb"\n[capabilities.nav]\nprovider = "file"\n[capabilities.session]\nagents = ["fixture"]\n',
+    );
+    const sent = await run(["send", "fix-thread-1", "--text", "again"], fixture, "echo-argv");
+    expect(sent.exitCode).toBe(0);
+    expect(sent.stdout).toContain('"--sandbox","read-only"');
+  });
+});
+
 describe("ukp session spawn · authorization gate (spec §1/§5)", () => {
   test("no [capabilities.session] declaration → not authorized, exit 1", async () => {
     const fixture = createFixture();

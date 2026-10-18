@@ -16,7 +16,14 @@ export const AGENT_PROVIDER = "agent";
 
 export type AgentBackedCapabilityName = "session";
 
-export interface AgentBackedCapabilitySpec {
+/** Write permission tier for a hosted session (owner ruling 2026-10-18: the
+ * grant lives in the endpoint's own declaration, not in the adapter default
+ * and not in runtime approval). `read-only` is the scout default; `workspace`
+ * maps to the substrate's workspace-write sandbox (writes confined to the
+ * endpoint folder). */
+export type SessionWriteTier = "read-only" | "workspace";
+
+interface AgentBackedCapabilitySpec {
   /** Always false: hosting is opt-in per endpoint (ADR-SESSION-001). */
   readonly derived: false;
   /** Flat keys accepted directly under `[capabilities.<name>]`. */
@@ -26,7 +33,7 @@ export interface AgentBackedCapabilitySpec {
 export const AGENT_BACKED_CAPABILITIES: Readonly<
   Record<AgentBackedCapabilityName, AgentBackedCapabilitySpec>
 > = {
-  session: { derived: false, flatConfigKeys: ["agents"] },
+  session: { derived: false, flatConfigKeys: ["agents", "write"] },
 };
 
 export function isAgentBackedCapability(name: string): name is AgentBackedCapabilityName {
@@ -99,6 +106,10 @@ export function validateAgentBackedDeclaration(
     }
     seen.add(item);
   }
+  const write = declaration.config?.write;
+  if (write !== undefined && write !== "workspace") {
+    fail(`[capabilities.session] 'write' must be "workspace" when declared (got ${JSON.stringify(write)}); absent = read-only`);
+  }
 }
 
 /** The effective hosting allowlist: handles declared under
@@ -112,4 +123,14 @@ export function resolveSessionAgents(manifest: {
   const agents = declaration.config?.agents;
   if (!Array.isArray(agents)) return [];
   return agents.filter((item): item is string => typeof item === "string");
+}
+
+/** The effective write tier: `workspace` only when the endpoint declared it;
+ * anything else (absent declaration included) is the read-only scout default.
+ * Load-time validation already rejected foreign values — this reads what
+ * passed, it does not re-decide. */
+export function resolveSessionWriteTier(manifest: {
+  capabilities: Record<string, ManifestCapability>;
+}): SessionWriteTier {
+  return manifest.capabilities.session?.config?.write === "workspace" ? "workspace" : "read-only";
 }
