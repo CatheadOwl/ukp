@@ -13,6 +13,7 @@ import { executeReadCommand, READ_SPEC } from "./commands/read.ts";
 import { executeRgCommand, RG_SPEC } from "./commands/rg.ts";
 import { executeGuideCommand, GUIDE_SPEC, GUIDE_TOPICS } from "./commands/guide.ts";
 import { executeInitCommand, INIT_SPEC } from "./commands/init.ts";
+import { executeSessionCommand, SESSION_SUMMARY } from "./commands/session.ts";
 import { executeInspectCommand, INSPECT_SPEC } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand, LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC } from "./commands/inventory.ts";
 import { executeNavCommand, NAV_SPEC } from "./commands/nav.ts";
@@ -57,6 +58,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   nav: NAV_SPEC.summary,
   propose: PROPOSE_SPEC.summary,
   search: SEARCH_SPEC.summary,
+  session: SESSION_SUMMARY,
   version: "show version information",
 };
 
@@ -71,6 +73,10 @@ export const COMMAND_GROUPS = [
   {
     heading: "Endpoint commands",
     commands: ["search", "read", "nav", "rg", "propose"],
+  },
+  {
+    heading: "Session commands",
+    commands: ["session"],
   },
   {
     heading: "Registry commands",
@@ -369,6 +375,12 @@ export function runCli(
       currentDirectory,
       registryPath,
       qmdCommand: context.qmdCommand,
+    }), stdout, stderr);
+  }
+
+  if (command === "session") {
+    return writeCommandResultMaybeAsync(executeSessionCommand(args.slice(1), {
+      registryPath,
     }), stdout, stderr);
   }
 

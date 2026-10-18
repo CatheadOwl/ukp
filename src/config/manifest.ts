@@ -4,6 +4,12 @@ import { parse } from "smol-toml";
 import { z } from "zod";
 import { isExternalToolCapability, EXTERNAL_PROVIDER } from "./external-tool.ts";
 import { isFileNativeCapability, normalizeFileNativeFlatKeys } from "./file-native.ts";
+import {
+  AGENT_PROVIDER,
+  isAgentBackedCapability,
+  normalizeAgentBackedFlatKeys,
+  validateAgentBackedDeclaration,
+} from "./agent-backed.ts";
 
 export const ENDPOINT_NAME = /^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -143,8 +149,12 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
 
   const withoutLegacyGet = removeLegacyGetCapability(raw);
   // Flat file-native declaration keys (table-driven, ADR 0016) fold into
-  // `config` before the strict schema parse.
-  const normalized = normalizeFileNativeFlatKeys(withoutLegacyGet, (message) => {
+  // `config` before the strict schema parse; agent-backed declarations
+  // (ukp_session) get the identical pass from their own governance table.
+  const normalizedFileNative = normalizeFileNativeFlatKeys(withoutLegacyGet, (message) => {
+    throw new ManifestError(message);
+  });
+  const normalized = normalizeAgentBackedFlatKeys(normalizedFileNative, (message) => {
     throw new ManifestError(message);
   });
   if (isRecord(normalized) && !Object.hasOwn(normalized, "capabilities")) {
@@ -180,6 +190,8 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
         manifest.capabilities[name] = { ...declaration, provider: "file" };
       } else if (isExternalToolCapability(name)) {
         manifest.capabilities[name] = { ...declaration, provider: EXTERNAL_PROVIDER };
+      } else if (isAgentBackedCapability(name)) {
+        manifest.capabilities[name] = { ...declaration, provider: AGENT_PROVIDER };
       } else {
         throw new ManifestError(`[capabilities.${name}] must declare a provider`);
       }
@@ -188,6 +200,16 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
         `[capabilities.${name}] provider must be '${EXTERNAL_PROVIDER}' or omitted `
         + `(external-tool base tier: the declaration only overrides config)`,
       );
+    } else if (isAgentBackedCapability(name) && declaration.provider !== AGENT_PROVIDER) {
+      throw new ManifestError(
+        `[capabilities.${name}] provider must be '${AGENT_PROVIDER}' or omitted `
+        + `(agent-backed tier: the substrate is a Host Registry agent, not a provider plugin)`,
+      );
+    }
+    if (isAgentBackedCapability(name)) {
+      validateAgentBackedDeclaration(name, manifest.capabilities[name]!, (message) => {
+        throw new ManifestError(message);
+      });
     }
   }
   return { folder, manifestPath, manifest, effectiveName, nameSource };

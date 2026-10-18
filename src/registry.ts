@@ -45,7 +45,23 @@ const bindingSchema = z.object({
 
 const registrySchema = z.object({
   endpoints: z.array(bindingSchema),
+  /** Agent substrates for session hosting (ukp_session / ADR-SESSION-001
+   * spec §2): declaration-free v0 — entries are hand-edited; tier is
+   * sdk-only (app-server is a reserved future value and fails the schema). */
+  agents: z.array(z.object({
+    handle: z.string().min(1),
+    tier: z.literal("sdk"),
+    command: z.array(z.string().min(1)).min(1),
+  }).strict()).optional(),
 }).strict();
+
+/** Host Registry agent entry (ukp_session): `command` is the substrate argv
+ * prefix — the session adapter appends its own mode arguments after it. */
+export interface RegistryAgent {
+  handle: string;
+  tier: "sdk";
+  command: string[];
+}
 
 /** Binding union over the `kind` axis (D-077). Local bindings keep the
  * historical `{name, path}` shape (no injected `kind` field), so parsed
@@ -313,6 +329,31 @@ export function readRegistry(registryPath: string): RegistryBinding[] {
     if (error instanceof RegistryError) throw error;
     throw new RegistryError(`Registry is not readable: ${registryPath}`, { cause: error });
   }
+}
+
+/** Agent substrates declared in the Host Registry (ukp_session spec §2).
+ * Separate read so the bindings pipeline stays untouched; same strict
+ * schema, same classified error surface. Absent file or absent `agents`
+ * table both mean "no substrate on this host". */
+export function readRegistryAgents(registryPath: string): RegistryAgent[] {
+  if (!existsSync(registryPath)) return [];
+  let raw: unknown;
+  try {
+    raw = parse(readFileSync(registryPath, "utf8"));
+    assertRestrictedToml(raw);
+  } catch (error) {
+    if (error instanceof ManifestError) throw new RegistryError(error.message, { cause: error });
+    throw new RegistryError(`Registry is not readable: ${registryPath}`, { cause: error });
+  }
+  const result = registrySchema.safeParse(raw);
+  if (!result.success) throw new RegistryError(`Registry schema is invalid: ${result.error.message}`);
+  const agents = result.data.agents ?? [];
+  const seen = new Set<string>();
+  for (const agent of agents) {
+    if (seen.has(agent.handle)) throw new RegistryError(`duplicate agent handle '${agent.handle}'`);
+    seen.add(agent.handle);
+  }
+  return [...agents].sort((left, right) => left.handle < right.handle ? -1 : left.handle > right.handle ? 1 : 0);
 }
 
 /** Canonical serialization (configuration-contracts canonical form): local rows
