@@ -133,7 +133,10 @@ describe("read", () => {
         registryPath,
       });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("must not contain '.' or '..'");
+      // TODO 20261011-0007: the rejection points at --from — the moment a
+      // document-relative link fails is when agents need the flag (2026-10-10
+      // task-loop eval: 2/3 never discovered it).
+      expect(result.stderr).toContain("must not contain '.' or '..' path segments (use --from <route> to resolve a document-relative reference)");
       expect(result.stdout).toBe("");
 
       const absolute = executeReadCommand(["--endpoint", "notes", resolve(root, "secret.md")], {
@@ -1262,7 +1265,7 @@ describe("get ukp:// URI input (exact slot addressing)", () => {
       // The rel-path is a literal segment sequence ("qmd:", "", "running-agents.md"):
       // rejected as a usage error by path validation, never routed to the provider.
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("empty path segments");
+      expect(result.stderr).toContain("empty path segments (use --from <route> to resolve a document-relative reference)");
       expect(existsSync(join(service, "qmd-fixture-invocation.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });

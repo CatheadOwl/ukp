@@ -164,9 +164,13 @@ function validateEndpointRelativePath(reference: string): string[] {
       throw new ReadUsageError("reference must be endpoint-scoped, not absolute");
     }
     if (result.reason === "empty-segment") {
-      throw new ReadUsageError("reference must not contain empty path segments");
+      throw new ReadUsageError(
+        "reference must not contain empty path segments (use --from <route> to resolve a document-relative reference)",
+      );
     }
-    throw new ReadUsageError("reference must not contain '.' or '..' path segments");
+    throw new ReadUsageError(
+      "reference must not contain '.' or '..' path segments (use --from <route> to resolve a document-relative reference)",
+    );
   }
   return result.segments;
 }

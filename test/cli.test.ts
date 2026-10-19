@@ -149,6 +149,15 @@ describe("CLI bootstrap", () => {
     expect(help).toContain("set your default scope here");
   });
 
+  // Probe 20261019-read-summary-from-hint (promoted): the read summary names
+  // the document-relative tier so root-help-only agents discover --from at the
+  // moment a ../x.md link needs it (A-arm agents all fell back to manual
+  // rebase, replaying the 2026-10-10 task-loop eval friction).
+  test("root help read summary names the document-relative --from tier", () => {
+    const help = renderHelp();
+    expect(help).toContain("read an endpoint-scoped resource (exact path, ukp:// URI, a docid from search results, or document-relative via --from)");
+  });
+
   test("help exits successfully", () => {
     const output: string[] = [];
     expect(runCli(["--help"], (message) => output.push(message))).toBe(0);
