@@ -1,12 +1,20 @@
-// ukp_session W1 (line spec: workunits/ukp_session/spec/session-command.md;
-// ADR-SESSION-001/002/003): the session capability core. UKP owns naming
-// and relay only (core-idea D-1): conversation history lives in the agent's
-// own global space, so this module persists the host-scoped address book
-// and nothing else — the no-transcript invariant is a spec §6 test anchor.
+// ukp_session W1→W2/G3 (line spec: workunits/ukp_session/spec/session-command.md;
+// ADR-SESSION-001/002/003; extraction ruling w2-extraction-ruling.md X4):
+// the session capability core in WRAPPER form. UKP owns naming and relay
+// only (core-idea D-1): conversation history lives in the agent's own
+// global space, so this module persists the host-scoped address book and
+// nothing else — the no-transcript invariant is a spec §6 test anchor.
 //
-// Layers (ADR 0021): this module owns mechanisms and classified errors;
-// the CLI adapter (commands/session.ts) owns argument surfaces, exit codes
-// and channel text.
+// The substrate mechanism (argv mapping, AG-UI synthesis, resume, sandbox
+// pinning) retired to the amux binary in W2/G3 — ukp spawns it per
+// invocation and consumes its structured face (the rg precedent: the
+// wrapped tool holds the structured surface; the wrapper holds policy).
+// amux's README is the tool contract authority; ukp never imports its
+// source. The migration is provenance, not implementation.
+//
+// Layers (ADR 0021): this module owns the amux consumption mechanism and
+// classified errors; the CLI adapter (commands/session.ts) owns argument
+// surfaces, exit codes and channel text.
 
 import {
   existsSync,
@@ -19,6 +27,7 @@ import {
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SessionWriteTier } from "../config/agent-backed.ts";
+import { toolRelayArgv, TOOL_NOT_FOUND_EXIT } from "../spawn-relay.ts";
 
 // ---- Classified errors (ADR 0021: capability classifies, CLI maps codes)
 
@@ -124,49 +133,84 @@ export function resolveSessionRecord(records: readonly SessionRecord[], id: stri
   return matches[0]!;
 }
 
-// ---- Substrate adapter (SDK tier, spec §4): spawn / resume + AG-UI mapping
+// ---- amux consumption (spec §4, wrapper form). The mechanism contract:
+// ukp invokes `amux` with `--events`, consumes the AG-UI JSONL, and derives
+// everything it needs from the event stream. amux's human stderr is never
+// forwarded on the success path (the command layer writes its own
+// endpoint-flavored notes); amux's classified stderr lines are consulted
+// only when the process exits non-zero without a derivable outcome.
 
-export interface AgentSubstrate {
-  handle: string;
-  tier: "sdk";
-  command: readonly string[];
+/** amux's sandbox vocabulary (README trust model): pinned in both
+ * directions so the substrate's own default is never ridden. */
+export type AmuxSandboxTier = "read-only" | "workspace-write";
+
+/** The endpoint-declared write tier mapped onto amux's invocation flag —
+ * the policy vocabulary (manifest `write`) never leaks into the mechanism
+ * argv (ADR-SESSION-004: the grant is resolved before the spawn). */
+export function amuxSandboxTier(write: SessionWriteTier): AmuxSandboxTier {
+  return write === "workspace" ? "workspace-write" : "read-only";
 }
 
-export interface SessionRunRequest {
-  /** Endpoint folder — the session's working anchor (cwd + --cd). */
-  folder: string;
-  /** Brief (spawn) or message (send); passed through verbatim (spec §7). */
-  prompt: string;
-  /** Write permission tier resolved from the endpoint manifest (owner ruling
-   * 2026-10-18): the capability maps it to the substrate sandbox but never
-   * invents a grant — no default here, the caller decides. */
-  write: SessionWriteTier;
-  /** Native id to resume (send); absent on spawn. */
-  resumeId?: string;
-}
+export type AmuxInvocation =
+  | {
+      kind: "spawn";
+      /** Endpoint folder — amux anchors the session to this path. */
+      folder: string;
+      /** The registry-declared agent command, passed through verbatim. */
+      agentCommand: readonly string[];
+      prompt: string;
+      sandbox: AmuxSandboxTier;
+    }
+  | {
+      kind: "send";
+      /** Native session id to resume. */
+      sessionId: string;
+      prompt: string;
+      sandbox: AmuxSandboxTier;
+    };
 
-export interface SessionRunOutcome {
-  /** Native id captured from thread.started (spawn); undefined when the
-   * substrate never announced one (run failed before the first event). */
-  nativeId?: string;
+/** What ukp derives from one amux invocation (spec §4 derivation rules). */
+export interface AmuxRunOutcome {
+  /** First event's threadId (spawn: the native session id); undefined when
+   * amux emitted no events at all. */
+  threadId?: string;
   outcome: "finished" | "failed";
-  /** The turn's final agent message — the default report face (stdout);
-   * undefined when the run produced no agent message. codex SDK
-   * `finalResponse` semantics: the event stream stays substrate. */
+  /** The turn's final agent message — the default report face. */
   finalMessage?: string;
+  /** Failure detail for the command layer's stderr note. */
   detail?: string;
+  /** The AG-UI JSONL lines verbatim (amux's face, ukp never rewrites) —
+   * the `--events` passthrough payload. */
+  eventLines: readonly string[];
 }
 
-/** AG-UI event emitted to the consumer; `threadId` is the session id. */
-export interface SessionEvent {
-  type: string;
-  threadId: string;
-  runId: string;
-  [key: string]: unknown;
+export interface AmuxRunOptions {
+  /** Explicit amux command (test injection, the rg.ts rgCommand precedent);
+   * never wrapped in the win32 relay. */
+  amuxCommand?: readonly string[];
+}
+
+/** Default amux location: the PATH binary (rg precedent — no bundled copy,
+ * no version negotiation; the wrapped tool owns its own distribution). */
+export function defaultAmuxCommand(): readonly string[] {
+  return ["amux"];
+}
+
+/** UKP_AMUX env override: the amux binary to spawn instead of the PATH
+ * lookup (explicit override — spawned as given, never relay-wrapped). */
+export function amuxCommandFromEnvironment(): readonly string[] | undefined {
+  const value = process.env.UKP_AMUX;
+  return value === undefined || value.trim() === "" ? undefined : [value];
+}
+
+export function resolveAmuxCommand(options?: AmuxRunOptions): readonly string[] {
+  return options?.amuxCommand ?? amuxCommandFromEnvironment() ?? defaultAmuxCommand();
 }
 
 /** Same env knob and defaults as the provider timeout (qmd) — spec §5
- * deliberately reuses UKP_PROVIDER_TIMEOUT_MS; minimum 1s. */
+ * deliberately reuses UKP_PROVIDER_TIMEOUT_MS; minimum 1s. The value is
+ * forwarded to amux as AMUX_TIMEOUT_MS so both layers run on one deadline
+ * instead of racing two different defaults. */
 export function sessionSubstrateTimeoutMs(): number {
   const raw = process.env.UKP_PROVIDER_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === "") return 60_000;
@@ -175,182 +219,88 @@ export function sessionSubstrateTimeoutMs(): number {
   return parsed;
 }
 
-interface RunBoundaryState {
-  threadId: string;
-  runId: string;
-  runStartedEmitted: boolean;
-  /** Terminal kind once a RUN_FINISHED/RUN_ERROR boundary has been emitted
-   * (substrate or synthesized) — drives the address-book outcome. */
-  terminalKind?: "finished" | "error";
-  nativeId?: string;
-  /** Last agent_message text seen — the report face of the outcome. */
-  finalMessage?: string;
+/** The amux invocation argv (without the binary): `amux <folder>
+ * <command...> --events --sandbox <tier> --text <prompt>` or the send
+ * form. `--events` is always on — the event stream is how ukp derives
+ * id/outcome/report; the caller's `--events` only selects what ukp
+ * re-emits on stdout. */
+export function amuxInvocationArgv(request: AmuxInvocation): string[] {
+  const tail = ["--events", "--sandbox", request.sandbox, "--text", request.prompt];
+  return request.kind === "spawn"
+    ? [request.folder, ...request.agentCommand, ...tail]
+    : ["send", request.sessionId, ...tail];
 }
 
-/** Maps one substrate JSONL item to zero or more AG-UI events per the
- * spec §4 table; pure — the run-boundary synthesis rules are applied by
- * the caller so the table stays independently testable. */
-export function mapSubstrateItem(
-  item: Record<string, unknown>,
-  state: RunBoundaryState,
-): SessionEvent[] {
-  // Pairing invariant (spec §4): once a terminal boundary has been emitted,
-  // the run is closed — later substrate items (e.g. `error` trailing
-  // `turn.failed`) map to nothing. Exactly one RUN_STARTED…terminal pair.
-  if (state.terminalKind !== undefined) return [];
-  const events: SessionEvent[] = [];
-  const boundary = (type: string, extra?: Record<string, unknown>): SessionEvent => ({
-    type,
-    threadId: state.threadId,
-    runId: state.runId,
-    ...(extra ?? {}),
-  });
-  const byId = (id: unknown): string => (typeof id === "string" ? id : randomUUID());
+/** amux's classified stderr line: `amux: <label>: <message>` (exit codes
+ * 2 = usage, 1 = runtime, the label carries the classification). Mapped
+ * onto ukp's classes; labels inherit amux's vocabulary so the wrapper's
+ * classification stays honest about which layer failed. */
+const AMUX_ERROR_CLASS_BY_LABEL: Readonly<Record<string, SessionErrorClass>> = {
+  "usage error": "usage",
+  "run failed": "run-failed",
+  "agent substrate unavailable": "substrate-unavailable",
+};
 
-  switch (item.type) {
-    case "thread.started": {
-      if (typeof item.thread_id === "string") {
-        state.nativeId = item.thread_id;
-        state.threadId = item.thread_id;
-      }
-      events.push(boundary("RUN_STARTED"));
-      state.runStartedEmitted = true;
-      break;
-    }
-    case "turn.started": {
-      if (!state.runStartedEmitted) {
-        events.push(boundary("RUN_STARTED"));
-        state.runStartedEmitted = true;
-      }
-      events.push(boundary("STEP_STARTED", { stepName: "turn" }));
-      break;
-    }
-    case "turn.completed": {
-      if (!state.runStartedEmitted) {
-        events.push(boundary("RUN_STARTED"));
-        state.runStartedEmitted = true;
-      }
-      events.push(boundary("STEP_FINISHED", { stepName: "turn" }));
-      events.push(boundary("RUN_FINISHED"));
-      state.terminalKind = "finished";
-      break;
-    }
-    case "turn.failed":
-    case "error": {
-      if (!state.runStartedEmitted) {
-        events.push(boundary("RUN_STARTED"));
-        state.runStartedEmitted = true;
-      }
-      const detail = item.type === "turn.failed" && isRecord(item.error)
-        ? String(item.error.message ?? "turn failed")
-        : String(item.message ?? (item.type === "error" ? "stream error" : "turn failed"));
-      events.push(boundary("RUN_ERROR", { message: detail }));
-      state.terminalKind = "error";
-      break;
-    }
-    case "item.completed": {
-      if (!state.runStartedEmitted) {
-        events.push(boundary("RUN_STARTED"));
-        state.runStartedEmitted = true;
-      }
-      const inner = isRecord(item.item) ? item.item : {};
-      if (inner.type === "agent_message" && typeof inner.text === "string") {
-        state.finalMessage = inner.text;
-        const messageId = byId(inner.id);
-        events.push(boundary("TEXT_MESSAGE_START", { messageId, role: "assistant" }));
-        events.push(boundary("TEXT_MESSAGE_CONTENT", { messageId, content: inner.text }));
-        events.push(boundary("TEXT_MESSAGE_END", { messageId }));
-      } else if (inner.type === "command_execution" || inner.type === "mcp_tool_call") {
-        const toolCallId = byId(inner.id);
-        const args = inner.type === "mcp_tool_call"
-          ? JSON.stringify(inner.arguments ?? {})
-          : String(inner.command ?? "");
-        events.push(boundary("TOOL_CALL_START", {
-          toolCallId,
-          toolCallName: String(inner.command ?? inner.tool ?? inner.type),
-        }));
-        events.push(boundary("TOOL_CALL_ARGS", { toolCallId, args }));
-        events.push(boundary("TOOL_CALL_END", { toolCallId }));
-        events.push(boundary("TOOL_CALL_RESULT", {
-          toolCallId,
-          content: String(inner.aggregated_output ?? inner.result ?? ""),
-        }));
-      }
-      // Other item kinds (reasoning / file_change / …): spec §4 v0 drops them.
-      break;
-    }
-    default:
-      break; // item.started / item.updated and unknown kinds carry no v0 output.
+function parseAmuxClassifiedLine(stderrText: string): { errorClass: SessionErrorClass; message: string } | undefined {
+  for (const line of stderrText.split(/\r?\n/)) {
+    const match = /^amux: ([^:]+): (.*)$/.exec(line);
+    if (match === null) continue;
+    const errorClass = AMUX_ERROR_CLASS_BY_LABEL[match[1]!];
+    if (errorClass !== undefined) return { errorClass, message: match[2]! };
   }
-  return events;
+  return undefined;
+}
+
+/** ukp owns the timeout knob; amux's remedy text is re-pointed so the
+ * user-facing knob stays UKP_PROVIDER_TIMEOUT_MS (spec §4). */
+function inheritAmuxMessage(message: string): string {
+  return message.replaceAll("AMUX_TIMEOUT_MS", "UKP_PROVIDER_TIMEOUT_MS");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Runs one substrate invocation, streaming mapped AG-UI events through
- * `emit` as JSON lines, and enforces the spec §4 pairing synthesis: exactly
- * one RUN_STARTED…RUN_FINISHED|RUN_ERROR pair per invocation regardless of
- * what the substrate actually printed. */
-export async function runAgentSubstrate(
-  substrate: AgentSubstrate,
-  request: SessionRunRequest,
-  knownThreadId: string,
-  emit: (line: string) => void,
-): Promise<SessionRunOutcome> {
-  const state: RunBoundaryState = {
-    threadId: knownThreadId,
-    runId: randomUUID(),
-    runStartedEmitted: false,
-  };
-  const emitEvent = (event: SessionEvent): void => {
-    emit(JSON.stringify(event));
-  };
+function amuxUnavailableMessage(command: readonly string[], reason: string): string {
+  return `amux is not available (${reason}: '${command.join(" ")}') — install amux on PATH or set UKP_AMUX to its binary`;
+}
 
-  const argv = [
-    ...substrate.command,
-    "exec",
-    "--experimental-json",
-    "--cd",
-    request.folder,
-    // Endpoint folders are frequently not git repos; codex's own SDK exposes
-    // the same skip (KB_codex exec.ts skipGitRepoCheck). The trust gate for
-    // hosting is the manifest allowlist (ADR-SESSION-001), not codex's
-    // directory check.
-    "--skip-git-repo-check",
-    // codex exec's own default is read-only; the tier is pinned in BOTH
-    // directions so the face stays deterministic across substrate upgrades.
-    // Writable scope is codex's workspace = the spawn cwd (the endpoint
-    // folder above): workspace-write grants writes inside the endpoint and
-    // nowhere else, and read-only keeps sessions as scouts (owner ruling
-    // 2026-10-18 — the grant comes from the endpoint manifest, never from
-    // an adapter default or a runtime approval).
-    ...(request.write === "workspace"
-      ? ["--sandbox", "workspace-write"]
-      : ["--sandbox", "read-only"]),
-    ...(request.resumeId !== undefined ? ["resume", request.resumeId] : []),
-    request.prompt,
-  ];
+/** Runs one amux invocation and derives the outcome from its AG-UI event
+ * stream (spec §4): id = first event threadId, finalMessage = last
+ * TEXT_MESSAGE_CONTENT, outcome = last RUN_FINISHED/RUN_ERROR with the
+ * amux exit code as the final authority. When the stream ends without a
+ * terminal event, the exit-code synthesis rule closes the pair — a
+ * defensive backstop one layer up from amux's own guarantee. */
+export async function runAmuxSession(
+  request: AmuxInvocation,
+  options: AmuxRunOptions = {},
+): Promise<AmuxRunOutcome> {
+  const command = resolveAmuxCommand(options);
+  const argv = [...command, ...amuxInvocationArgv(request)];
+  // Win32 default-PATH spawns ride the powershell relay (the rg precedent:
+  // the direct bun→tool edge is Defender-taxed, and npm .cmd shims do not
+  // resolve without it). Explicit overrides (context or UKP_AMUX) are
+  // spawned as given — the rg rule that test injections stay unwrapped.
+  const explicitCommand = options.amuxCommand !== undefined || amuxCommandFromEnvironment() !== undefined;
+  const spawnArgv = process.platform === "win32" && !explicitCommand
+    ? toolRelayArgv(argv, { notFoundGuard: true })
+    : argv;
 
   let child: import("bun").Subprocess<"ignore", "pipe", "pipe">;
   try {
-    child = Bun.spawn(argv, {
-      cwd: request.folder,
-      // Spec §7.2: the substrate process environment equals the caller's
-      // environment (local single-user tier) — explicit snapshot so the
-      // contract is structural, not an inheritance default.
-      env: { ...process.env },
+    child = Bun.spawn(spawnArgv, {
+      // Spec §7.2 (local single-user tier): the process environment equals
+      // the caller's, plus the shared timeout knob — amux runs its own
+      // substrate timer on the same deadline instead of a second default.
+      env: { ...process.env, AMUX_TIMEOUT_MS: String(sessionSubstrateTimeoutMs()) },
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
   } catch (error) {
-    throw new SessionError(
-      "substrate-unavailable",
-      `agent substrate '${substrate.handle}' failed to start (${argv.join(" ")})`,
-      { cause: error },
-    );
+    throw new SessionError("substrate-unavailable", amuxUnavailableMessage(command, "failed to start"), {
+      cause: error,
+    });
   }
 
   const timedOut = { value: false };
@@ -359,15 +309,22 @@ export async function runAgentSubstrate(
     child.kill("SIGTERM");
   }, sessionSubstrateTimeoutMs());
 
-  const stderrChunks: string[] = [];
-  const drainStderr = async (): Promise<void> => {
+  const eventLines: string[] = [];
+  let threadId: string | undefined;
+  let finalMessage: string | undefined;
+  let terminal: { kind: "finished" | "failed"; runId?: string } | undefined;
+  let lastRunId: string | undefined;
+
+  const drainStderr = async (): Promise<string> => {
     const reader = (child.stderr as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
+    let text = "";
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      stderrChunks.push(decoder.decode(value, { stream: true }));
+      text += decoder.decode(value, { stream: true });
     }
+    return text;
   };
   const drainStdout = async (): Promise<void> => {
     const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
@@ -381,69 +338,95 @@ export async function runAgentSubstrate(
       while (newline !== -1) {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
-        if (line !== "") {
-          let item: unknown;
-          try {
-            item = JSON.parse(line);
-          } catch {
-            continue; // Non-JSON substrate noise: ignored (spec §4 resilience).
-          }
-          if (isRecord(item)) {
-            for (const event of mapSubstrateItem(item, state)) emitEvent(event);
-          }
+        if (line === "") continue;
+        eventLines.push(line);
+        let event: unknown;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          continue; // Non-JSON noise on the events channel: passed through, never derived from.
         }
+        if (!isRecord(event)) continue;
+        if (threadId === undefined && typeof event.threadId === "string") threadId = event.threadId;
+        if (typeof event.runId === "string") lastRunId = event.runId;
+        if (event.type === "TEXT_MESSAGE_CONTENT" && typeof event.content === "string") {
+          finalMessage = event.content;
+        }
+        if (event.type === "RUN_FINISHED") terminal = { kind: "finished", runId: lastRunId };
+        if (event.type === "RUN_ERROR") terminal = { kind: "failed", runId: lastRunId };
         newline = buffer.indexOf("\n");
       }
     }
   };
 
-  let childExit: number | null = null;
+  let stderrText = "";
+  let amuxExitCode: number | null = null;
   try {
-    await Promise.all([drainStdout(), drainStderr()]);
-    childExit = await child.exited;
+    await Promise.all([
+      drainStdout(),
+      drainStderr().then((text) => {
+        stderrText = text;
+      }),
+    ]);
+    amuxExitCode = await child.exited;
   } finally {
     clearTimeout(timer);
   }
 
+  const stderrTail = stderrText.trim().split(/\r?\n/).filter((line) => line !== "").slice(-3).join(" | ");
+  const tailSuffix = stderrTail === "" ? "" : `: ${stderrTail}`;
+  const classified = parseAmuxClassifiedLine(stderrText);
+
   if (timedOut.value) {
-    if (state.runStartedEmitted && state.terminalKind === undefined) {
-      emitEvent({ type: "RUN_ERROR", threadId: state.threadId, runId: state.runId, message: "substrate timed out" });
-      state.terminalKind = "error";
-    }
     throw new SessionError(
       "substrate-unavailable",
-      `agent substrate '${substrate.handle}' timed out after ${sessionSubstrateTimeoutMs() / 1000}s (set UKP_PROVIDER_TIMEOUT_MS to adjust)`,
+      `amux timed out after ${sessionSubstrateTimeoutMs() / 1000}s (set UKP_PROVIDER_TIMEOUT_MS to adjust)`,
     );
+  }
+  if (amuxExitCode === TOOL_NOT_FOUND_EXIT && process.platform === "win32" && !explicitCommand) {
+    throw new SessionError("substrate-unavailable", amuxUnavailableMessage(command, "not found on PATH"));
   }
 
-  if (!state.runStartedEmitted) {
-    // Substrate produced no mapped events at all: a crash before the first
-    // event is substrate failure, not a run failure (spec §5).
-    const tail = stderrChunks.join("").trim().split(/\r?\n/).slice(-3).join(" | ");
-    throw new SessionError(
-      "substrate-unavailable",
-      `agent substrate '${substrate.handle}' exited without events (code ${childExit})${tail === "" ? "" : `: ${tail}`} — check the [[agents]] command in the Host Registry`,
-    );
-  }
-  if (state.terminalKind === undefined) {
-    // Synthesis rule 2 (spec §4): stream ended without a terminal event —
-    // the exit code decides which boundary closes the run.
-    if (childExit === 0) {
-      emitEvent({ type: "RUN_FINISHED", threadId: state.threadId, runId: state.runId });
-      state.terminalKind = "finished";
-    } else {
-      emitEvent({ type: "RUN_ERROR", threadId: state.threadId, runId: state.runId, message: `substrate exited with code ${childExit}` });
-      state.terminalKind = "error";
+  if (eventLines.length === 0) {
+    // amux produced no event stream: a mechanism/substrate failure before
+    // the first event (amux classifies its own; the classes inherit).
+    if (classified !== undefined) {
+      throw new SessionError(classified.errorClass, inheritAmuxMessage(classified.message));
     }
+    if (amuxExitCode === 2) {
+      throw new SessionError("usage", `amux exited with a usage error (code 2)${tailSuffix}`);
+    }
+    throw new SessionError("substrate-unavailable", `amux exited without events (code ${amuxExitCode ?? "signal"})${tailSuffix}`);
   }
 
-  // A non-zero exit overrides a substrate-claimed RUN_FINISHED: the process
-  // itself is the final authority on its own outcome.
-  const failed = state.terminalKind === "error" || childExit !== 0;
+  if (terminal === undefined) {
+    // Backstop synthesis (amux already closes every pair; this covers an
+    // amux crash mid-stream): the exit code decides the boundary.
+    const failed = amuxExitCode !== 0;
+    const event = {
+      type: failed ? "RUN_ERROR" : "RUN_FINISHED",
+      threadId: threadId ?? (request.kind === "send" ? request.sessionId : randomUUID()),
+      runId: lastRunId ?? randomUUID(),
+      ...(failed ? { message: `amux exited with code ${amuxExitCode ?? "signal"}` } : {}),
+    };
+    eventLines.push(JSON.stringify(event));
+    terminal = { kind: failed ? "failed" : "finished", runId: event.runId };
+  }
+
+  // The process is the final authority on its own outcome: a non-zero
+  // amux exit fails the run even when the stream claimed RUN_FINISHED.
+  const failed = amuxExitCode !== 0 || terminal.kind === "failed";
   return {
-    nativeId: state.nativeId,
+    ...(threadId === undefined ? {} : { threadId }),
     outcome: failed ? "failed" : "finished",
-    ...(state.finalMessage !== undefined ? { finalMessage: state.finalMessage } : {}),
-    ...(failed ? { detail: `see RUN_ERROR on run ${state.runId}` } : {}),
+    ...(finalMessage === undefined ? {} : { finalMessage }),
+    ...(failed
+      ? {
+          detail: terminal.kind === "failed" && terminal.runId !== undefined
+            ? `see RUN_ERROR on run ${terminal.runId}`
+            : `amux exited with code ${amuxExitCode ?? "signal"}`,
+        }
+      : {}),
+    eventLines,
   };
 }

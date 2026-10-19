@@ -98,6 +98,9 @@ export interface CliContext {
   resolveProvider?: ProviderResolver;
   qmdCommand?: readonly string[];
   rgCommand?: readonly string[];
+  /** Overrides the amux binary behind `ukp session` (wrapper mechanism,
+   * rg.ts rgCommand precedent). */
+  amuxCommand?: readonly string[];
   artifactRoot?: string;
   artifactRunId?: string;
   now?: Date;
@@ -381,6 +384,7 @@ export function runCli(
   if (command === "session") {
     return writeCommandResultMaybeAsync(executeSessionCommand(args.slice(1), {
       registryPath,
+      amuxCommand: context.amuxCommand,
     }), stdout, stderr);
   }
 

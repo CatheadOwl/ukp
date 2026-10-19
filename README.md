@@ -159,7 +159,7 @@ Session commands (opt-in per endpoint):
 
 | Command | What it does |
 |---|---|
-| `ukp session` | Spawns and converses with agent sessions anchored to an endpoint — `spawn` / `send` / `status` / `list` (sdk tier). Opt-in: the endpoint manifest must declare `[capabilities.session]` with an `agents` allowlist, and each agent needs a `[[agents]]` entry in the Host Registry. spawn/send print the agent's final report on stdout (`--events` opts into the AG-UI JSONL event stream — exactly one run boundary pair per call); the session id is the agent's native thread id — `ukp session send <id>` resumes it. `wait` / `answer` / `stop` are reserved for the app-server tier. Conversation history stays in the agent's own global space; UKP records only the address book. |
+| `ukp session` | Spawns and converses with agent sessions anchored to an endpoint — `spawn` / `send` / `status` / `list` (sdk tier). Opt-in: the endpoint manifest must declare `[capabilities.session]` with an `agents` allowlist, and each agent needs a `[[agents]]` entry in the Host Registry. The session engine is the `amux` binary (found on PATH; point `UKP_AMUX` at a specific build to override). spawn/send print the agent's final report on stdout (`--events` opts into the AG-UI JSONL event stream — exactly one run boundary pair per call); the session id is the agent's native thread id — `ukp session send <id>` resumes it. `wait` / `answer` / `stop` are reserved for the app-server tier. Conversation history stays in the agent's own global space; UKP records only the address book. |
 
 Registry commands:
 

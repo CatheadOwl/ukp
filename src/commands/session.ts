@@ -1,27 +1,31 @@
-// ukp_session W1 command surface (line spec §3/§5; ADR-SESSION-003 command
-// group). Two-level dispatch like init/guide: `ukp session <sub>`. The
-// capability core (capabilities/session.ts) owns mechanisms and classified
-// errors; this adapter owns argument surfaces, exit codes and channel text
-// (ADR 0021): stdout prints the agent's final report by default (plain
-// text, pipe-friendly — repo discipline) with the AG-UI event JSONL behind
-// --events; stderr carries human notes and classified error lines.
+// ukp_session W1→W2/G3 command surface (line spec §3/§5; ADR-SESSION-003
+// command group). Two-level dispatch like init/guide: `ukp session <sub>`.
+// The capability core (capabilities/session.ts) owns the amux consumption
+// mechanism and classified errors (the substrate mechanism itself retired
+// to the amux binary — extraction ruling X4); this adapter owns the policy
+// face: endpoint addressing, the manifest authorization gate, argument
+// surfaces, exit codes and channel text (ADR 0021): stdout prints the
+// agent's final report by default (plain text, pipe-friendly — repo
+// discipline) with the AG-UI event JSONL behind --events; stderr carries
+// ukp's own human notes (amux's notes are suppressed on success) and
+// classified error lines.
 
 import { readFileSync } from "node:fs";
 import {
   appendSessionRecord,
+  amuxSandboxTier,
   loadSessionRecords,
   resolveSessionRecord,
-  runAgentSubstrate,
+  runAmuxSession,
   sessionStorePath,
   updateSessionRecord,
   SessionError,
-  type AgentSubstrate,
   type SessionErrorClass,
 } from "../capabilities/session.ts";
 import { resolveSessionAgents, resolveSessionWriteTier, type SessionWriteTier } from "../config/agent-backed.ts";
 import { loadManifest, ManifestError } from "../config/manifest.ts";
 import { isRemoteBinding, localPathOf, readRegistry, readRegistryAgents, RegistryError } from "../registry.ts";
-import type { RegistryBinding } from "../registry.ts";
+import type { RegistryAgent, RegistryBinding } from "../registry.ts";
 
 export interface SessionCommandResult {
   exitCode: number;
@@ -32,6 +36,9 @@ export interface SessionCommandResult {
 export interface SessionCommandContext {
   registryPath: string;
   now?: () => Date;
+  /** amux binary override (test injection / explicit deployments), the
+   * rg.ts rgCommand precedent; defaults to PATH lookup + UKP_AMUX. */
+  amuxCommand?: readonly string[];
 }
 
 /** Root-help one-liner (spec §3); feeds COMMAND_DESCRIPTIONS in cli.ts. */
@@ -92,6 +99,65 @@ function renderSessionHelp(): string {
   ].join("\n");
 }
 
+/** Per-subcommand help (TODO 20261018-2345, eaten with the G3 command-layer
+ * rewrite): `ukp session <sub> --help` renders the subcommand's own usage
+ * face — the group help is never a substitute for the flag surface. */
+function renderSessionSubcommandHelp(subcommand: SessionSubcommand): string {
+  switch (subcommand) {
+    case "spawn":
+      return [
+        "ukp session spawn — start a session in an endpoint folder",
+        "",
+        `Usage: ${SESSION_USAGE_LINES.spawn}`,
+        "",
+        "--endpoint <name>   the endpoint hosting the session (required)",
+        "--agent <handle>    an agent handle allowed by the endpoint manifest (required)",
+        "--brief <file>      brief file; its full verbatim content is the prompt (one of --brief/--text)",
+        "--text <string>     the prompt text (one of --brief/--text)",
+        "--events            print the AG-UI JSONL event stream instead of the final report",
+        "",
+        "stdout carries the agent's final report by default; stderr carries",
+        "human notes. Hosting is opt-in: the endpoint manifest must declare",
+        "[capabilities.session] with the agent in its allowlist, and the agent",
+        "needs a [[agents]] entry in the Host Registry.",
+      ].join("\n");
+    case "send":
+      return [
+        "ukp session send — continue a session by id (resume run)",
+        "",
+        `Usage: ${SESSION_USAGE_LINES.send}`,
+        "",
+        "<id>                the session id from spawn/status/list",
+        "--brief <file>      brief file; its full verbatim content is the prompt (one of --brief/--text)",
+        "--text <string>     the prompt text (one of --brief/--text)",
+        "--events            print the AG-UI JSONL event stream instead of the final report",
+        "",
+        "The conversation history stays in the agent's own global space; send",
+        "delivers one more turn. The write tier is re-read from the endpoint's",
+        "current declaration every run — revoking write downgrades the next",
+        "send, not just the next spawn.",
+      ].join("\n");
+    case "status":
+      return [
+        "ukp session status — show one address-book entry",
+        "",
+        `Usage: ${SESSION_USAGE_LINES.status}`,
+        "",
+        "Prints id / endpoint / agent / tier / owner / created_at /",
+        "last_run_at / last_outcome for one session.",
+      ].join("\n");
+    case "list":
+      return [
+        "ukp session list — list sessions, one per line",
+        "",
+        `Usage: ${SESSION_USAGE_LINES.list}`,
+        "",
+        "One line per session: id, endpoint, agent, tier, last_outcome;",
+        "--endpoint filters to one endpoint's sessions.",
+      ].join("\n");
+  }
+}
+
 interface ParsedFlags {
   values: Map<string, string>;
   positionals: string[];
@@ -111,7 +177,7 @@ function parseSessionFlags(
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index]!;
     if (token === "--help") {
-      throw new SessionHelpRequest();
+      throw new SessionHelpRequest(subcommand);
     }
     if (token.startsWith("-")) {
       if (!allowed.includes(token) && !booleanFlags.includes(token)) {
@@ -137,7 +203,11 @@ function parseSessionFlags(
   return { values, positionals };
 }
 
-class SessionHelpRequest extends Error {}
+class SessionHelpRequest extends Error {
+  constructor(readonly subcommand?: SessionSubcommand) {
+    super();
+  }
+}
 
 /** --brief <file> | --text <string>, exactly one (spec §3); non-empty. */
 function readPrompt(
@@ -187,7 +257,7 @@ function authorizedSubstrate(
   folder: string,
   endpoint: string,
   handle: string,
-): { substrate: AgentSubstrate; write: SessionWriteTier } {
+): { substrate: RegistryAgent; write: SessionWriteTier } {
   let allowlist: readonly string[];
   let write: SessionWriteTier;
   try {
@@ -249,7 +319,11 @@ function composeRunStdout(
 
 function renderSessionCommandError(error: unknown): SessionCommandResult {
   if (error instanceof SessionHelpRequest) {
-    return { exitCode: 0, stdout: renderSessionHelp(), stderr: "" };
+    return {
+      exitCode: 0,
+      stdout: `${error.subcommand === undefined ? renderSessionHelp() : renderSessionSubcommandHelp(error.subcommand)}\n`,
+      stderr: "",
+    };
   }
   const classified = error instanceof SessionError
     ? error
@@ -262,7 +336,7 @@ function renderSessionCommandError(error: unknown): SessionCommandResult {
   };
   const hint: Partial<Record<SessionErrorClass, string>> = {
     "not-authorized": " — hosting is opt-in via [capabilities.session] agents in the endpoint manifest",
-    "substrate-unavailable": " — check the [[agents]] entries in the Host Registry",
+    "substrate-unavailable": " — check amux availability and the [[agents]] entries in the Host Registry",
   };
   const stderr = `ukp session: ${label[classified.errorClass]}: ${classified.message}${hint[classified.errorClass] ?? ""}`;
   return { exitCode: SESSION_EXIT_BY_CLASS[classified.errorClass], stdout: "", stderr };
@@ -284,14 +358,20 @@ async function runSpawn(
   const { substrate, write } = authorizedSubstrate(context.registryPath, folder, endpoint, handle);
   const storePath = sessionStorePath(context.registryPath);
 
-  const lines: string[] = [];
-  const outcome = await runAgentSubstrate(substrate, { folder, prompt, write }, crypto.randomUUID(), (line) => {
-    lines.push(line);
-  });
+  const outcome = await runAmuxSession(
+    {
+      kind: "spawn",
+      folder,
+      agentCommand: substrate.command,
+      prompt,
+      sandbox: amuxSandboxTier(write),
+    },
+    { amuxCommand: context.amuxCommand },
+  );
 
   const nowIso = (context.now?.() ?? new Date()).toISOString();
   const notes: string[] = [];
-  const id = outcome.nativeId;
+  const id = outcome.threadId;
   if (id !== undefined) {
     appendSessionRecord(storePath, {
       id,
@@ -313,7 +393,7 @@ async function runSpawn(
     : `session ${label} failed${outcome.detail === undefined ? "" : ` — ${outcome.detail}`}`);
   return {
     exitCode: outcome.outcome === "finished" ? 0 : 1,
-    stdout: composeRunStdout(flags.values.get("--events") === "true", lines, outcome.finalMessage),
+    stdout: composeRunStdout(flags.values.get("--events") === "true", outcome.eventLines, outcome.finalMessage),
     stderr: `${notes.join("\n")}\n`,
   };
 }
@@ -332,7 +412,7 @@ async function runSend(
   const storePath = sessionStorePath(context.registryPath);
   const record = resolveSessionRecord(loadSessionRecords(storePath), id);
   const { folder } = resolveLocalFolder(context.registryPath, record.endpoint);
-  let substrate: AgentSubstrate;
+  let substrate: RegistryAgent;
   try {
     substrate = readRegistryAgents(context.registryPath).find((candidate) => candidate.handle === record.agent)!;
   } catch (error) {
@@ -366,19 +446,19 @@ async function runSend(
     throw error;
   }
 
-  const lines: string[] = [];
-  const outcome = await runAgentSubstrate(
-    substrate,
-    { folder, prompt, write, resumeId: record.id },
-    record.id,
-    (line) => {
-      lines.push(line);
+  const outcome = await runAmuxSession(
+    {
+      kind: "send",
+      sessionId: record.id,
+      prompt,
+      sandbox: amuxSandboxTier(write),
     },
+    { amuxCommand: context.amuxCommand },
   );
   updateSessionRecord(storePath, record.id, (context.now?.() ?? new Date()).toISOString(), outcome.outcome);
   return {
     exitCode: outcome.outcome === "finished" ? 0 : 1,
-    stdout: composeRunStdout(flags.values.get("--events") === "true", lines, outcome.finalMessage),
+    stdout: composeRunStdout(flags.values.get("--events") === "true", outcome.eventLines, outcome.finalMessage),
     stderr: `session ${record.id} resumed (agent ${record.agent}, tier sdk, endpoint ${record.endpoint})\n`
       + (outcome.outcome === "finished"
         ? `session ${record.id} finished\n`
