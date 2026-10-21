@@ -19,8 +19,8 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
 
 | 动词 | 命令 | 要点 |
 |---|---|---|
-| 检索 | `ukp search "<q>" --endpoint <e>` | 索引深查（需 QMD）；结果交 docid + 已验证 `ukp://`；`--recursive` 只走 manifest 声明的 dependencies |
-| 读取 | `ukp read <path\|ukp://…\|docid> --endpoint <e>` | 免 provider；文件迁移 best-effort 找回（git 史 → search） |
+| 检索 | `ukp search "<q>" --endpoint <e>` | 索引深查（需 QMD）；结果行自带 `read:` 提示（docid 交接，照抄可用）+ 已验证 `ukp://`；`--recursive` 只走 manifest 声明的 dependencies |
+| 读取 | `ukp read <uri>` / `<path> --endpoint <e>` / `<docid> --endpoint <e>` | URI **自带权威、不叠 `--endpoint`**；path / docid 形态**要配** `--endpoint`；免 provider；文件迁移 best-effort 找回（git 史 → search） |
 | 大纲 | `ukp nav --endpoint <e> [--depth N]` | Markdown 结构，免 provider |
 | 字面 | `ukp rg "<re>" --endpoint <e>` | 免索引免声明；`--files` 列文件；结果即 read-ready 引用 |
 | 提案 | `ukp propose --endpoint <e> --id <slug> --file <f>` | 幂等建议箱——created / unchanged / updated，仅 updated bump revision；写面 opt-in（manifest 声明才有） |
@@ -29,9 +29,11 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
   （`.ukp/client.toml`），`-g` = 全本地 registry；动命令前 `ukp
   inspect` 先看命中谁。
 - **registry**：`ukp list` 现查 bindings + capabilities（不背清单，
-  会漂）；新 endpoint = 文件夹内 `ukp init service` → 要写面就声明
-  capabilities → `ukp diagnose` → `ukp register [--name <handle>]`；
-  远端消费 = `ukp register --url ssh://<host>`（TOFU 钉扎）。
+  会漂）；新 endpoint = 文件夹内 `ukp init service --name <slug>`
+  （本地名 = manifest 顶层 `name`，后编辑 service.toml 亦可）→ 要写面
+  就声明 capabilities → `ukp diagnose` → `ukp register`；远端消费 =
+  `ukp register --url ssh://<host>`（TOFU 钉扎）。`register --name`
+  仅远端句柄专用（须配 `--url`），本地命名不走它。
 - **能力分级**：read / nav / rg 是本地 Service 的派生默认，零 provider；
   search / update 需 QMD 在 PATH（缺则 `list` 报 unavailable，退 rg）。
 - **机器面**：`--json`（read 用 `--format json`）。
@@ -57,4 +59,4 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
 - 深料住 CLI 自带文档面（本 skill 不另抄正本）：`ukp guide service` /
   `client` / `rg` / `remote` / `propose`。
 - 契约正本：仓内 `ukp/README.md`（Commands 全表、Remote、Security）。
-- 测题（首验用）：`evals/evals.json`。
+- 测题（首验用）：[evals/evals.json](evals/evals.json)。
