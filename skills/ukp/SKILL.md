@@ -1,6 +1,6 @@
 ---
 name: ukp
-description: ukp dispatch SOP — address folders as named knowledge endpoints (search, read, nav, rg, propose); registry bindings, scope semantics, and ukp:// reference handoff
+description: "ukp dispatch SOP — named knowledge endpoints (search, read, nav, rg, propose); registry and scope semantics; ukp:// and `{name}:path` cross-project references"
 ---
 
 # ukp · 知识面派遣（folder as a Service）
@@ -9,7 +9,11 @@ description: ukp dispatch SOP — address folders as named knowledge endpoints (
 
 用：按名字寻址本地/远端知识——五动词（search / read / nav / rg /
 propose）+ registry 管理 + scope 语义；产出里用 `ukp://` 引用交接
-（folder 可迁移，名字不迁）；把改动以幂等提案递给 endpoint owner。
+（folder 可迁移，名字不迁）；把改动以幂等提案递给 endpoint owner；
+解析 `{name}:path` 形跨仓引用（生态通形，非 ukp 专属——裁定与
+夹具见 [references/trigger-design.md](references/trigger-design.md)）：
+名在注册表，`ukp read --endpoint <name> <path>` 即开（基径 =
+注册根，项目 endpoint 即仓根）；名不在，ukp 让位。
 
 不用：一次性本地文件操作（直接 rg / cat 更省）；agent 进程派遣
 （amux 的辖区——`ukp session` 以 amux 为引擎，纪律见其 face）；
@@ -42,7 +46,9 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
 
 1. **查知识**：`ukp inspect` 定 scope → `ukp rg "<词>"` 字面先探（免
    provider）→ 要语义深度再 `ukp search` → `ukp read <引用>` 取正文。
-2. **交接**：产出中的知识引用写 `ukp://<e>/<path>`，不落物理路径。
+2. **交接**：产出中的知识引用写 `ukp://<e>/<path>`，不落物理路径；
+   解析 `{name}:path` 形速记同走 read（名在注册表即可开，基径 =
+   注册根）。
 3. **提案**：起草文件 → `ukp propose --id <slug> --file <f>`；重提同
    id 不 dup，owner 在 endpoint inbox 裁决。
 4. **session**（opt-in endpoint 才有）：`ukp session spawn / send /
@@ -59,4 +65,6 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
 - 深料住 CLI 自带文档面（本 skill 不另抄正本）：`ukp guide service` /
   `client` / `rg` / `remote` / `propose`。
 - 契约正本：仓内 `ukp/README.md`（Commands 全表、Remote、Security）。
+- 触发设计夹具（`{name}:path` 联想裁定与改面导轨）：
+  [references/trigger-design.md](references/trigger-design.md)。
 - 测题（首验用）：[evals/evals.json](evals/evals.json)。

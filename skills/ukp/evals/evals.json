@@ -18,6 +18,12 @@
       "prompt": "ukp://cli-dev/SKILL.md 这个引用怎么打开？search 结果里的 docid 又是什么？",
       "expected_output": "ukp read <uri> 开盖即读；docid 是 search 结果的交接键，可直接喂 ukp read",
       "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "我在一个条目里看到跨仓引用 `ls-gates:write-time/simple-readme/fixer-prompt-v1.md`，帮我打开看看内容。",
+      "expected_output": "面触发：ukp list 查名——在注册表即 ukp read --endpoint 开（基径 = 注册根）；不在则让位或先 register，不硬凑",
+      "files": []
     }
   ]
 }
