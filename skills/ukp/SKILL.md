@@ -1,0 +1,60 @@
+---
+name: ukp
+description: ukp dispatch SOP — address folders as named knowledge endpoints (search, read, nav, rg, propose); registry bindings, scope semantics, and ukp:// reference handoff
+---
+
+# ukp · 知识面派遣（folder as a Service）
+
+## 何时用 / 何时不用
+
+用：按名字寻址本地/远端知识——五动词（search / read / nav / rg /
+propose）+ registry 管理 + scope 语义；产出里用 `ukp://` 引用交接
+（folder 可迁移，名字不迁）；把改动以幂等提案递给 endpoint owner。
+
+不用：一次性本地文件操作（直接 rg / cat 更省）；agent 进程派遣
+（amux 的辖区——`ukp session` 以 amux 为引擎，纪律见其 face）；
+provider（QMD）自身的配置维护（UKP 指路不代劳）。
+
+## 命令面（热数据，派遣每次查）
+
+| 动词 | 命令 | 要点 |
+|---|---|---|
+| 检索 | `ukp search "<q>" --endpoint <e>` | 索引深查（需 QMD）；结果交 docid + 已验证 `ukp://`；`--recursive` 只走 manifest 声明的 dependencies |
+| 读取 | `ukp read <path\|ukp://…\|docid> --endpoint <e>` | 免 provider；文件迁移 best-effort 找回（git 史 → search） |
+| 大纲 | `ukp nav --endpoint <e> [--depth N]` | Markdown 结构，免 provider |
+| 字面 | `ukp rg "<re>" --endpoint <e>` | 免索引免声明；`--files` 列文件；结果即 read-ready 引用 |
+| 提案 | `ukp propose --endpoint <e> --id <slug> --file <f>` | 幂等建议箱——created / unchanged / updated，仅 updated bump revision；写面 opt-in（manifest 声明才有） |
+
+- **scope**：`--endpoint <e>` 是正名选择器；缺省 = workspace 默认
+  （`.ukp/client.toml`），`-g` = 全本地 registry；动命令前 `ukp
+  inspect` 先看命中谁。
+- **registry**：`ukp list` 现查 bindings + capabilities（不背清单，
+  会漂）；新 endpoint = 文件夹内 `ukp init service` → 要写面就声明
+  capabilities → `ukp diagnose` → `ukp register [--name <handle>]`；
+  远端消费 = `ukp register --url ssh://<host>`（TOFU 钉扎）。
+- **能力分级**：read / nav / rg 是本地 Service 的派生默认，零 provider；
+  search / update 需 QMD 在 PATH（缺则 `list` 报 unavailable，退 rg）。
+- **机器面**：`--json`（read 用 `--format json`）。
+
+## 程序
+
+1. **查知识**：`ukp inspect` 定 scope → `ukp rg "<词>"` 字面先探（免
+   provider）→ 要语义深度再 `ukp search` → `ukp read <引用>` 取正文。
+2. **交接**：产出中的知识引用写 `ukp://<e>/<path>`，不落物理路径。
+3. **提案**：起草文件 → `ukp propose --id <slug> --file <f>`；重提同
+   id 不 dup，owner 在 endpoint inbox 裁决。
+4. **session**（opt-in endpoint 才有）：`ukp session spawn / send /
+   status / list`——amux 引擎，派遣纪律与停用状态以 amux 技能为正本。
+
+## 产出契约
+
+- 查询成功：引用开盖即读（`ukp read <uri>` 回到内容）。
+- 注册成功：`ukp list` 见名，capabilities 与声明一致。
+- 提案成功：propose 报三态之一；revision 只在 updated 时前进。
+
+## 载荷指针
+
+- 深料住 CLI 自带文档面（本 skill 不另抄正本）：`ukp guide service` /
+  `client` / `rg` / `remote` / `propose`。
+- 契约正本：仓内 `ukp/README.md`（Commands 全表、Remote、Security）。
+- 测题（首验用）：`evals/evals.json`。

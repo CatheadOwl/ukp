@@ -1,0 +1,23 @@
+{
+  "skill_name": "ukp",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我在写一个 CLI 工具，想查本机知识面里关于 CLI 表面设计的既有笔记，找最相关的几篇并给出可复核的引用。只做只读操作。",
+      "expected_output": "走 ukp 检索路径（inspect/list 定 scope → rg 字面探 → read 取文），产出 ukp:// 引用，不落物理路径",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "把这个文件夹注册成一个新的知识 endpoint 给 agent 用，名字叫 drill，验证可用。",
+      "expected_output": "init service → diagnose → register → list/inspect 验证 capabilities 与声明一致；全程不动 folder 内容",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "ukp://cli-dev/SKILL.md 这个引用怎么打开？search 结果里的 docid 又是什么？",
+      "expected_output": "ukp read <uri> 开盖即读；docid 是 search 结果的交接键，可直接喂 ukp read",
+      "files": []
+    }
+  ]
+}
