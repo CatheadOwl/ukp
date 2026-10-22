@@ -1,42 +1,61 @@
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import {
+  DEFAULT_EXCLUDE_DIRS,
+  DEFAULT_EXCLUDE_FILES,
+  builtinDescriptionProvider,
+  scanStructure,
+  type NavNode,
+  type ResolvedScanOptions,
+  type ScanDiagnostic,
+} from "@any-nav/scan";
 import { loadManifest, type ManifestCapability } from "../config/manifest.ts";
 import { resolveFileNativeCapability, unsupportedFileNativeProviderMessage } from "../config/file-native.ts";
 import { localPathOf, readRegistry } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { isInsideRealRoot, splitEndpointRelativeSegments } from "../path-safety.ts";
 
-// Nav capability: UKP-native file provider that
-// enumerates the Markdown structure of one endpoint. The design stance is
-// provider-owned visibility: the exclusion rules
-// below are the file provider's own visibility contract — the caller can
-// never override them from the command surface (path/depth/format only).
+// Nav capability: file provider whose scan engine is delegated to
+// `@any-nav/scan` (W2 / N3 re-ruling, 2026-10-22). The design stance is
+// provider-owned visibility: the exclusion rules below are the file
+// provider's own visibility contract — the caller can never override them
+// from the command surface (path/depth/format only). The engine owns the
+// walk (gitignore inheritance, dot/exclusion floors, .md-only pruning,
+// budget counting); UKP owns addressing, the route-root/depth projection,
+// the entry window and the ukp.nav.v1 envelope.
 
-/** Default directory exclusions (case-insensitive), aligned with the
- * reference scanner (any_nav): build-tool output trees carry no knowledge
- * routes. Services replace the whole set via
- * `[capabilities.nav.config] exclude_dirs = [...]`. */
-export const NAV_DEFAULT_EXCLUDE_DIRS: readonly string[] = [
-  "node_modules",
-  "dist",
-  "build",
-  "lib",
-  "out",
-  "coverage",
-];
+/** Safety cap on listed route entries (owner R6 问1 = A1, 2026-10-22): the
+ * structure walk sees everything, then this UKP projection window cuts —
+ * loud via `max-entries-reached`, same diagnostic shape as the native
+ * implementation, agent contract unchanged. */
+export const NAV_MAX_ENTRIES = 2000;
 
-/** Default file-name exclusions (case-insensitive). Agent-instruction files
- * (AGENTS.md / CLAUDE.md) are context the agent harness already injects —
- * they are not discoverable knowledge for nav's goal, so they never appear
- * in route views nor truncated counts. Replaceable via
- * `[capabilities.nav.config] exclude_files = [...]`. */
-export const NAV_DEFAULT_EXCLUDE_FILES: readonly string[] = ["AGENTS.md", "CLAUDE.md"];
+/** Terminal scan budget for the structure walk (owner R6 问2 = B1,
+ * 2026-10-22): `ResolvedScanOptions.maxFiles` is a required number with no
+ * "unlimited" sentinel (≤0 caps instantly), so a high terminal value is the
+ * practical-unbounded form — counts stay exact on every realistic corpus.
+ * If it ever binds, the engine's consumer diagnostics disclose the floor
+ * counts (never a silent cut). */
+export const NAV_SCAN_MAX_FILES = 1_000_000;
 
-/** The provider-side visibility set resolved from the capability declaration:
- * defaults unless the Service overrides a whole list in its own config. */
-export interface NavVisibility {
-  excludeDirs: readonly string[];
-  excludeFiles: readonly string[];
+/** Provider-side scan options resolved from the capability declaration:
+ * engine terminal values (whole-set replacement — R4/R5), dot entries and
+ * gitignore always on, budget per NAV_SCAN_MAX_FILES. */
+export function resolveNavScanOptions(capability: ManifestCapability): ResolvedScanOptions {
+  const config = capability.config ?? {};
+  if (Object.hasOwn(config, "max_description_files")) {
+    throw new NavProviderError(
+      "nav config 'max_description_files' is retired (owner R6 问3 = C1, 2026-10-22): "
+        + "the description budget collapsed into the entry window — remove the key",
+    );
+  }
+  return {
+    excludeDirs: parseStringList(config, "exclude_dirs") ?? DEFAULT_EXCLUDE_DIRS,
+    excludeFiles: parseStringList(config, "exclude_files") ?? DEFAULT_EXCLUDE_FILES,
+    excludeDotEntries: true,
+    respectGitignore: true,
+    maxFiles: NAV_SCAN_MAX_FILES,
+  };
 }
 
 function parseStringList(config: Record<string, unknown>, key: string): string[] | undefined {
@@ -45,177 +64,7 @@ function parseStringList(config: Record<string, unknown>, key: string): string[]
   if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string" || item.length === 0)) {
     throw new NavProviderError(`nav config '${key}' must be an array of non-empty strings`);
   }
-  return (raw as string[]).map((item) => item.toLowerCase());
-}
-
-export function resolveNavVisibility(capability: ManifestCapability): NavVisibility {
-  const config = capability.config ?? {};
-  return {
-    excludeDirs: parseStringList(config, "exclude_dirs") ?? NAV_DEFAULT_EXCLUDE_DIRS.map((d) => d.toLowerCase()),
-    excludeFiles: parseStringList(config, "exclude_files") ?? NAV_DEFAULT_EXCLUDE_FILES.map((f) => f.toLowerCase()),
-  };
-}
-
-/** Safety cap on collected route entries; the recursive truncation count
- * still walks everything so the `(+N .md)` totals stay exact. */
-export const NAV_MAX_ENTRIES = 2000;
-
-/** Budget on per-entry description reads (ADR 0018): the expensive
- * cost class gets a configurable cap. Configurable by precedent (VS Code
- * maxResults, TS/VS Code "let the user decide what to skip"); loud by
- * contract when hit (never a silent drop). Counts stay exact and unbounded —
- * budgets are for expensive-and-droppable work, never cheap-and-load-bearing
- * work. Default equals the entry cap, so the budget only binds when a
- * Service deliberately lowers it. */
-export const NAV_DEFAULT_MAX_DESCRIPTION_FILES = NAV_MAX_ENTRIES;
-
-function resolveNavDescriptionBudget(capability: ManifestCapability): number {
-  const raw = (capability.config ?? {})["max_description_files"];
-  if (raw === undefined) return NAV_DEFAULT_MAX_DESCRIPTION_FILES;
-  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1) {
-    throw new NavProviderError("nav config 'max_description_files' must be a positive integer");
-  }
-  return raw;
-}
-
-// ---------------------------------------------------------------------------
-// .gitignore support (visibility follows the endpoint's own ignore files —
-// zero UKP-side configuration). Semantics are the git subset: comments,
-// blank lines, `!` negation, trailing-`/` dir-only patterns, leading-`/` or
-// internal-`/` anchoring, `**` / `*` / `?` wildcards, per-file last-match
-// wins, and deeper .gitignore files override shallower ones.
-// ---------------------------------------------------------------------------
-
-interface IgnoreRule {
-  negated: boolean;
-  dirOnly: boolean;
-  /** Tests a path relative to the directory holding the .gitignore. */
-  regex: RegExp;
-}
-
-function globSegmentToRegexSource(segment: string): string {
-  return segment
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]");
-}
-
-function patternToRegex(pattern: string, anchored: boolean): RegExp | null {
-  const segments = pattern.split("/");
-  let source = "^";
-  if (!anchored) source += "(?:[^/]+/)*";
-  for (let index = 0; index < segments.length; index++) {
-    const segment = segments[index]!;
-    const last = index === segments.length - 1;
-    if (segment === "**") {
-      // Non-trailing `**` means "any depth below here (including zero)";
-      // trailing `**` means "everything below the prefix". The separator
-      // handling falls out naturally: the non-last branch already ends with
-      // `/` inside the group, and the next loop iteration handles the real
-      // segment after `**`.
-      source += last ? ".*" : "(?:[^/]+/)*";
-      continue;
-    }
-    source += globSegmentToRegexSource(segment);
-    if (!last) source += "/";
-  }
-  try {
-    // Case-insensitive everywhere: UKP targets Windows hosts where git
-    // defaults to core.ignorecase=true, and a nav/build divergence on the
-    // same .gitignore would be a visibility split, not a nicety.
-    return new RegExp(`${source}$`, "i");
-  } catch {
-    return null;
-  }
-}
-
-export function parseGitignoreRules(content: string): IgnoreRule[] {
-  const rules: IgnoreRule[] = [];
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.replace(/\s+$/, "");
-    if (line.length === 0 || line.startsWith("#")) continue;
-    let pattern = line;
-    let negated = false;
-    if (pattern.startsWith("!")) {
-      negated = true;
-      pattern = pattern.slice(1);
-    }
-    if (pattern.length === 0) continue;
-    let dirOnly = false;
-    if (pattern.endsWith("/")) {
-      dirOnly = true;
-      pattern = pattern.slice(0, -1);
-    }
-    let anchored = false;
-    if (pattern.startsWith("/")) {
-      anchored = true;
-      pattern = pattern.slice(1);
-    } else if (pattern.includes("/")) {
-      anchored = true;
-    }
-    if (pattern.length === 0 || pattern.split("/").some((segment) => segment.length === 0)) continue;
-    const regex = patternToRegex(pattern, anchored);
-    if (regex) rules.push({ negated, dirOnly, regex });
-  }
-  return rules;
-}
-
-function readGitignoreRules(dir: string): IgnoreRule[] {
-  try {
-    return parseGitignoreRules(readFileSync(join(dir, ".gitignore"), "utf8"));
-  } catch {
-    return [];
-  }
-}
-
-/** One .gitignore file's rules, anchored at the directory holding it. */
-interface IgnoreLayer {
-  base: string;
-  rules: IgnoreRule[];
-}
-
-function appendLayer(layers: readonly IgnoreLayer[], dir: string): IgnoreLayer[] {
-  const rules = readGitignoreRules(dir);
-  return rules.length === 0 ? [...layers] : [...layers, { base: dir, rules }];
-}
-
-/** Builds the inherited chain from the Service folder down to a route root. */
-function buildInheritedLayers(from: string, to: string): IgnoreLayer[] {
-  const rel = relative(from, to).replace(/\\/g, "/");
-  let layers: IgnoreLayer[] = appendLayer([], from);
-  if (rel.length === 0 || rel === ".") return layers;
-  let acc = from;
-  for (const segment of rel.split("/")) {
-    acc = join(acc, segment);
-    layers = appendLayer(layers, acc);
-  }
-  return layers;
-}
-
-/** Last matching rule wins; deeper .gitignore files' rules come later. */
-function isIgnored(absolutePath: string, isDirectory: boolean, layers: readonly IgnoreLayer[]): boolean {
-  let ignored = false;
-  for (const layer of layers) {
-    const rel = relative(layer.base, absolutePath).replace(/\\/g, "/");
-    if (rel.length === 0 || rel === ".." || rel.startsWith("../")) continue;
-    for (const rule of layer.rules) {
-      if (ruleMatches(rule, rel, isDirectory)) ignored = !rule.negated;
-    }
-  }
-  return ignored;
-}
-
-function ruleMatches(rule: IgnoreRule, path: string, isDirectory: boolean): boolean {
-  if (!rule.dirOnly) return rule.regex.test(path);
-  // A dir-only pattern ignores the directory and everything under it: test
-  // the path itself (when it is a directory) plus every ancestor.
-  if (isDirectory && rule.regex.test(path)) return true;
-  let ancestor = "";
-  for (const segment of path.split("/")) {
-    ancestor = ancestor.length === 0 ? segment : `${ancestor}/${segment}`;
-    if (rule.regex.test(ancestor)) return true;
-  }
-  return false;
+  return raw as string[];
 }
 
 export interface NavEntry {
@@ -228,21 +77,12 @@ export interface NavEntry {
   truncated?: boolean;
   /** Recursive `.md` total under a truncated folder (exclusions applied). */
   omittedMarkdownCount?: number;
-  /** Budget-hit entries only (ADR 0018): the entry IS listed (path came from
-   * the cheap scan), but its description read was skipped beyond the
-   * configurable description-read budget. Loud by contract — the entry
-   * marker plus the `description-budget-reached` diagnostic always appear
-   * together, never a silent drop. */
-  descriptionOmitted?: "budget";
 }
 
 export interface NavDiagnostic {
-  code:
-    | "unreadable-directory"
-    | "unreadable-file"
-    | "max-entries-reached"
-    | "description-budget-reached";
+  code: string;
   message: string;
+  path?: string;
 }
 
 export interface NavResult {
@@ -253,6 +93,10 @@ export interface NavResult {
   entries: NavEntry[];
   routeCount: number;
   diagnostics: NavDiagnostic[];
+  /** Maintainer-audience findings (owner R6 问5 = E1, 2026-10-22): engine
+   * audience triage — these never enter the ukp.nav.v1 envelope; the human
+   * face renders them to stderr, the JSON face stays silent. */
+  maintainerDiagnostics: NavDiagnostic[];
 }
 
 export interface NavRequest {
@@ -286,7 +130,8 @@ export interface NavFailure {
 
 /** ADR 0021 capability outcome: structured success (`NavResult` is the
  * `ukp.nav.v1` envelope body) or a classified failure. Never rendered text,
- * never exit codes. */
+ * never exit codes. Async since the engine delegation (the scan package
+ * reads bounded heads through an in-flight window, 2026-10-22). */
 export type NavOutcome =
   | { ok: true; result: NavResult }
   | { ok: false; failure: NavFailure };
@@ -308,246 +153,157 @@ export class NavProviderError extends Error {
 export const NAV_MAX_DEPTH = 10;
 export const NAV_DEFAULT_DEPTH = 0;
 
-function isExcludedDir(name: string, visibility: NavVisibility): boolean {
-  // Case-insensitive to match the gitignore "i" stance (Windows hosts,
-  // core.ignorecase=true): `.gitignore` writing `Node_Modules/` must not
-  // resurrect a node_modules tree.
-  const lower = name.toLowerCase();
-  return visibility.excludeDirs.includes(lower);
-}
-
-function isExcludedFile(name: string, visibility: NavVisibility): boolean {
-  return visibility.excludeFiles.includes(name.toLowerCase());
-}
-
-function isMarkdown(name: string): boolean {
-  return name.toLowerCase().endsWith(".md");
-}
-
-function isReadme(name: string): boolean {
-  return name.toLowerCase() === "readme.md";
-}
-
-function toRoutePath(serviceFolder: string, target: string): string {
-  const rel = relative(serviceFolder, target).replace(/\\/g, "/");
-  return rel.length === 0 ? "." : rel;
-}
-
-// Frontmatter `description:` extraction (single shallow read; a missing or
-// malformed block simply yields null — nav never fails because a document
-// lacks a description).
-function extractDescription(content: string): string | null {
-  const lines = content.split("\n");
-  if (lines[0]?.trim() !== "---") return null;
-  const closing = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
-  if (closing < 0) return null;
-  for (const line of lines.slice(1, closing)) {
-    if (/^\s/.test(line)) continue; // nested keys never own the description
-    const separator = line.indexOf(":");
-    if (separator < 0) continue;
-    if (line.slice(0, separator).trim() !== "description") continue;
-    const value = line.slice(separator + 1).trim();
-    if (value.length === 0) return null;
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length >= 2)
-      || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
-    ) {
-      return value.slice(1, -1);
-    }
-    return value;
-  }
-  return null;
-}
-
-interface TruncatedFolder {
-  folder: string;
-  markdownCount: number;
-  description: string | null;
-}
-
-/** Recursive `.md` count under a depth-boundary folder, plus a shallow read
- * of its first-level README for the description. The count is the total that
- * would appear on expansion — independent of the observing route root.
- * Ignore layers are inherited so a truncated folder's count already excludes
- * gitignored content. */
-function describeTruncatedFolder(
-  serviceFolder: string,
-  folder: string,
-  diagnostics: NavDiagnostic[],
-  layers: readonly IgnoreLayer[],
-  visibility: NavVisibility,
-): TruncatedFolder {
-  let markdownCount = 0;
-  let description: string | null = null;
-  const walk = (dir: string, isRoot: boolean, currentLayers: readonly IgnoreLayer[]): void => {
-    let children;
-    try {
-      children = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      if (isRoot) {
-        diagnostics.push({
-          code: "unreadable-directory",
-          message: `unable to read directory ${toRoutePath(serviceFolder, dir)}`,
-        });
-      }
-      return;
-    }
-    const withLayers = appendLayer(currentLayers, dir);
-    for (const child of children) {
-      if (child.name.startsWith(".")) continue;
-      const childPath = join(dir, child.name);
-      if (child.isDirectory()) {
-        if (isExcludedDir(child.name, visibility)) continue;
-        if (isIgnored(childPath, true, withLayers)) continue;
-        walk(childPath, false, withLayers);
-      } else if (child.isFile() && isMarkdown(child.name)) {
-        if (isExcludedFile(child.name, visibility)) continue;
-        if (isIgnored(childPath, false, withLayers)) continue;
-        markdownCount++;
-        if (isRoot && isReadme(child.name) && description === null) {
-          try {
-            description = extractDescription(readFileSync(childPath, "utf8"));
-          } catch {
-            description = null;
-          }
-        }
-      }
-    }
+function toNavDiagnostic(diagnostic: ScanDiagnostic): NavDiagnostic {
+  return {
+    code: diagnostic.code,
+    message: diagnostic.message,
+    ...(diagnostic.path === undefined ? {} : { path: diagnostic.path }),
   };
-  walk(folder, true, layers);
-  return { folder, markdownCount, description };
 }
 
-interface ScanState {
-  files: string[];
-  truncated: TruncatedFolder[];
-  diagnostics: NavDiagnostic[];
+function childByName(node: NavNode, name: string): NavNode | undefined {
+  return (node.children ?? []).find((child) => child.name === name);
 }
 
-function scanDirectory(
-  serviceFolder: string,
-  dir: string,
-  depth: number,
-  maxDepth: number,
-  state: ScanState,
-  layers: readonly IgnoreLayer[],
-  visibility: NavVisibility,
-): void {
-  let children;
-  try {
-    children = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    state.diagnostics.push({
-      code: "unreadable-directory",
-      message: `unable to read directory ${toRoutePath(serviceFolder, dir)}`,
-    });
-    return;
-  }
-  const withLayers = appendLayer(layers, dir);
-  children.sort((left, right) => left.name.localeCompare(right.name));
-
-  for (const child of children) {
-    if (child.name.startsWith(".")) continue;
-    const childPath = join(dir, child.name);
-
-    if (child.isDirectory()) {
-      if (isExcludedDir(child.name, visibility)) continue;
-      if (isIgnored(childPath, true, withLayers)) continue;
-      if (depth >= maxDepth) {
-        const truncated = describeTruncatedFolder(serviceFolder, childPath, state.diagnostics, withLayers, visibility);
-        if (truncated.markdownCount > 0) {
-          if (state.files.length + state.truncated.length >= NAV_MAX_ENTRIES) {
-            state.diagnostics.push({
-              code: "max-entries-reached",
-              message: `route view truncated at ${NAV_MAX_ENTRIES} entries`,
-            });
-            return;
-          }
-          state.truncated.push(truncated);
-        }
-        continue;
-      }
-      scanDirectory(serviceFolder, childPath, depth + 1, maxDepth, state, withLayers, visibility);
-      continue;
+/** Descends the scanned tree to the route root. The walk covers the whole
+ * Service folder (gitignore inheritance from the Service root down is part
+ * of the engine's semantics), so the route root is a subtree selection. */
+function navigateTo(tree: NavNode, segments: readonly string[]): NavNode {
+  let current = tree;
+  for (const segment of segments) {
+    const next = childByName(current, segment);
+    if (next === undefined || next.kind !== "dir") {
+      throw new NavProviderError(`route root segment '${segment}' vanished from the scan tree`);
     }
+    current = next;
+  }
+  return current;
+}
 
-    if (child.isFile() && isMarkdown(child.name)) {
-      if (isExcludedFile(child.name, visibility)) continue;
-      if (isIgnored(childPath, false, withLayers)) continue;
-      if (state.files.length + state.truncated.length >= NAV_MAX_ENTRIES) {
-        state.diagnostics.push({
-          code: "max-entries-reached",
-          message: `route view truncated at ${NAV_MAX_ENTRIES} entries`,
-        });
-        return;
+/** Recursive `.md` total under a node — the depth-boundary truncation count.
+ * The structure walk already applied every exclusion, so this is exact. */
+function countMarkdown(node: NavNode): number {
+  let total = 0;
+  for (const child of node.children ?? []) {
+    if (child.kind === "file") total += 1;
+    else total += countMarkdown(child);
+  }
+  return total;
+}
+
+/** The folder's own README path (engine file-node names are stems), for the
+ * description hydration set: engine folder descriptions fold from the
+ * sidecar ?? own-README chain once the README hydrates. */
+function readmePathOf(node: NavNode): string | undefined {
+  for (const child of node.children ?? []) {
+    if (child.kind === "file" && child.name.toLowerCase() === "readme") return child.path;
+  }
+  return undefined;
+}
+
+interface FlatEntry {
+  path: string;
+  kind: "file" | "folder";
+  node: NavNode;
+  /** Folder entries only. */
+  omittedMarkdownCount?: number;
+}
+
+function flattenToDepth(node: NavNode, remaining: number, out: FlatEntry[]): void {
+  for (const child of node.children ?? []) {
+    if (child.kind === "file") {
+      out.push({ path: child.path, kind: "file", node: child });
+    } else if (remaining > 0) {
+      flattenToDepth(child, remaining - 1, out);
+    } else {
+      const count = countMarkdown(child);
+      if (count > 0) {
+        out.push({ path: child.path, kind: "folder", node: child, omittedMarkdownCount: count });
       }
-      state.files.push(childPath);
     }
   }
 }
 
-function buildNavResult(
+async function buildNavResult(
   serviceFolder: string,
   routeRootFolder: string,
   root: string,
   depth: number,
   endpoint: string,
-  visibility: NavVisibility,
-  descriptionBudget: number,
-): NavResult {
-  const state: ScanState = { files: [], truncated: [], diagnostics: [] };
-  // Ignore layers are inherited from the Service folder down to the route
-  // root, then continue accumulating during the scan.
-  const layers = buildInheritedLayers(serviceFolder, routeRootFolder);
-  scanDirectory(serviceFolder, routeRootFolder, 0, depth, state, layers, visibility);
+  options: ResolvedScanOptions,
+): Promise<NavResult> {
+  // B1 (owner R6 问2, 2026-10-22): structure walk with zero content reads,
+  // then hydrate descriptions only for the window survivors.
+  const structure = await scanStructure(serviceFolder, builtinDescriptionProvider, options);
+  const routeRelative = relative(serviceFolder, routeRootFolder).replace(/\\/g, "/");
+  const segments = routeRelative.length === 0 || routeRelative === "." ? [] : routeRelative.split("/");
+  const routeNode = navigateTo(structure.tree, segments);
 
-  // Description extraction is the expensive cost class (ADR 0018): a full
-  // file read per entry. Beyond the configurable budget the entry stays
-  // listed (the path came from the cheap scan) but its description is
-  // omitted, flagged per-entry, and announced once by diagnostic — loud,
-  // never silent.
-  let descriptionsRead = 0;
-  let descriptionsOmitted = 0;
-  const entries: NavEntry[] = state.files.map((file) => {
-    if (descriptionsRead >= descriptionBudget) {
-      descriptionsOmitted += 1;
+  const flat: FlatEntry[] = [];
+  flattenToDepth(routeNode, depth, flat);
+
+  // A1 window: full walk, then the projection window cuts (loud, same shape).
+  const diagnostics: NavDiagnostic[] = [];
+  let survivors = flat;
+  if (flat.length > NAV_MAX_ENTRIES) {
+    survivors = flat.slice(0, NAV_MAX_ENTRIES);
+    diagnostics.push({
+      code: "max-entries-reached",
+      message: `route view truncated at ${NAV_MAX_ENTRIES} entries`,
+    });
+  }
+
+  // Hydration set = window file entries + surviving truncated folders' own
+  // READMEs (file hydration by window; folder descriptions fold full-tree
+  // inside the engine on every describe — coordinator verification ③).
+  const hydration = new Set<string>();
+  for (const entry of survivors) {
+    if (entry.kind === "file") {
+      hydration.add(entry.path);
+    } else {
+      const readme = readmePathOf(entry.node);
+      if (readme !== undefined) hydration.add(readme);
+    }
+  }
+
+  // E1 audience triage: engine consumer findings ride the envelope;
+  // maintainer findings ride the stderr-only channel.
+  const maintainerDiagnostics: NavDiagnostic[] = [];
+  for (const diagnostic of structure.diagnostics) {
+    if (diagnostic.audience === "consumer") diagnostics.push(toNavDiagnostic(diagnostic));
+    else maintainerDiagnostics.push(toNavDiagnostic(diagnostic));
+  }
+  const describeDiagnostics = await structure.describe(hydration);
+  // Engine items carry placeholder text where the description chain found
+  // nothing ("Undocumented — …"); the ukp.nav.v1 contract keeps null. The
+  // per-file maintainer diagnostics name exactly those paths.
+  const nullDescriptionPaths = new Set<string>();
+  for (const diagnostic of describeDiagnostics) {
+    if (diagnostic.audience !== "maintainer") continue;
+    maintainerDiagnostics.push(toNavDiagnostic(diagnostic));
+    if (
+      diagnostic.path !== undefined
+      && (diagnostic.code === "no-description" || diagnostic.code === "unreadable-file")
+    ) {
+      nullDescriptionPaths.add(diagnostic.path);
+    }
+  }
+
+  const entries: NavEntry[] = survivors.map((entry) => {
+    if (entry.kind === "folder") {
       return {
-        path: toRoutePath(serviceFolder, file),
-        kind: "file" as const,
-        description: null,
-        descriptionOmitted: "budget" as const,
+        path: entry.path,
+        kind: "folder",
+        description: entry.node.description ?? null,
+        truncated: true,
+        omittedMarkdownCount: entry.omittedMarkdownCount,
       };
     }
-    descriptionsRead += 1;
-    let description: string | null = null;
-    try {
-      description = extractDescription(readFileSync(file, "utf8"));
-    } catch {
-      state.diagnostics.push({
-        code: "unreadable-file",
-        message: `unable to read markdown file ${toRoutePath(serviceFolder, file)}`,
-      });
-    }
-    return { path: toRoutePath(serviceFolder, file), kind: "file" as const, description };
+    const description = nullDescriptionPaths.has(entry.path)
+      ? null
+      : entry.node.item?.description ?? null;
+    return { path: entry.path, kind: "file", description };
   });
-  if (descriptionsOmitted > 0) {
-    state.diagnostics.push({
-      code: "description-budget-reached",
-      message:
-        `descriptions omitted for ${descriptionsOmitted} entries beyond the description-read budget `
-        + `${descriptionBudget} (nav config 'max_description_files'; entries stay listed, counts stay exact)`,
-    });
-  }
-
-  for (const truncated of state.truncated) {
-    entries.push({
-      path: toRoutePath(serviceFolder, truncated.folder),
-      kind: "folder",
-      description: truncated.description,
-      truncated: true,
-      omittedMarkdownCount: truncated.markdownCount,
-    });
-  }
 
   entries.sort((left, right) => left.path.localeCompare(right.path, undefined, { sensitivity: "base" }));
   return {
@@ -556,7 +312,8 @@ function buildNavResult(
     depth,
     entries,
     routeCount: entries.length,
-    diagnostics: state.diagnostics,
+    diagnostics,
+    maintainerDiagnostics,
   };
 }
 
@@ -580,7 +337,8 @@ export function validateNavRoutePath(routePath: string): string[] {
 
 /** Presentation projection (ADR 0021 two-stage form): the structured,
  * serializable view. First-class citizen — adapters (CLI today, MCP /
- * programmatic later) consume this view, never the raw scan result. */
+ * programmatic later) consume this view, never the raw scan result.
+ * Maintainer diagnostics stay out (E1): the envelope is the agent face. */
 export interface NavEnvelope {
   schema: "ukp.nav.v1";
   command: "nav";
@@ -618,8 +376,6 @@ export function renderNavHuman(envelope: NavEnvelope): string {
       // recursive .md count inside (never "truncated" — nothing was cut).
       const line = `${entry.path}/ (+${entry.omittedMarkdownCount} .md)`;
       lines.push(entry.description ? `${line} | ${entry.description}` : line);
-    } else if (entry.descriptionOmitted === "budget") {
-      lines.push(`${entry.path} | (description omitted: budget reached)`);
     } else {
       lines.push(entry.description ? `${entry.path} | ${entry.description}` : entry.path);
     }
@@ -632,11 +388,12 @@ export function renderNavJson(envelope: NavEnvelope): string {
 }
 
 /** ADR 0021 core entry: runs the nav capability and returns a structured
- * outcome. Scope/manifest/provider failures that cannot be classified as a
- * nav failure still throw their typed errors (`ScopeError`,
- * `ManifestError`, `NavUsageError`, `NavProviderError`) for the surface
- * adapter to map. */
-export function runNav(request: NavRequest, context: NavContext): NavOutcome {
+ * outcome. Async since the scan-engine delegation (2026-10-22) — the local
+ * and remote branches now share one async contract.
+ * Scope/manifest/provider failures that cannot be classified as a nav
+ * failure still throw their typed errors (`ScopeError`, `ManifestError`,
+ * `NavUsageError`, `NavProviderError`) for the surface adapter to map. */
+export async function runNav(request: NavRequest, context: NavContext): Promise<NavOutcome> {
   let depth = NAV_DEFAULT_DEPTH;
   if (request.depth !== undefined) {
     if (!Number.isSafeInteger(request.depth) || request.depth < 0 || request.depth > NAV_MAX_DEPTH) {
@@ -723,14 +480,13 @@ export function runNav(request: NavRequest, context: NavContext): NavOutcome {
     root = rel.length === 0 ? "." : rel.replace(/\\/g, "/");
   }
 
-  const result = buildNavResult(
+  const result = await buildNavResult(
     service.folder,
     routeRootFolder,
     root,
     depth,
     binding.name,
-    resolveNavVisibility(resolved.capability),
-    resolveNavDescriptionBudget(resolved.capability),
+    resolveNavScanOptions(resolved.capability),
   );
   return { ok: true, result };
 }

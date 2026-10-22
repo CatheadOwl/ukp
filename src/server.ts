@@ -1056,7 +1056,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
           return handleRead(url, request, config, name);
         }
         if (rest === "/v1/nav") {
-          return handleNav(url, request, config, name);
+          return await handleNav(url, request, config, name);
         }
         return handleRg(url, request, config, name);
       }
@@ -1214,7 +1214,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
         return handleRead(url, request, config, binding.name);
       }
       if (url.pathname === "/v1/nav") {
-        return handleNav(url, request, config, binding.name);
+        return await handleNav(url, request, config, binding.name);
       }
       return handleRg(url, request, config, binding.name);
     }
@@ -1346,7 +1346,7 @@ function handleRead(url: URL, request: Request, config: ServeConfig, endpointNam
 /** GET /v1/nav?path=&depth= → the nav envelope IS the response (W6): the
  * client renders it through the same renderNavHuman/renderNavJson path as a
  * local run. Failures use the transport error shape with nav's classes. */
-function handleNav(url: URL, request: Request, config: ServeConfig, endpointName: string): Response {
+async function handleNav(url: URL, request: Request, config: ServeConfig, endpointName: string): Promise<Response> {
   if (request.method !== "GET") {
     return jsonResponse(errorBody("method-not-allowed", "/v1/nav is a GET route"), 405);
   }
@@ -1354,7 +1354,7 @@ function handleNav(url: URL, request: Request, config: ServeConfig, endpointName
   if ("error" in parsed) {
     return jsonResponse(errorBody("usage-error", parsed.error), 400);
   }
-  const outcome = runNav(parsed.request, {
+  const outcome = await runNav(parsed.request, {
     currentDirectory: config.currentDirectory,
     registryPath: config.registryPath,
   });

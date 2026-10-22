@@ -507,7 +507,7 @@ describe("CLI bootstrap", () => {
   // `--help` must win wherever it appears. The pre-fix behavior leaked
   // commander's `(outputHelp)` sentinel as a usage error with exit 2 on
   // every commander-wrapped command.
-  test("help flag after positional arguments renders help and exits 0 on every command", () => {
+  test("help flag after positional arguments renders help and exits 0 on every command", async () => {
     const cases: Array<[command: string, preceding: string[]]> = [
       ["search", ["query"]],
       ["read", ["ref"]],
@@ -527,7 +527,9 @@ describe("CLI bootstrap", () => {
       for (const help of ["-h", "--help"] as const) {
         const output: string[] = [];
         const errors: string[] = [];
-        const exitCode = runCli([command, ...preceding, help], (message) => output.push(message), (message) => errors.push(message));
+        // nav is async since the scan-engine delegation (2026-10-22); the
+        // maybe-async CLI entry covers both shapes.
+        const exitCode = await Promise.resolve(runCli([command, ...preceding, help], (message) => output.push(message), (message) => errors.push(message)));
         expect(exitCode).toBe(0);
         expect(output.join("\n")).toContain(`Usage: ukp ${command}`);
         const errorText = errors.join("\n");

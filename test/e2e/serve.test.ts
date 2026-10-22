@@ -285,7 +285,9 @@ describe("serve /v1/nav (W6)", () => {
     const deep = await fetch(`${info.url}/v1/nav?depth=1`);
     expect(deep.status).toBe(200);
     const deepBody = await deep.json() as { entries: Array<{ path: string; kind: string; description: string | null }> };
-    expect(deepBody.entries).toEqual([{ path: "documents/cad-notes.md", kind: "file", description: null }]);
+    // R3 whole description chain through the wire: the fixture note has no
+    // frontmatter, so the engine's first-substantive-line rung supplies it.
+    expect(deepBody.entries).toEqual([{ path: "documents/cad-notes.md", kind: "file", description: "CAD fixture note content." }]);
 
     const miss = await fetch(`${info.url}/v1/nav?path=missing`);
     expect(miss.status).toBe(404);

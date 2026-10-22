@@ -58,7 +58,7 @@ export const NAV_SPEC: UkpCommandSpec = {
   options: [
     {
       flags: "--depth <n>",
-      help: "how many directory levels to expand from the route root (0-10, default 0; deeper folders appear as [truncated: N], where N is that folder's total recursive .md count)",
+      help: "how many directory levels to expand from the route root (0-10, default 0; deeper folders appear as folder/ (+N .md), where N is that folder's total recursive .md count)",
     },
     { flags: "--json", help: "emit the structured response envelope" },
   ],
@@ -110,10 +110,10 @@ export function parseNavArgs(args: readonly string[]): NavRequest {
   };
 }
 
-export function executeNavCommand(
+export async function executeNavCommand(
   args: readonly string[],
   context: NavContext,
-): NavCommandResult | Promise<NavCommandResult> {
+): Promise<NavCommandResult> {
   if (isHelpRequest(args)) {
     return { exitCode: 0, stdout: renderNavHelp(), stderr: "" };
   }
@@ -132,15 +132,15 @@ export function executeNavCommand(
   }
 
   // Remote branch (ukp_remote W6): a remote binding routes through the
-  // remote transport; the sync local contract is unchanged
-  // (conditional-async seam, same as search/read).
+  // remote transport; local and remote now share one async contract (the
+  // scan-engine delegation made the local branch async, 2026-10-22).
   const binding = readRegistry(context.registryPath).find((entry) => entry.name === request.endpoint);
   if (binding !== undefined && isRemoteBinding(binding)) {
     return executeRemoteNav(request, binding, context);
   }
 
   try {
-    const outcome = runNav(request, context);
+    const outcome = await runNav(request, context);
     if (!outcome.ok) {
       // Single render source for failures too: the factual message is
       // capability data; only the prefix, exit code, and hint wording are
@@ -153,18 +153,23 @@ export function executeNavCommand(
     }
 
     const envelope = projectNavEnvelope(outcome.result);
-    // Diagnostics go to stderr in BOTH render modes (read's channel
-    // discipline: stdout is the payload, stderr is the operational
-    // channel). Without this, a Human-mode budget hit would be silent —
-    // violating ADR 0018's loud contract. JSON keeps the diagnostics in
-    // the envelope too.
+    // Consumer diagnostics go to stderr in BOTH render modes (read's channel
+    // discipline: stdout is the payload, stderr is the operational channel);
+    // JSON keeps them in the envelope too. Maintainer findings (E1,
+    // 2026-10-22) are human-face stderr only — the JSON face stays silent.
     const diagnosticLines = envelope.diagnostics
       .map((diagnostic) => `ukp nav: ${diagnostic.code}: ${diagnostic.message}`)
       .join("\n");
+    const maintainerLines = request.json
+      ? ""
+      : outcome.result.maintainerDiagnostics
+        .map((diagnostic) => `ukp nav: ${diagnostic.code}: ${diagnostic.message}`)
+        .join("\n");
+    const operational = [diagnosticLines, maintainerLines].filter((block) => block.length > 0).join("\n");
     return {
       exitCode: 0,
       stdout: request.json ? renderNavJson(envelope) : renderNavHuman(envelope),
-      stderr: diagnosticLines.length > 0 ? `${diagnosticLines}\n` : "",
+      stderr: operational.length > 0 ? `${operational}\n` : "",
     };
   } catch (error) {
     if (error instanceof NavUsageError) {

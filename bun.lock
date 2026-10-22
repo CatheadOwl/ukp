@@ -5,6 +5,7 @@
     "": {
       "name": "@catheadowl/ukp",
       "dependencies": {
+        "@any-nav/scan": "0.1.0",
         "commander": "15.0.0",
         "smol-toml": "1.7.1",
         "zod": "4.4.3",
@@ -16,6 +17,8 @@
     },
   },
   "packages": {
+    "@any-nav/scan": ["@any-nav/scan@0.1.0", "", {}, "sha512-UmCNWYWRXKORbY4tgTiE9ud5ViCroxNSjB9IEuZuMw38ZpupE89aL4XZE40dNov+DGga+LKsUtYa89VtukmTEA=="],
+
     "@types/bun": ["@types/bun@1.3.5", "https://registry.npmmirror.com/@types/bun/-/bun-1.3.5.tgz", { "dependencies": { "bun-types": "1.3.5" } }, "sha512-RnygCqNrd3srIPEWBd5LFeUYG7plCoH2Yw9WaZGyNmdTEei+gWaHqydbaIRkIkcbXwhBT94q78QljxN0Sk838w=="],
 
     "@types/node": ["@types/node@26.1.1", "https://registry.npmmirror.com/@types/node/-/node-26.1.1.tgz", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw=="],

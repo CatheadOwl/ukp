@@ -17,13 +17,14 @@ import { KitUsageError } from "../src/commands/kit.ts";
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt } from "../src/registry.ts";
 
-// ukp_remote W6 conditional-async seam (read.test.ts precedent): every test
-// here is a local nav, which stays fully synchronous. This wrapper keeps
-// the call sites untouched and fails loudly if a local case ever goes async.
-function executeNavCommand(args: readonly string[], context: Parameters<typeof executeNavCommandMaybeAsync>[1]): NavCommandResult {
-  const result = executeNavCommandMaybeAsync(args, context);
-  if (result instanceof Promise) throw new Error("local nav unexpectedly took the async path");
-  return result;
+// Since the scan-engine delegation (2026-10-22) local nav shares the remote
+// branch's async contract: runNav drives an in-flight read window. This
+// wrapper keeps the call sites uniform.
+async function executeNavCommand(
+  args: readonly string[],
+  context: NavContext,
+): Promise<NavCommandResult> {
+  return await executeNavCommandMaybeAsync(args, context);
 }
 
 function createNavService(root: string, name: string, provider = "file"): string {
@@ -39,6 +40,8 @@ function createNavService(root: string, name: string, provider = "file"): string
 interface FileSpec {
   path: string;
   description?: string;
+  /** Raw content overrides the description-derived template. */
+  content?: string;
 }
 
 /** Writes files under `folder` from slash-separated specs. */
@@ -46,9 +49,11 @@ function writeFiles(folder: string, files: readonly FileSpec[]): void {
   for (const file of files) {
     const target = join(folder, ...file.path.split("/"));
     mkdirSync(join(target, ".."), { recursive: true });
-    const content = file.description === undefined
-      ? `# ${file.path}\n`
-      : `---\ndescription: ${file.description}\n---\n# ${file.path}\n`;
+    const content = file.content !== undefined
+      ? file.content
+      : file.description === undefined
+        ? `# ${file.path}\n`
+        : `---\ndescription: ${file.description}\n---\n# ${file.path}\n`;
     writeFileSync(target, content);
   }
 }
@@ -62,20 +67,20 @@ function setup(root: string, files: readonly FileSpec[], name = "kb"): NavContex
 }
 
 /** Runs nav through the CLI adapter with --json and parses the envelope. */
-function navJson(request: Omit<NavRequest, "json">, context: NavContext) {
+async function navJson(request: Omit<NavRequest, "json">, context: NavContext) {
   const args = [
     "--endpoint", request.endpoint,
     ...(request.path === undefined ? [] : [request.path]),
     ...(request.depth === undefined ? [] : ["--depth", String(request.depth)]),
     "--json",
   ];
-  const result = executeNavCommand(args, context);
+  const result = await executeNavCommand(args, context);
   expect(result.exitCode).toBe(0);
   return JSON.parse(result.stdout);
 }
 
 describe("nav capability", () => {
-  test("depth 0 lists root markdown files and truncated folders with recursive counts", () => {
+  test("depth 0 lists root markdown files and truncated folders with recursive counts", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [
@@ -85,7 +90,7 @@ describe("nav capability", () => {
         { path: "docs/notes/b.md" },
         { path: "empty/none.txt" },
       ]);
-      const parsed = navJson({ endpoint: "kb" }, context);
+      const parsed = await navJson({ endpoint: "kb" }, context);
       expect(parsed.root).toBe(".");
       expect(parsed.depth).toBe(0);
       expect(parsed.entries).toEqual([
@@ -99,7 +104,7 @@ describe("nav capability", () => {
     }
   });
 
-  test("depth 1 expands one level; deeper folders truncate", () => {
+  test("depth 1 expands one level; deeper folders truncate", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [
@@ -107,7 +112,7 @@ describe("nav capability", () => {
         { path: "docs/notes/a.md" },
         { path: "docs/notes/b.md" },
       ]);
-      const parsed = navJson({ endpoint: "kb", depth: 1 }, context);
+      const parsed = await navJson({ endpoint: "kb", depth: 1 }, context);
       expect(parsed.entries).toEqual([
         { path: "docs/guide.md", kind: "file", description: "The guide" },
         { path: "docs/notes", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 2 },
@@ -117,7 +122,7 @@ describe("nav capability", () => {
     }
   });
 
-  test("path selects a sub-root; counts are independent of the observing root", () => {
+  test("path selects a sub-root; counts are independent of the observing root", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [
@@ -126,7 +131,7 @@ describe("nav capability", () => {
         { path: "docs/deep/x.md" },
         { path: "outside.md" },
       ]);
-      const parsed = navJson({ endpoint: "kb", path: "docs" }, context);
+      const parsed = await navJson({ endpoint: "kb", path: "docs" }, context);
       expect(parsed.root).toBe("docs");
       expect(parsed.entries).toEqual([
         { path: "docs/deep", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 1 },
@@ -134,21 +139,21 @@ describe("nav capability", () => {
         { path: "docs/README.md", kind: "file", description: "Documentation area" },
       ]);
       // observed from the endpoint root the same subtree counts identically
-      const whole = navJson({ endpoint: "kb" }, context);
+      const whole = await navJson({ endpoint: "kb" }, context);
       expect(whole.entries.find((entry: { path: string }) => entry.path === "docs").omittedMarkdownCount).toBe(3);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("truncated folder keeps its README description on the route line", () => {
+  test("truncated folder keeps its README description on the route line", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [
         { path: "area/README.md", description: "The area" },
         { path: "area/a.md" },
       ]);
-      const parsed = navJson({ endpoint: "kb" }, context);
+      const parsed = await navJson({ endpoint: "kb" }, context);
       expect(parsed.entries).toEqual([
         { path: "area", kind: "folder", description: "The area", truncated: true, omittedMarkdownCount: 2 },
       ]);
@@ -157,7 +162,73 @@ describe("nav capability", () => {
     }
   });
 
-  test("bare [capabilities.nav] declaration defaults to the file provider", () => {
+  test("R3 description chain: head description line and first substantive line are picked up", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
+    try {
+      const context = setup(root, [
+        {
+          path: "head.md",
+          // No description in frontmatter; the body head carries an explicit
+          // `description:` line — the chain's second rung (engine-adopted).
+          content: "---\ntitle: Head\n---\ndescription: Head-line description\n\n# Head\n",
+        },
+        {
+          path: "firstline.md",
+          // No frontmatter at all; the first substantive line is long enough.
+          content: "This line is long enough to serve as the first substantive summary.\n\n# Later\n",
+        },
+      ]);
+      const parsed = await navJson({ endpoint: "kb" }, context);
+      const byPath = new Map(parsed.entries.map((entry: { path: string; description: string | null }) => [entry.path, entry.description]));
+      expect(byPath.get("head.md")).toBe("Head-line description");
+      expect(byPath.get("firstline.md")).toBe("This line is long enough to serve as the first substantive summary.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("R3 folder description chain: _category_ sidecar wins over README", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
+    try {
+      const service = createNavService(root, "kb");
+      writeFiles(service, [
+        { path: "area/README.md", description: "The README description" },
+        { path: "area/a.md" },
+      ]);
+      writeFileSync(join(service, "area", "_category_.yml"), "description: Sidecar area blurb\n");
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "kb", service);
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      expect(parsed.entries).toEqual([
+        { path: "area", kind: "folder", description: "Sidecar area blurb", truncated: true, omittedMarkdownCount: 2 },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("E1 audience triage: descriptionless files keep null; maintainer findings ride human stderr only", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
+    try {
+      const context = setup(root, [{ path: "bare.md" }]);
+      const parsed = await navJson({ endpoint: "kb" }, context);
+      // The ukp.nav.v1 contract keeps description: null (engine placeholder
+      // text is mapped back), and the no-description finding never enters
+      // the envelope — maintainer audience, human stderr only (E1).
+      expect(parsed.entries).toEqual([{ path: "bare.md", kind: "file", description: null }]);
+      expect(parsed.diagnostics).toEqual([]);
+
+      const human = await executeNavCommand(["--endpoint", "kb"], context);
+      expect(human.exitCode).toBe(0);
+      expect(human.stderr).toContain("no-description");
+      const json = await executeNavCommand(["--endpoint", "kb", "--json"], context);
+      expect(json.stderr).not.toContain("no-description");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("bare [capabilities.nav] declaration defaults to the file provider", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const folder = join(root, "kb-service");
@@ -166,14 +237,14 @@ describe("nav capability", () => {
       writeFileSync(join(folder, "a.md"), "# a\n");
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", folder);
-      const parsed = navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       expect(parsed.entries).toEqual([{ path: "a.md", kind: "file", description: null }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test(".gitignore rules hide files, directories, and their truncated counts", () => {
+  test(".gitignore rules hide files, directories, and their truncated counts", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
@@ -186,14 +257,14 @@ describe("nav capability", () => {
       writeFileSync(join(service, ".gitignore"), "drop.md\nsecret/\n");
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
-      const parsed = navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       expect(parsed.entries).toEqual([{ path: "keep.md", kind: "file", description: null }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test(".gitignore negation re-includes; deeper .gitignore overrides shallower", () => {
+  test(".gitignore negation re-includes; deeper .gitignore overrides shallower", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
@@ -206,12 +277,12 @@ describe("nav capability", () => {
       writeFileSync(join(service, "area", ".gitignore"), "!keep.md\ndrop-nested.md\n");
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
-      const parsed = navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       // root: area/*.md ignored except reinstated; deeper file: keep re-included, drop-nested ignored
       expect(parsed.entries).toEqual([
         { path: "area", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 2 },
       ]);
-      const deep = navJson({ endpoint: "kb", path: "area" }, { currentDirectory: root, registryPath });
+      const deep = await navJson({ endpoint: "kb", path: "area" }, { currentDirectory: root, registryPath });
       expect(deep.entries).toEqual([
         { path: "area/keep.md", kind: "file", description: null },
         { path: "area/reinstated.md", kind: "file", description: null },
@@ -221,7 +292,7 @@ describe("nav capability", () => {
     }
   });
 
-  test("double-star patterns hide nested files and subtrees at any depth", () => {
+  test("double-star patterns hide nested files and subtrees at any depth", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
@@ -238,41 +309,82 @@ describe("nav capability", () => {
       writeFileSync(join(service, ".gitignore"), "**/tmp.md\nlogs/**\nx/**/b.md\n");
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
-      const parsed = navJson({ endpoint: "kb", depth: 5 }, { currentDirectory: root, registryPath });
+      const parsed = await navJson({ endpoint: "kb", depth: 5 }, { currentDirectory: root, registryPath });
+      // Engine `**` semantics: `**/tmp.md` compiles to `^.*/tmp\.md$` — one
+      // or more directories — so the ROOT-level tmp.md stays visible (git
+      // would match zero directories too; registered engine trade-off).
       expect(parsed.entries.map((entry: { path: string }) => entry.path)).toEqual([
         "area/keep-deep.md",
         "keep.md",
+        "tmp.md",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("gitignore and directory exclusions are case-insensitive (Windows git semantics)", () => {
+  test("gitignore matching is case-sensitive (engine semantics; ask #3 trade-off registered)", async () => {
+    // Two fixtures on separate roots: one tree cannot carry both `Build/`
+    // and `build/` on a case-insensitive Windows filesystem.
+    const exactRoot = mkdtempSync(join(tmpdir(), "ukp-nav-case-exact-"));
+    const divergentRoot = mkdtempSync(join(tmpdir(), "ukp-nav-case-div-"));
+    try {
+      const writeFixture = (root: string) => {
+        const service = createNavService(root, "kb");
+        writeFiles(service, [
+          { path: "keep.md" },
+          { path: "Build/artifact.md" },
+        ]);
+        const registryPath = join(root, "registry.toml");
+        registerAt(registryPath, "kb", service);
+        return { service, registryPath };
+      };
+      // Exact-case rule hides the directory (engine regex carries no `i`).
+      const exact = writeFixture(exactRoot);
+      writeFileSync(join(exact.service, ".gitignore"), "Build/\n");
+      const exactParsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: exactRoot, registryPath: exact.registryPath });
+      expect(exactParsed.entries.map((entry: { path: string }) => entry.path)).toEqual(["keep.md"]);
+      // Case-divergent rule does not hide it (the Windows core.ignorecase
+      // divergence is a registered trade-off with bilateral ask #3).
+      const divergent = writeFixture(divergentRoot);
+      writeFileSync(join(divergent.service, ".gitignore"), "build/\n");
+      const divergentParsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: divergentRoot, registryPath: divergent.registryPath });
+      expect(divergentParsed.entries.map((entry: { path: string }) => entry.path)).toEqual([
+        "Build/artifact.md",
+        "keep.md",
+      ]);
+    } finally {
+      rmSync(exactRoot, { recursive: true, force: true });
+      rmSync(divergentRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("directory exclusions match exact names; coverage is visible under the engine floor set", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
       writeFiles(service, [
-        { path: "keep.md" },
+        { path: "real.md" },
         { path: "Build/artifact.md" },
-        { path: "Secret/hidden.md" },
+        { path: "coverage/report.md" },
       ]);
-      writeFileSync(join(service, ".gitignore"), "build/\n");
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
-      const parsed = navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
-      // `Build/` matches the lowercase `build/` gitignore rule; `Secret` is
-      // not in the exclusion set and stays visible.
+      const parsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
+      // Engine floor set: node_modules/dist/build/lib/out/.pnpm/… exact-name;
+      // `Build` (case-divergent) and `coverage` (not in the engine floor)
+      // are both visible — the engine's set replaces UKP's old local set.
       expect(parsed.entries.map((entry: { path: string }) => entry.path)).toEqual([
-        "keep.md",
-        "Secret/hidden.md",
+        "Build/artifact.md",
+        "coverage/report.md",
+        "real.md",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("non-nav capability without a provider still fails fast at Manifest load", () => {
+  test("non-nav capability without a provider still fails fast at Manifest load", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const folder = join(root, "kb-service");
@@ -280,7 +392,7 @@ describe("nav capability", () => {
       writeFileSync(join(folder, ".ukp", "service.toml"), 'name = "kb"\n[capabilities.search]\n');
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", folder);
-      const result = executeNavCommand(
+      const result = await executeNavCommand(
         ["--endpoint", "kb"],
         { currentDirectory: root, registryPath },
       );
@@ -291,7 +403,7 @@ describe("nav capability", () => {
     }
   });
 
-  test("nested frontmatter description keys are not mistaken for the description", () => {
+  test("nested frontmatter description keys surface via the engine chain (R3 whole-chain semantics)", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
@@ -302,14 +414,18 @@ describe("nav capability", () => {
       );
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
-      const parsed = navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
-      expect(parsed.entries[0].description).toBeNull();
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      // The engine's yaml-like frontmatter read tolerates indentation
+      // (tuition-paid port; R3 adopted the chain whole), so an indented
+      // `description:` under another key DOES surface — UKP's old
+      // indentation guard was a local divergence, superseded 2026-10-22.
+      expect(parsed.entries[0].description).toBe("nested value");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("agent-instruction files are excluded by default, counts included", () => {
+  test("agent-instruction files are excluded by default, counts included", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
@@ -320,7 +436,7 @@ describe("nav capability", () => {
       ]);
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
-      const parsed = navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       // docs still appears (real.md counts); AGENTS.md never shows.
       expect(parsed.entries).toEqual([
         { path: "docs", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 1 },
@@ -330,93 +446,34 @@ describe("nav capability", () => {
     }
   });
 
-  test("description-read budget (ADR 0018): entries stay listed, omissions are loud", () => {
-    const root = mkdtempSync(join(tmpdir(), "ukp-nav-budget-"));
+  test("max_description_files is retired (R6/C1): presence fails as a provider error", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-retired-"));
     try {
       const folder = join(root, "kb-service");
       mkdirSync(join(folder, ".ukp"), { recursive: true });
       writeFileSync(
         join(folder, ".ukp", "service.toml"),
-        [
-          'name = "kb"',
-          "[capabilities.nav]",
-          'provider = "file"',
-          "[capabilities.nav.config]",
-          "max_description_files = 2",
-        ].join("\n") + "\n",
+        'name = "kb"\n[capabilities.nav]\nprovider = "file"\n[capabilities.nav.config]\nmax_description_files = 2\n',
       );
       writeFiles(folder, [
         { path: "a.md", description: "A" },
         { path: "b.md", description: "B" },
         { path: "c.md", description: "C" },
-        { path: "d.md", description: "D" },
       ]);
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", folder);
-      const context = { currentDirectory: root, registryPath };
-
-      const parsed = navJson({ endpoint: "kb", depth: 1 }, context);
-      // All four entries stay listed; first two carry descriptions, the rest
-      // are flagged — never silently dropped (ADR 0018 loud contract).
-      expect(parsed.entries).toEqual([
-        { path: "a.md", kind: "file", description: "A" },
-        { path: "b.md", kind: "file", description: "B" },
-        { path: "c.md", kind: "file", description: null, descriptionOmitted: "budget" },
-        { path: "d.md", kind: "file", description: null, descriptionOmitted: "budget" },
-      ]);
-      expect(parsed.diagnostics).toEqual([
-        {
-          code: "description-budget-reached",
-          message:
-            "descriptions omitted for 2 entries beyond the description-read budget 2 "
-            + "(nav config 'max_description_files'; entries stay listed, counts stay exact)",
-        },
-      ]);
-
-      // Human mode: budget-hit entries carry a visible marker
-      const human = executeNavCommand(["--endpoint", "kb", "--depth", "1"], context);
-      expect(human.exitCode).toBe(0);
-      expect(human.stdout).toContain("c.md | (description omitted: budget reached)");
-      expect(human.stdout).not.toContain("C\n");
-      // Diagnostics surface on stderr in BOTH modes (loud, read's channel discipline)
-      expect(human.stderr).toContain("description-budget-reached: descriptions omitted for 2 entries");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("invalid max_description_files fails as a provider error; default budget never binds", () => {
-    const root = mkdtempSync(join(tmpdir(), "ukp-nav-budget-invalid-"));
-    const defaultRoot = mkdtempSync(join(tmpdir(), "ukp-nav-budget-default-"));
-    try {
-      const folder = join(root, "kb-service");
-      mkdirSync(join(folder, ".ukp"), { recursive: true });
-      writeFileSync(
-        join(folder, ".ukp", "service.toml"),
-        'name = "kb"\n[capabilities.nav]\nprovider = "file"\n[capabilities.nav.config]\nmax_description_files = 0\n',
-      );
-      writeFiles(folder, [{ path: "a.md" }]);
-      const registryPath = join(root, "registry.toml");
-      registerAt(registryPath, "kb", folder);
-      const result = executeNavCommand(["--endpoint", "kb"], { currentDirectory: root, registryPath });
+      const result = await executeNavCommand(["--endpoint", "kb"], { currentDirectory: root, registryPath });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("nav config 'max_description_files' must be a positive integer");
-
-      // Default (no config): small trees never hit the budget, zero diagnostics
-      const context = setup(defaultRoot, [
-        { path: "a.md", description: "A" },
-        { path: "b.md", description: "B" },
-      ], "kb-default");
-      const parsed = navJson({ endpoint: "kb-default" }, context);
-      expect(parsed.diagnostics).toEqual([]);
-      expect(parsed.entries.every((entry: { descriptionOmitted?: string }) => entry.descriptionOmitted === undefined)).toBe(true);
+      expect(result.stderr).toContain("max_description_files' is retired");
+      // Loud retirement — any presence, even a formerly valid value, is a
+      // hard error pointing at the ruling; never a silent no-op.
+      expect(result.stderr).toContain("R6");
     } finally {
       rmSync(root, { recursive: true, force: true });
-      rmSync(defaultRoot, { recursive: true, force: true });
     }
   });
 
-  test("nav config can replace exclude_files and exclude_dirs wholesale", () => {
+  test("nav config can replace exclude_files and exclude_dirs wholesale", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const folder = join(root, "kb-service");
@@ -439,8 +496,9 @@ describe("nav capability", () => {
       ]);
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", folder);
-      const parsed = navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
-      // AGENTS.md re-included by the override; drafts excluded; defaults replaced.
+      const parsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
+      // AGENTS.md re-included by the override (whole-set replacement over
+      // the engine's terminal arrays); drafts excluded; defaults replaced.
       expect(parsed.entries.map((entry: { path: string }) => entry.path)).toEqual([
         "AGENTS.md",
         "keep.md",
@@ -450,7 +508,7 @@ describe("nav capability", () => {
     }
   });
 
-  test("invalid nav config lists fail as provider errors", () => {
+  test("invalid nav config lists fail as provider errors", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const folder = join(root, "kb-service");
@@ -461,7 +519,7 @@ describe("nav capability", () => {
       );
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", folder);
-      const result = executeNavCommand(["--endpoint", "kb"], { currentDirectory: root, registryPath });
+      const result = await executeNavCommand(["--endpoint", "kb"], { currentDirectory: root, registryPath });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("nav config 'exclude_dirs' must be an array of non-empty strings");
     } finally {
@@ -494,7 +552,7 @@ describe("nav capability", () => {
     }
   });
 
-  test("dot entries and excluded directory names never appear", () => {
+  test("dot entries and engine-floor directory names never appear", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
@@ -506,18 +564,18 @@ describe("nav capability", () => {
       ]);
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
-      const parsed = navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
+      const parsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
       expect(parsed.entries).toEqual([{ path: "real.md", kind: "file", description: null }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("file entries keep the .md suffix so get can consume the path", () => {
+  test("file entries keep the .md suffix so get can consume the path", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [{ path: "docs/guide.md" }]);
-      const parsed = navJson({ endpoint: "kb", depth: 1 }, context);
+      const parsed = await navJson({ endpoint: "kb", depth: 1 }, context);
       expect(parsed.entries[0].path).toBe("docs/guide.md");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -526,7 +584,7 @@ describe("nav capability", () => {
 });
 
 describe("nav capability failures", () => {
-  test("nav is a derived default: endpoint without a nav declaration still works", () => {
+  test("nav is a derived default: endpoint without a nav declaration still works", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const folder = join(root, "kb-service");
@@ -538,14 +596,14 @@ describe("nav capability failures", () => {
       writeFiles(folder, [{ path: "a.md" }, { path: "AGENTS.md" }]);
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", folder);
-      const parsed = navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       expect(parsed.entries).toEqual([{ path: "a.md", kind: "file", description: null }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("flat visibility keys under [capabilities.nav] work without a config subtable", () => {
+  test("flat visibility keys under [capabilities.nav] work without a config subtable", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const folder = join(root, "kb-service");
@@ -562,7 +620,7 @@ describe("nav capability failures", () => {
       writeFiles(folder, [{ path: "AGENTS.md" }, { path: "drafts/wip.md" }, { path: "keep.md" }]);
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", folder);
-      const parsed = navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
+      const parsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
       expect(parsed.entries.map((entry: { path: string }) => entry.path)).toEqual([
         "AGENTS.md",
         "keep.md",
@@ -593,13 +651,13 @@ describe("nav capability failures", () => {
     }
   });
 
-  test("non-file provider fails as unsupported", () => {
+  test("non-file provider fails as unsupported", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb", "qmd");
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
-      const result = executeNavCommand(
+      const result = await executeNavCommand(
         ["--endpoint", "kb"],
         { currentDirectory: root, registryPath },
       );
@@ -610,11 +668,11 @@ describe("nav capability failures", () => {
     }
   });
 
-  test("path miss fails precisely without fuzzy candidates", () => {
+  test("path miss fails precisely without fuzzy candidates", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [{ path: "docs/guide.md" }]);
-      const result = executeNavCommand(["--endpoint", "kb", "doc"], context);
+      const result = await executeNavCommand(["--endpoint", "kb", "doc"], context);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("was not found in endpoint 'kb'");
       expect(result.stderr).not.toContain("Did you mean");
@@ -623,11 +681,11 @@ describe("nav capability failures", () => {
     }
   });
 
-  test("path pointing at a file fails as not a directory", () => {
+  test("path pointing at a file fails as not a directory", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const context = setup(root, [{ path: "docs/guide.md" }]);
-      const result = executeNavCommand(["--endpoint", "kb", "docs/guide.md"], context);
+      const result = await executeNavCommand(["--endpoint", "kb", "docs/guide.md"], context);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("is not a directory");
     } finally {
@@ -635,11 +693,11 @@ describe("nav capability failures", () => {
     }
   });
 
-  test("route trailing separator addresses the same route (docs/ == docs)", () => {
+  test("route trailing separator addresses the same route (docs/ == docs)", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-trailing-sep-"));
     try {
       const context = setup(root, [{ path: "docs/guide.md" }]);
-      const result = executeNavCommand(["--endpoint", "kb", "docs/"], context);
+      const result = await executeNavCommand(["--endpoint", "kb", "docs/"], context);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("docs/guide.md");
     } finally {
@@ -688,17 +746,17 @@ describe("nav command surface", () => {
     expect(() => parseNavArgs(["--endpoint", "kb", "../escape"])).toThrow(NavUsageError);
   });
 
-  test("help request renders help; usage error carries the usage line", () => {
+  test("help request renders help; usage error carries the usage line", async () => {
     const { root, context } = commandFixture();
     try {
-      const help = executeNavCommand(["--help"], context);
+      const help = await executeNavCommand(["--help"], context);
       expect(help.exitCode).toBe(0);
       expect(help.stdout).toContain("Usage: ukp nav");
       expect(renderNavHelp()).toContain("--depth");
-      const usage = executeNavCommand(["-g"], context);
+      const usage = await executeNavCommand(["-g"], context);
       expect(usage.exitCode).toBe(2);
       expect(usage.stderr).toContain("Usage: ukp nav");
-      const dotPath = executeNavCommand(["--endpoint", "kb", "."], context);
+      const dotPath = await executeNavCommand(["--endpoint", "kb", "."], context);
       expect(dotPath.exitCode).toBe(2);
       expect(dotPath.stderr).toContain("path must not contain '.' or '..' path segments");
       expect(dotPath.stderr).toContain("Usage: ukp nav");
@@ -708,10 +766,10 @@ describe("nav command surface", () => {
     }
   });
 
-  test("human output renders descriptions and truncated folders", () => {
+  test("human output renders descriptions and truncated folders", async () => {
     const { root, context } = commandFixture();
     try {
-      const result = executeNavCommand(["--endpoint", "kb"], context);
+      const result = await executeNavCommand(["--endpoint", "kb"], context);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`endpoint: kb (root: ., depth: ${NAV_DEFAULT_DEPTH})`);
       expect(result.stdout).toContain("README.md | Root kb");
@@ -721,10 +779,10 @@ describe("nav command surface", () => {
     }
   });
 
-  test("json output uses the ukp.nav.v1 envelope", () => {
+  test("json output uses the ukp.nav.v1 envelope", async () => {
     const { root, context } = commandFixture();
     try {
-      const result = executeNavCommand(["--endpoint", "kb", "--json"], context);
+      const result = await executeNavCommand(["--endpoint", "kb", "--json"], context);
       expect(result.exitCode).toBe(0);
       const envelope = JSON.parse(result.stdout);
       expect(envelope.schema).toBe("ukp.nav.v1");
@@ -738,10 +796,10 @@ describe("nav command surface", () => {
     }
   });
 
-  test("unknown endpoint fails with a recovery hint", () => {
+  test("unknown endpoint fails with a recovery hint", async () => {
     const { root, context } = commandFixture();
     try {
-      const result = executeNavCommand(["--endpoint", "nope"], context);
+      const result = await executeNavCommand(["--endpoint", "nope"], context);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("ukp list");
     } finally {
