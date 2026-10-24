@@ -26,7 +26,6 @@ import {
   renderNavHelp,
   renderRgHelp,
   runCli,
-  wrapLinesForTerminal,
 } from "../src/cli.ts";
 import { UPDATE_SPEC } from "../src/commands/update.ts";
 import { DIAGNOSE_SPEC } from "../src/commands/diagnose.ts";
@@ -1616,40 +1615,5 @@ describe("CLI bootstrap", () => {
     expect(new Set(locationStartAt).size).toBe(1);
     expect(new Set(capsStartAt).size).toBe(1);
     expect(rows.every((row) => !row.includes("\t") && !/[ \t]+$/.test(row))).toBe(true);
-  });
-});
-
-describe("wrapLinesForTerminal (ukp_list W2: stderr footnotes wrap at word boundaries on a TTY)", () => {
-  test("short lines pass through unchanged; narrow widths are refused, not guessed", () => {
-    expect(wrapLinesForTerminal("short line", 40)).toBe("short line");
-    expect(wrapLinesForTerminal("anything", 7)).toBe("anything");
-  });
-
-  test("a long line wraps at word boundaries — never mid-word when a space fits", () => {
-    const wrapped = wrapLinesForTerminal(
-      "endpoint 'openai-agents' declared capabilities unavailable: Service folder is not accessible",
-      40,
-    );
-    for (const line of wrapped.split("\n")) {
-      expect(line.length).toBeLessThanOrEqual(40);
-    }
-    // Continuations start at column 0 and words survive whole.
-    expect(wrapped.split("\n").every((line) => !line.startsWith(" "))).toBe(true);
-    expect(wrapped).toContain("endpoint 'openai-agents'");
-    expect(wrapped).toContain("unavailable:");
-  });
-
-  test("a token longer than the width (path, SPKI pin) hard-splits and the tail re-packs", () => {
-    const wrapped = wrapLinesForTerminal("pin sha256/6A4SXoFMmqR7ubhhI5cnlasJIJC8hbN+uUlcyLPqj78= trusted", 20);
-    const lines = wrapped.split("\n");
-    for (const line of lines) expect(line.length).toBeLessThanOrEqual(20);
-    // The 50-char pin broke at the width; the following word landed after
-    // the pin's tail on the same packed line, not stranded mid-column.
-    expect(lines[lines.length - 1].endsWith("trusted")).toBe(true);
-    expect(lines.join("")).toContain("sha256/6A4SXoFMmqR7ubhhI5cnlasJIJC8hbN+uUlcyLPqj78=");
-  });
-
-  test("multi-line text keeps its line structure; empty lines survive", () => {
-    expect(wrapLinesForTerminal("a\n\nb", 40)).toBe("a\n\nb");
   });
 });

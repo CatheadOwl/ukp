@@ -26,6 +26,17 @@ All notable public changes to UKP will be documented in this file.
   `src/plumbing/token-file.ts` (zero UKP imports, machine-checked by
   test).
 
+### Changed
+
+- `ukp list` no longer word-wraps its stderr footnotes on interactive
+  terminals: they stay raw single lines in every mode and the terminal
+  wraps what it must (owner ruling 2026-10-24 — neither human nor agent
+  reading benefits from CLI-side pre-wrapping, which splits sentences at
+  a fixed width; the 2026-09-21 interactive word-boundary wrap and its
+  width snapshot are removed together with their tests). Piped/CI stderr
+  bytes were already raw and are unchanged; the TTY-gated progress line
+  is unaffected.
+
 ### Fixed
 
 - Trailing separators in endpoint-relative references are now

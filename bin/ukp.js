@@ -73,11 +73,12 @@ if (bunPath === undefined) {
 
 // In-process handoff when this launcher already runs under bun (bun's own
 // bin links and `bunx`): importing the CLI keeps it in THIS process, where
-// stdout/stderr keep their real TTY identity (columns, isTTY) — a spawnSync
+// stdout/stderr keep their real TTY identity (isTTY) — a spawnSync
 // grandchild re-inherits duplicated handles, and on some hosts that layer
-// degraded TTY detection (the third dogfood round: progress/wrap silently
-// skipped while a direct run on the same console had both). One process
-// also starts faster. The node-interpreted path (npm shims) keeps spawning.
+// degraded TTY detection (the third dogfood round: progress frames
+// silently skipped while a direct run on the same console had them). One
+// process also starts faster. The node-interpreted path (npm shims) keeps
+// spawning.
 if (runningUnderBun) {
   const { runCli } = await import(pathToFileURL(cli).href);
   const exit = runCli(process.argv.slice(2));
