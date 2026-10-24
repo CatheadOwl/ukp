@@ -6,6 +6,7 @@ import {
   isRemoteBinding,
   parseRemoteUrl,
   readRegistry,
+  rebindAt,
   registerAt,
   registerRemoteAt,
   unregisterAt,
@@ -73,6 +74,7 @@ export const REGISTER_SPEC: UkpCommandSpec = {
   strictArguments: true,
   options: [
     { flags: "--url <url>", help: "register a remote ukp-serve endpoint (https://host[:port], ssh://host[/endpoint] - ssh takes no port, the woken door picks its own - or loopback http); a host door url (its document declares scope:\"host\") imports every endpoint behind the door - binding urls gain the endpoint-name path (ssh://ali/notes)" },
+    { flags: "--rebind", help: "local only: relocate this endpoint name to the current Service folder in one step (the folder moved); the name must already be bound to a local folder - registering a name bound elsewhere without this flag is rejected with the recovery path" },
     { flags: "--endpoint <name>", help: "assert the remote-declared name of the endpoint being registered (expected-name assertion; with a host door this imports only that endpoint)" },
     { flags: "--name <handle>", help: "remote only: register under this local handle - the registry key and ukp:// authority - instead of the declared name; use it when the declared name is already taken" },
     { flags: "--select <names>", help: "with a host door url: import only the named endpoints (comma-separated); a name not on the door is a usage error" },
@@ -82,7 +84,10 @@ export const REGISTER_SPEC: UkpCommandSpec = {
     "",
     "Recovery:",
     "  Registering a name already bound to a different location is rejected.",
-    "  Unregister the old binding first, then register from the new Service folder:",
+    "  If the Service folder moved, re-run register from the new folder with",
+    "  --rebind to relocate the name in one step (local bindings only):",
+    "  ukp register --rebind",
+    "  Without the flag the two-step path stays available:",
     "  ukp unregister --endpoint <name>",
     "",
     "Binding:",
@@ -188,7 +193,7 @@ export function executeRegisterCommand(
   }
 
   try {
-    const parsed = parseKitArgs<{ url?: string; token?: string; select?: string; endpoint?: string; name?: string }>(REGISTER_SPEC, args);
+    const parsed = parseKitArgs<{ url?: string; token?: string; select?: string; endpoint?: string; name?: string; rebind?: boolean }>(REGISTER_SPEC, args);
     const expectedName = parsed.options.endpoint;
     if (expectedName !== undefined && !ENDPOINT_NAME.test(expectedName)) {
       throw new KitUsageError("--endpoint requires a valid endpoint name");
@@ -202,6 +207,11 @@ export function executeRegisterCommand(
       // folder owner controls; the registry naming slot is remote-only.
       throw new KitUsageError("--name chooses a remote registration handle and requires --url");
     }
+    if (parsed.options.rebind === true && parsed.options.url !== undefined) {
+      // --rebind is the narrow local relocation exit; remote handles keep
+      // the unregister path (registry-commands rebind-one-step, 2026-10-24).
+      throw new KitUsageError("--rebind relocates a local binding and cannot be combined with --url");
+    }
     if (parsed.options.url !== undefined) {
       return executeRegisterRemote(parsed.options.url, parsed.options.token, parsed.options.select, expectedName, handleName, context);
     }
@@ -211,6 +221,26 @@ export function executeRegisterCommand(
     const report = diagnoseService(context.currentDirectory, context.resolveProvider);
     if (expectedName !== undefined && expectedName !== report.service.effectiveName) {
       throw new Error(`expected endpoint '${expectedName}', but this Service effective name is '${report.service.effectiveName}'`);
+    }
+    if (parsed.options.rebind === true) {
+      // Diagnosis already validated the new Service folder — a failed rebind
+      // (unknown name, remote handle, taken location) leaves the old binding
+      // untouched; the swap itself is one atomic registry transition.
+      const previous = readRegistry(context.registryPath).find(
+        (endpoint) => endpoint.name === report.service.effectiveName,
+      );
+      rebindAt(context.registryPath, report.service.effectiveName, report.service.folder);
+      const lines = [
+        `rebound: ${report.service.effectiveName}`,
+        `from: ${previous?.path ?? "(unknown)"}`,
+        ...(report.service.manifest.description ? [`description: ${report.service.manifest.description}`] : []),
+        `location: ${report.service.folder}`,
+      ];
+      return {
+        exitCode: 0,
+        stdout: lines.join("\n"),
+        stderr: "",
+      };
     }
     registerAt(context.registryPath, report.service.effectiveName, report.service.folder);
     const lines = [

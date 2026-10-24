@@ -1,5 +1,5 @@
 import { describe, expect, test, afterAll } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -63,7 +63,7 @@ const ROOT_MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [
 ];
 const MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [...ROOT_MIGRATED_SPECS, INIT_SERVICE_SPEC];
 import { loadManifest } from "../src/config/manifest.ts";
-import { registerAt } from "../src/registry.ts";
+import { registerAt, readRegistry } from "../src/registry.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
 // Private per-file copy: the fixture's invocation state is written into the
@@ -1561,6 +1561,36 @@ describe("CLI bootstrap", () => {
     expect(runCli(["unregister", "fixture-qmd"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(runCli(["list"], (message) => output.push(message), undefined, context)).toBe(0);
     expect(output.at(-1)).toBe("No endpoints registered.");
+  });
+
+  test("register --rebind relocates a moved Service folder in one step", () => {
+    const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-rebind-")), "registry.toml");
+    const moved = createQmdFixtureCopy("cli-rebind-moved");
+    registerAt(registryPath, "fixture-qmd", fixture);
+    const output: string[] = [];
+    const errors: string[] = [];
+    const context = {
+      currentDirectory: moved,
+      registryPath,
+      resolveProvider: () => ({ supported: true }),
+    };
+    // Plain register refuses and points at the recovery path (spec L140
+    // closure); the failed attempt leaves the old binding untouched.
+    expect(runCli(["register"], undefined, (message) => errors.push(message), context)).toBe(1);
+    const refusal = errors.join("\n");
+    expect(refusal).toContain("already bound to");
+    expect(refusal).toContain("--rebind");
+    const oldPath = readRegistry(registryPath)[0]!.path!;
+    // One-step relocation swaps the binding and reports the old location.
+    expect(runCli(["register", "--rebind"], (message) => output.push(message), undefined, context)).toBe(0);
+    const rebound = output.join("\n");
+    expect(rebound).toContain("rebound: fixture-qmd");
+    expect(rebound).toContain(`from: ${oldPath}`);
+    expect(rebound).toContain(`location: ${moved}`);
+    expect(readRegistry(registryPath)).toEqual([{ name: "fixture-qmd", path: realpathSync(moved) }]);
+    // --rebind never crosses into the remote registration branch.
+    expect(runCli(["register", "--rebind", "--url", "https://host:8570"], undefined, (message) => errors.push(message), context)).toBe(2);
+    expect(errors.at(-1)).toContain("cannot be combined with --url");
   });
 
   test("list aligns columns by cell width, not terminal tab stops", () => {

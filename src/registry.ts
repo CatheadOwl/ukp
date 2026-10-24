@@ -391,8 +391,13 @@ export function registerBinding(endpoints: readonly RegistryBinding[], binding: 
   const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
   if (sameName) {
     if (sameName.kind !== "remote" && sameName.path === canonical.path) return validateBindings(endpoints);
+    // Refusals carry their remedy (spec L140 contract): a local binding whose
+    // folder moved points at the one-step --rebind exit, everything else at
+    // the two-step unregister path (registry-commands rebind-one-step, 2026-10-24).
     throw new RegistryError(
-      `endpoint name '${canonical.name}' is already bound to ${sameName.kind === "remote" ? sameName.url : sameName.path}`,
+      sameName.kind === "remote"
+        ? `endpoint name '${canonical.name}' is already bound to ${sameName.url}; unregister '${canonical.name}' first`
+        : `endpoint name '${canonical.name}' is already bound to ${sameName.path}; if the Service folder moved, re-run 'ukp register --rebind' from its new location, or unregister '${canonical.name}' first`,
     );
   }
   const samePath = endpoints.find((endpoint) => endpoint.kind !== "remote" && endpoint.path === canonical.path);
@@ -400,6 +405,31 @@ export function registerBinding(endpoints: readonly RegistryBinding[], binding: 
     throw new RegistryError(`Service location is already bound to '${samePath.name}'`);
   }
   return validateBindings([...endpoints, canonical]);
+}
+
+/** One-step same-name relocation (registry-commands domain, rebind-one-step
+ * ruling 2026-10-24, superseding the two-step remedy for this exit only):
+ * swap a LOCAL binding's location in one atomic state transition. Narrow by
+ * design — no rename, no alias, no remote handles (an unbound name, a
+ * remote-held name, or a location owned by another name all refuse with
+ * their own remedy); a same-path rebind is the idempotent no-op. */
+export function rebindBinding(endpoints: readonly RegistryBinding[], binding: RegistryBinding): RegistryBinding[] {
+  const canonical: RegistryBinding = { name: binding.name, path: realpathSync(binding.path!) };
+  const sameName = endpoints.find((endpoint) => endpoint.name === canonical.name);
+  if (sameName === undefined) {
+    throw new RegistryError(`endpoint name '${canonical.name}' is not bound; nothing to rebind - run 'ukp register' to register it`);
+  }
+  if (sameName.kind === "remote") {
+    throw new RegistryError(
+      `endpoint name '${canonical.name}' is bound to the remote url ${sameName.url}; --rebind relocates local bindings - unregister '${canonical.name}' first`,
+    );
+  }
+  if (sameName.path === canonical.path) return validateBindings(endpoints);
+  const samePath = endpoints.find((endpoint) => endpoint.kind !== "remote" && endpoint.path === canonical.path);
+  if (samePath) {
+    throw new RegistryError(`Service location is already bound to '${samePath.name}'`);
+  }
+  return validateBindings([...endpoints.filter((endpoint) => endpoint.name !== canonical.name), canonical]);
 }
 
 /** Remote registration (D-077; naming residence ADR-REM-007 / D-086): the
@@ -527,6 +557,12 @@ export function registerAt(registryPath: string, name: string, servicePath: stri
   const canonicalPath = realpathSync(servicePath);
   if (!statSync(canonicalPath).isDirectory()) throw new RegistryError(`Service location is not a directory: ${servicePath}`);
   return mutateRegistry(registryPath, (current) => registerBinding(current, { name, path: canonicalPath }));
+}
+
+export function rebindAt(registryPath: string, name: string, servicePath: string): RegistryBinding[] {
+  const canonicalPath = realpathSync(servicePath);
+  if (!statSync(canonicalPath).isDirectory()) throw new RegistryError(`Service location is not a directory: ${servicePath}`);
+  return mutateRegistry(registryPath, (current) => rebindBinding(current, { name, path: canonicalPath }));
 }
 
 export function registerRemoteAt(

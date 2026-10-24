@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
-import { readRegistry, registerAt, registerRemoteBinding, serializeRegistry, unregisterAt, parseRegistry, parseRemoteUrl, assertRegistrableRemoteUrl, assertRemoteUrlAllowed, RegistryError } from "../src/registry.ts";
+import { readRegistry, registerAt, rebindAt, rebindBinding, registerRemoteBinding, serializeRegistry, unregisterAt, parseRegistry, parseRemoteUrl, assertRegistrableRemoteUrl, assertRemoteUrlAllowed, RegistryError } from "../src/registry.ts";
 
 function tempRegistry() {
   const root = mkdtempSync(join(tmpdir(), "ukp-registry-"));
@@ -64,6 +64,31 @@ describe("Registry", () => {
     const otherService = join(dirname(registry), "other-service");
     mkdirSync(otherService);
     expect(() => registerAt(registry, "cad", otherService)).toThrow("already bound");
+  });
+
+  test("rebind relocates a local binding in one step and refuses everything else", () => {
+    const { registry, service } = tempRegistry();
+    registerAt(registry, "cad", service);
+    const moved = join(dirname(registry), "moved-service");
+    mkdirSync(moved);
+    const rebound = rebindAt(registry, "cad", moved);
+    expect(rebound).toEqual([{ name: "cad", path: realpathSync(moved) }]);
+    // Same-path rebind is the idempotent no-op.
+    expect(rebindAt(registry, "cad", moved)).toEqual(rebound);
+    // An unbound name has nothing to rebind.
+    expect(() => rebindAt(registry, "ghost", moved)).toThrow("nothing to rebind");
+    // A location owned by another name is not reachable through --rebind.
+    registerAt(registry, "other", service);
+    expect(() => rebindAt(registry, "other", moved)).toThrow("already bound to 'cad'");
+    // A remote-held name keeps the unregister path; --rebind never crosses kinds.
+    expect(() => rebindBinding(
+      [{ name: "notes", kind: "remote", url: "https://ali.example/notes", declared_name: "notes", instance_uid: "u" }],
+      { name: "notes", path: moved },
+    )).toThrow("remote url");
+    // The plain same-name refusal carries the recovery path (spec L140 closure).
+    const second = join(dirname(registry), "second-service");
+    mkdirSync(second);
+    expect(() => registerAt(registry, "cad", second)).toThrow("--rebind");
   });
 
   test("unregister writes empty registry and keeps a backup", () => {
