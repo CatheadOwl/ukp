@@ -310,20 +310,20 @@ describe("nav capability", () => {
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
       const parsed = await navJson({ endpoint: "kb", depth: 5 }, { currentDirectory: root, registryPath });
-      // Engine `**` semantics: `**/tmp.md` compiles to `^.*/tmp\.md$` — one
-      // or more directories — so the ROOT-level tmp.md stays visible (git
-      // would match zero directories too; registered engine trade-off).
+      // Engine `**` semantics are git-native since the pathscope facade
+      // (ADR 0029): `**` matches zero or more directories, so `**/tmp.md`
+      // hides the ROOT-level tmp.md too — the 0.1.0 "one or more dirs"
+      // deviation is retired (DEC-0023 case-absorption set, git oracle).
       expect(parsed.entries.map((entry: { path: string }) => entry.path)).toEqual([
         "area/keep-deep.md",
         "keep.md",
-        "tmp.md",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("gitignore matching is case-sensitive (engine semantics; ask #3 trade-off registered)", async () => {
+  test("gitignore matching is case-insensitive (engine matcher semantics, ADR 0029)", async () => {
     // Two fixtures on separate roots: one tree cannot carry both `Build/`
     // and `build/` on a case-insensitive Windows filesystem.
     const exactRoot = mkdtempSync(join(tmpdir(), "ukp-nav-case-exact-"));
@@ -339,18 +339,20 @@ describe("nav capability", () => {
         registerAt(registryPath, "kb", service);
         return { service, registryPath };
       };
-      // Exact-case rule hides the directory (engine regex carries no `i`).
+      // Exact-case rule hides the directory.
       const exact = writeFixture(exactRoot);
       writeFileSync(join(exact.service, ".gitignore"), "Build/\n");
       const exactParsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: exactRoot, registryPath: exact.registryPath });
       expect(exactParsed.entries.map((entry: { path: string }) => entry.path)).toEqual(["keep.md"]);
-      // Case-divergent rule does not hide it (the Windows core.ignorecase
-      // divergence is a registered trade-off with bilateral ask #3).
+      // Case-divergent rule hides it too: the facade chain's matcher
+      // (node-ignore v7, via @catheadowl/pathscope) is case-insensitive —
+      // the 0.1.0 case-sensitive stance is retired. On Windows this aligns
+      // nav with the platform git default (core.ignorecase=true), closing
+      // the old bilateral ask #3 nav/git split in the insensitive direction.
       const divergent = writeFixture(divergentRoot);
       writeFileSync(join(divergent.service, ".gitignore"), "build/\n");
       const divergentParsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: divergentRoot, registryPath: divergent.registryPath });
       expect(divergentParsed.entries.map((entry: { path: string }) => entry.path)).toEqual([
-        "Build/artifact.md",
         "keep.md",
       ]);
     } finally {
@@ -359,7 +361,7 @@ describe("nav capability", () => {
     }
   });
 
-  test("directory exclusions match exact names; coverage is visible under the engine floor set", async () => {
+  test("directory exclusions match names case-insensitively; coverage and vendor join the engine floor (ADR 0029)", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
@@ -371,12 +373,12 @@ describe("nav capability", () => {
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
       const parsed = await navJson({ endpoint: "kb", depth: 3 }, { currentDirectory: root, registryPath });
-      // Engine floor set: node_modules/dist/build/lib/out/.pnpm/… exact-name;
-      // `Build` (case-divergent) and `coverage` (not in the engine floor)
-      // are both visible — the engine's set replaces UKP's old local set.
+      // Facade floor (DEC-0023 preset mapping): vcs/deps/build presets
+      // carry the old floor plus `vendor/` and `coverage/` (accepted
+      // increments — negatable by a repo's `!coverage/`), and the engine
+      // matcher's case-insensitivity brings case-divergent names
+      // (`Build/` vs floor `build`) back under the floor.
       expect(parsed.entries.map((entry: { path: string }) => entry.path)).toEqual([
-        "Build/artifact.md",
-        "coverage/report.md",
         "real.md",
       ]);
     } finally {

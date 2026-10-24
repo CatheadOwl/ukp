@@ -28,6 +28,26 @@ All notable public changes to UKP will be documented in this file.
 
 ### Changed
 
+- `ukp nav` rides the any-nav scan facade's pathscope engine chain (ADR 0029,
+  2026-10-24): the `@any-nav/scan` dependency moves from the registry `0.1.0`
+  pin to a local `link:@any-nav/scan` transition supply (two-level chain —
+  scan delegates its walk to `@catheadowl/pathscope`; bun's path-form `link:`
+  and `file:` protocols were probed and rejected with evidence). Accepted
+  engine-semantic increments, each adjudicated against a three-endpoint
+  regression gate: nested `.git` subtrees (vendored repos) no longer appear
+  in the route view, and pointing `nav` into one fails with `route root
+  segment … vanished from the scan tree` (exact-path `ukp read` still
+  retrieves that content); `vendor/` and `coverage/` join the default
+  exclusion floor (opt out via a repo `.gitignore` negation such as
+  `!vendor/`); `**` glob patterns follow git truth (zero or more directory
+  levels, so `**/x.md` now matches a root-level `x.md`); gitignore and floor
+  matching is case-insensitive (on Windows this aligns nav with the platform
+  git default); gitignore inheritance now reaches above the Service folder
+  up to the repository root; the `unreadable-directory` maintainer diagnostic
+  is retired. The runtime install closure widens to scan + pathscope
+  (ignore/fdir/find-up, all with zero install scripts); until the closing
+  window swaps the dependency back to a registry pin, `npm publish` is
+  intentionally blocked by the pack-audit `link:` guard.
 - `ukp list` no longer word-wraps its stderr footnotes on interactive
   terminals: they stay raw single lines in every mode and the terminal
   wraps what it must (owner ruling 2026-10-24 — neither human nor agent
