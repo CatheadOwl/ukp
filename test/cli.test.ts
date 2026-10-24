@@ -1592,6 +1592,36 @@ describe("CLI bootstrap", () => {
     expect(errors.at(-1)).toContain("cannot be combined with --url");
   });
 
+  test("list frames a dead local binding as binding-level with the rebind remedy", () => {
+    const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-dead-")), "registry.toml");
+    const gone = join(mkdtempSync(join(tmpdir(), "ukp-cli-dead-gone-")), "service");
+    mkdirSync(gone);
+    registerAt(registryPath, "gone", gone);
+    rmSync(gone, { recursive: true });
+    // Regression counterpart: an accessible folder with no manifest stays in
+    // the capability-degradation frame (the `declared` qualifier is the
+    // probe-anchored semantic carrier — folder reachable, manifest not).
+    const bare = mkdtempSync(join(tmpdir(), "ukp-cli-dead-bare-"));
+    registerAt(registryPath, "bare", bare);
+    const context = {
+      currentDirectory: fixture,
+      registryPath,
+      resolveProvider: () => ({ supported: true }),
+    };
+    const output: string[] = [];
+    const errors: string[] = [];
+    expect(runCli(["list"], (message) => output.push(message), (message) => errors.push(message), context)).toBe(0);
+    const table = output.join("\n");
+    expect(table).toContain("gone");
+    expect(table).toContain("(unavailable)");
+    const warnings = errors.join("\n");
+    // Dead binding: its own frame + the one-step remedy.
+    expect(warnings).toContain("endpoint 'gone' binding is dead: Service folder is not accessible");
+    expect(warnings).toContain("--rebind");
+    // Manifest-level failure keeps the declared-capabilities frame.
+    expect(warnings).toContain("endpoint 'bare' declared capabilities unavailable");
+  });
+
   test("list aligns columns by cell width, not terminal tab stops", () => {
     const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-align-")), "registry.toml");
     const context = {

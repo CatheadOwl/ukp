@@ -1,4 +1,4 @@
-import { ENDPOINT_NAME, loadManifest } from "../config/manifest.ts";
+import { ENDPOINT_NAME, loadManifest, ServiceFolderInaccessibleError } from "../config/manifest.ts";
 import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
 import {
@@ -171,6 +171,21 @@ function renderLocalListRow(endpoint: { name: string; path: string }): Inventory
     // One-line headline only: an inventory warning must stay scannable even
     // when the underlying ManifestError carries a full zod schema dump.
     const headline = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+    // A dead binding (folder unreachable) is a binding-level failure, not a
+    // capability degradation: the binding itself routes nowhere. It gets its
+    // own frame plus the one-step rebind remedy (dead-binding item 1; the
+    // `declared capabilities` qualifier stays reserved for manifest-level
+    // failures where the folder IS reachable — probe-anchored wording).
+    if (error instanceof ServiceFolderInaccessibleError) {
+      return {
+        name: endpoint.name,
+        location: endpoint.path,
+        capabilities: "(unavailable)",
+        warning: `endpoint '${endpoint.name}' binding is dead: ${headline}; `
+          + `if the folder moved, run 'ukp register --rebind' from the new folder `
+          + `(or 'ukp unregister --endpoint ${endpoint.name}')`,
+      };
+    }
     return {
       name: endpoint.name,
       location: endpoint.path,

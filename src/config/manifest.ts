@@ -64,6 +64,20 @@ export class ManifestError extends Error {
   }
 }
 
+/** Dead-binding classification (registry-commands dead-binding work item 1,
+ * 2026-10-24): the Service folder itself is unreachable — the binding routes
+ * to a path that no longer exists. Subclasses ManifestError so broad
+ * `instanceof ManifestError` catches keep working; consumers that need the
+ * distinction (the list face frames this as a binding-level failure with the
+ * one-step rebind remedy, not a capability degradation) branch on the class
+ * instead of matching message text. */
+export class ServiceFolderInaccessibleError extends ManifestError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ServiceFolderInaccessibleError";
+  }
+}
+
 export function assertRestrictedToml(value: unknown, path = "root"): void {
   if (value === null || value === undefined || value instanceof Date) {
     throw new ManifestError(`${path}: unsupported TOML value`);
@@ -128,7 +142,7 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
     folder = realpathSync(serviceFolder);
     if (!statSync(folder).isDirectory()) throw new Error("not a directory");
   } catch (error) {
-    throw new ManifestError(`Service folder is not accessible: ${serviceFolder}`, { cause: error });
+    throw new ServiceFolderInaccessibleError(`Service folder is not accessible: ${serviceFolder}`, { cause: error });
   }
 
   const manifestPath = join(folder, ".ukp", "service.toml");
