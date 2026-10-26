@@ -21,13 +21,16 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SessionWriteTier } from "../config/agent-backed.ts";
 import { toolRelayArgv, TOOL_NOT_FOUND_EXIT } from "../spawn-relay.ts";
+import { sshConnectTimeoutSeconds } from "./remote-client.ts";
 
 // ---- Classified errors (ADR 0021: capability classifies, CLI maps codes)
 
@@ -286,19 +289,184 @@ export async function runAmuxSession(
     ? toolRelayArgv(argv, { notFoundGuard: true })
     : argv;
 
+  // Spec §7.2 (local single-user tier): the process environment equals
+  // the caller's, plus the shared timeout knob — amux runs its own
+  // substrate timer on the same deadline instead of a second default.
+  return runDerivedAmuxProcess({
+    spawnArgv,
+    env: { ...process.env, AMUX_TIMEOUT_MS: String(sessionSubstrateTimeoutMs()) },
+    timeoutMs: sessionSubstrateTimeoutMs(),
+    backstopKind: request.kind,
+    backstopSessionId: request.kind === "send" ? request.sessionId : undefined,
+    unavailable: { command, explicit: explicitCommand },
+  });
+}
+
+// ---- Remote transport (ukp_session_remote W2, shape A per-verb ssh exec):
+// the dispatcher's session_hosts declaration names the ssh target and the
+// remote anchor folder; the prompt travels as a brief file (ssh joins argv
+// with spaces and the remote cmd re-parses — arbitrary --text cannot cross
+// that boundary intact, the W1 quoting lesson), and the shared timeout knob
+// rides the remote command line (`set AMUX_TIMEOUT_MS=…&&`) so both layers
+// keep running on one deadline.
+
+/** Keep-alive constants (the W1 recipe): probes every 45s keep NAT/firewall
+ * state fresh far below amux's idle window, tolerating 8 losses (~6min of
+ * unresponsiveness) before the client gives up. */
+export const SESSION_SSH_ALIVE_OPTIONS: readonly string[] = [
+  "-o", "ServerAliveInterval=45",
+  "-o", "ServerAliveCountMax=8",
+];
+
+/** The remote amux invocation: same derivation inputs as AmuxInvocation,
+ * with the ssh target and remote anchor folder replacing the local cwd
+ * anchor. `host` is the session_hosts name (the ssh target verbatim). */
+export type RemoteAmuxInvocation =
+  | {
+      kind: "spawn";
+      host: string;
+      folder: string;
+      agentCommand: readonly string[];
+      prompt: string;
+      sandbox: AmuxSandboxTier;
+    }
+  | {
+      kind: "send";
+      host: string;
+      sessionId: string;
+      prompt: string;
+      sandbox: AmuxSandboxTier;
+    };
+
+/** The remote exec argv. The remote command is passed as separate argv
+ * elements that ssh joins with spaces — every element is space-free by
+ * construction (the brief path is a %USERPROFILE% relative the remote cmd
+ * expands). The `set NAME=value&&` element forwards the shared timeout
+ * knob into the remote environment without masking amux's exit code (a
+ * cmd && chain passes through the last command's code, and the && hugs the
+ * value so no trailing space lands in it). */
+export function remoteAmuxArgv(
+  sshCommand: readonly string[],
+  request: RemoteAmuxInvocation,
+  remoteBriefPath: string,
+  timeoutMs: number,
+  connectTimeoutSeconds: number,
+): string[] {
+  const tail = ["--events", "--sandbox", request.sandbox, "--brief", remoteBriefPath];
+  const amux = request.kind === "spawn"
+    ? ["amux", request.folder, ...request.agentCommand, ...tail]
+    : ["amux", "send", request.sessionId, ...tail];
+  return [
+    ...sshCommand,
+    "-o", "BatchMode=yes",
+    "-o", `ConnectTimeout=${connectTimeoutSeconds}`,
+    ...SESSION_SSH_ALIVE_OPTIONS,
+    request.host,
+    "set",
+    `AMUX_TIMEOUT_MS=${timeoutMs}&&`,
+    ...amux,
+  ];
+}
+
+export interface RemoteAmuxRunOptions {
+  /** Explicit ssh command (test injection, the remote-client sshCommand
+   * precedent); never wrapped in the win32 relay. */
+  sshCommand?: readonly string[];
+  /** Explicit scp command (test injection); never wrapped in the relay. */
+  scpCommand?: readonly string[];
+}
+
+function relayFor(argv: readonly string[], explicit: boolean): string[] {
+  return process.platform === "win32" && !explicit ? toolRelayArgv([...argv]) : [...argv];
+}
+
+/** Runs one remote amux turn: upload the brief (scp, byte-faithful), exec
+ * amux over ssh with the keep-alive constants, derive from the event
+ * stream exactly as the local path does, then best-effort delete the
+ * remote brief. The wall timer kills the local ssh client only — the
+ * remote amux tree survives a ukp timeout (W1 drill finding); the shared
+ * AMUX_TIMEOUT_MS forward keeps silent hangs self-stopping on the remote
+ * side. */
+export async function runRemoteAmuxSession(
+  request: RemoteAmuxInvocation,
+  options: RemoteAmuxRunOptions = {},
+): Promise<AmuxRunOutcome> {
+  const ssh = options.sshCommand ?? ["ssh"];
+  const scp = options.scpCommand ?? ["scp"];
+  const timeoutMs = sessionSubstrateTimeoutMs();
+  const connectTimeout = sshConnectTimeoutSeconds();
+  const briefName = `ukp-brief-${randomUUID()}.md`;
+  const localBrief = join(tmpdir(), briefName);
+  // scp's relative target lands in the remote home; %USERPROFILE% expands
+  // to the same directory inside the remote cmd — verified shape on the W1
+  // host probes.
+  const remoteBriefPath = `%USERPROFILE%\\${briefName}`;
+
+  writeFileSync(localBrief, request.prompt, "utf8");
+  try {
+    const uploadArgv = relayFor(
+      [...scp, "-o", "BatchMode=yes", "-o", `ConnectTimeout=${connectTimeout}`, localBrief, `${request.host}:${briefName}`],
+      options.scpCommand !== undefined,
+    );
+    // env is explicit because Bun children otherwise inherit the startup
+    // environ snapshot, not the live process.env (the ssh/scp shims' test
+    // hooks depend on runtime-mutated vars; real callers just get parity
+    // with the exec path).
+    const upload = Bun.spawnSync(uploadArgv, { env: { ...process.env }, stdout: "ignore", stderr: "pipe" });
+    if (upload.exitCode !== 0) {
+      throw new SessionError(
+        "substrate-unavailable",
+        `brief upload to session host '${request.host}' failed (scp exit ${upload.exitCode ?? "signal"})`,
+      );
+    }
+
+    const execArgv = remoteAmuxArgv(ssh, request, remoteBriefPath, timeoutMs, connectTimeout);
+    return await runDerivedAmuxProcess({
+      spawnArgv: relayFor(execArgv, options.sshCommand !== undefined),
+      env: { ...process.env },
+      timeoutMs,
+      backstopKind: request.kind,
+      backstopSessionId: request.kind === "send" ? request.sessionId : undefined,
+      unavailable: { command: ssh, explicit: options.sshCommand !== undefined },
+    });
+  } finally {
+    rmSync(localBrief, { force: true });
+    // Best-effort remote cleanup: a leftover brief is clutter, never a
+    // failure — swallow everything.
+    try {
+      const delArgv = relayFor(
+        [...ssh, "-o", "BatchMode=yes", "-o", `ConnectTimeout=${connectTimeout}`, request.host, "del", remoteBriefPath],
+        options.sshCommand !== undefined,
+      );
+      Bun.spawnSync(delArgv, { env: { ...process.env }, stdout: "ignore", stderr: "ignore" });
+    } catch {
+      // unreachable-host cleanup is not worth reporting
+    }
+  }
+}
+
+/** The shared derive kernel: spawn one subprocess carrying an AG-UI JSONL
+ * amux event stream on stdout, run the wall timer, and derive id / outcome
+ / report / eventLines. Used by both the local amux path and the remote ssh
+ * transport — one derivation, two carriers. */
+async function runDerivedAmuxProcess(run: {
+  spawnArgv: readonly string[];
+  env: Record<string, string | undefined>;
+  timeoutMs: number;
+  backstopKind: AmuxInvocation["kind"] | RemoteAmuxInvocation["kind"];
+  backstopSessionId: string | undefined;
+  unavailable: { command: readonly string[]; explicit: boolean };
+}): Promise<AmuxRunOutcome> {
   let child: import("bun").Subprocess<"ignore", "pipe", "pipe">;
   try {
-    child = Bun.spawn(spawnArgv, {
-      // Spec §7.2 (local single-user tier): the process environment equals
-      // the caller's, plus the shared timeout knob — amux runs its own
-      // substrate timer on the same deadline instead of a second default.
-      env: { ...process.env, AMUX_TIMEOUT_MS: String(sessionSubstrateTimeoutMs()) },
+    child = Bun.spawn([...run.spawnArgv], {
+      env: run.env,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
   } catch (error) {
-    throw new SessionError("substrate-unavailable", amuxUnavailableMessage(command, "failed to start"), {
+    throw new SessionError("substrate-unavailable", amuxUnavailableMessage(run.unavailable.command, "failed to start"), {
       cause: error,
     });
   }
@@ -307,7 +475,7 @@ export async function runAmuxSession(
   const timer = setTimeout(() => {
     timedOut.value = true;
     child.kill("SIGTERM");
-  }, sessionSubstrateTimeoutMs());
+  }, run.timeoutMs);
 
   const eventLines: string[] = [];
   let threadId: string | undefined;
@@ -380,11 +548,11 @@ export async function runAmuxSession(
   if (timedOut.value) {
     throw new SessionError(
       "substrate-unavailable",
-      `amux timed out after ${sessionSubstrateTimeoutMs() / 1000}s (set UKP_PROVIDER_TIMEOUT_MS to adjust)`,
+      `amux timed out after ${run.timeoutMs / 1000}s (set UKP_PROVIDER_TIMEOUT_MS to adjust)`,
     );
   }
-  if (amuxExitCode === TOOL_NOT_FOUND_EXIT && process.platform === "win32" && !explicitCommand) {
-    throw new SessionError("substrate-unavailable", amuxUnavailableMessage(command, "not found on PATH"));
+  if (amuxExitCode === TOOL_NOT_FOUND_EXIT && process.platform === "win32" && !run.unavailable.explicit) {
+    throw new SessionError("substrate-unavailable", amuxUnavailableMessage(run.unavailable.command, "not found on PATH"));
   }
 
   if (eventLines.length === 0) {
@@ -405,7 +573,9 @@ export async function runAmuxSession(
     const failed = amuxExitCode !== 0;
     const event = {
       type: failed ? "RUN_ERROR" : "RUN_FINISHED",
-      threadId: threadId ?? (request.kind === "send" ? request.sessionId : randomUUID()),
+      threadId: threadId ?? (run.backstopKind === "send" && run.backstopSessionId !== undefined
+        ? run.backstopSessionId
+        : randomUUID()),
       runId: lastRunId ?? randomUUID(),
       ...(failed ? { message: `amux exited with code ${amuxExitCode ?? "signal"}` } : {}),
     };

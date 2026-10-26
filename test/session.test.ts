@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   executeSessionCommand,
 } from "../src/commands/session.ts";
-import { loadSessionRecords, sessionStorePath } from "../src/capabilities/session.ts";
+import { loadSessionRecords, remoteAmuxArgv, SESSION_SSH_ALIVE_OPTIONS, sessionStorePath } from "../src/capabilities/session.ts";
 import { loadManifest, ManifestError } from "../src/config/manifest.ts";
-import { registerAt } from "../src/registry.ts";
+import { readSessionHosts, registerAt, RegistryError } from "../src/registry.ts";
 
 // W2/G3 wrapper tests: the substrate mechanism (argv mapping, AG-UI
 // synthesis, resume) retired to the amux repo — ukp tests drive the
@@ -520,5 +520,170 @@ describe("ukp session · manifest declaration validation (spec §1)", () => {
     writeFileSync(join(folder, ".ukp", "service.toml"), `name = "kb"\n[capabilities.session]\nprovider = "qmd"\nagents = ["a"]\n`);
     expect(() => loadManifest(folder)).toThrow(/provider must be 'agent'/);
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// ---- Remote session hosts (ukp_session_remote W2): the dispatcher-side
+// [[session_hosts]] declaration, the ssh argv contract (keep-alive
+// constants, `set AMUX_TIMEOUT_MS=…&&` forwarding, brief-file transport —
+// never --text), the authorization gate, and send routing. Fakes: ssh-shim
+// (records argv, answers the amux exec form with a canned AG-UI stream) and
+// scp-shim (accepts uploads, records argv) — both injected through the
+// context, both unwrapped by the relay rule for explicit commands.
+
+const sshShim = join(import.meta.dir, "fixtures", "session-provider", "ssh-shim.mjs");
+const scpShim = join(import.meta.dir, "fixtures", "session-provider", "scp-shim.mjs");
+const sshCommand = [nodeExecutable, sshShim];
+const scpCommand = [nodeExecutable, scpShim];
+
+function sessionHostsBlock(options: { agents?: string[]; write?: string } = {}): string {
+  const agents = JSON.stringify(options.agents ?? ["fixture"]);
+  return `\n[[session_hosts]]\nname = "liku"\nfolder = 'C:\\remote\\anchor'\nagents = ${agents}` +
+    (options.write === undefined ? "" : `\nwrite = "${options.write}"`) + "\n";
+}
+
+function readShimLog(path: string): string[][] {
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8").split(/\r?\n/).filter((line) => line !== "").map((line) => JSON.parse(line) as string[]);
+}
+
+describe("remote session hosts (ukp_session_remote W2)", () => {
+  test("readSessionHosts normalizes the declaration (write defaults read-only)", () => {
+    const fixture = createFixture();
+    fixture.extendRegistry(sessionHostsBlock());
+    const hosts = readSessionHosts(fixture.registryPath);
+    expect(hosts).toEqual([{ name: "liku", folder: "C:\\remote\\anchor", agents: ["fixture"], write: "read-only" }]);
+  });
+
+  test("a write tier outside the vocabulary fails the registry schema", () => {
+    const fixture = createFixture();
+    fixture.extendRegistry(sessionHostsBlock({ write: "danger" }));
+    expect(() => readSessionHosts(fixture.registryPath)).toThrow(RegistryError);
+  });
+
+  test("remoteAmuxArgv pins the ssh contract (keep-alive, timeout forward, brief transport)", () => {
+    const spawn = remoteAmuxArgv(["ssh"], {
+      kind: "spawn", host: "liku", folder: "C:\\remote\\anchor", agentCommand: ["codex"],
+      prompt: "p", sandbox: "read-only",
+    }, "%USERPROFILE%\\ukp-brief-x.md", 60000, 10);
+    expect(spawn).toEqual([
+      "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+      ...SESSION_SSH_ALIVE_OPTIONS,
+      "liku", "set", "AMUX_TIMEOUT_MS=60000&&",
+      "amux", "C:\\remote\\anchor", "codex",
+      "--events", "--sandbox", "read-only", "--brief", "%USERPROFILE%\\ukp-brief-x.md",
+    ]);
+    const send = remoteAmuxArgv(["ssh"], {
+      kind: "send", host: "liku", sessionId: "id-1", prompt: "p", sandbox: "workspace-write",
+    }, "%USERPROFILE%\\ukp-brief-x.md", 60000, 10);
+    expect(send).toEqual([
+      "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+      ...SESSION_SSH_ALIVE_OPTIONS,
+      "liku", "set", "AMUX_TIMEOUT_MS=60000&&",
+      "amux", "send", "id-1",
+      "--events", "--sandbox", "workspace-write", "--brief", "%USERPROFILE%\\ukp-brief-x.md",
+    ]);
+  });
+
+  test("spawn over a session host: report on stdout, endpoint-scoped address book, brief uploaded", async () => {
+    const fixture = createFixture();
+    fixture.ensureDefaultAgents();
+    fixture.extendRegistry(sessionHostsBlock());
+    const sshLog = join(fixture.root, "ssh.argv.log");
+    const scpLog = join(fixture.root, "scp.argv.log");
+    process.env.SSH_SHIM_ARGV_LOG = sshLog;
+    process.env.SCP_SHIM_ARGV_LOG = scpLog;
+    try {
+      const result = await executeSessionCommand(
+        ["spawn", "--endpoint", "liku", "--agent", "fixture", "--text", "hello remote"],
+        { registryPath: fixture.registryPath, sshCommand, scpCommand },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("remote report\n");
+      const records = loadSessionRecords(sessionStorePath(fixture.registryPath));
+      expect(records).toHaveLength(1);
+      expect(records[0]!.endpoint).toBe("liku");
+      expect(records[0]!.id).toBe("fix-remote-thread-1");
+
+      const scpArgs = readShimLog(scpLog);
+      expect(scpArgs).toHaveLength(1);
+      expect(scpArgs[0]!.at(-1)).toMatch(/^liku:ukp-brief-[0-9a-f-]+\.md$/);
+      const exec = readShimLog(sshLog).filter((argv) => argv.includes("amux"));
+      expect(exec).toHaveLength(1);
+      expect(exec[0]).toContain("AMUX_TIMEOUT_MS=60000&&");
+      expect(exec[0]).toContain("C:\\remote\\anchor");
+      const brief = exec[0]![exec[0]!.indexOf("--brief") + 1]!;
+      expect(brief).toMatch(/^%USERPROFILE%\\ukp-brief-[0-9a-f-]+\.md$/);
+      expect(exec[0]).not.toContain("--text");
+    } finally {
+      delete process.env.SSH_SHIM_ARGV_LOG;
+      delete process.env.SCP_SHIM_ARGV_LOG;
+    }
+  });
+
+  test("spawn refuses an agent outside the session host allowlist", async () => {
+    const fixture = createFixture();
+    fixture.ensureDefaultAgents();
+    fixture.extendRegistry(sessionHostsBlock({ agents: ["other"] }));
+    const result = await executeSessionCommand(
+      ["spawn", "--endpoint", "liku", "--agent", "fixture", "--text", "hi"],
+      { registryPath: fixture.registryPath, sshCommand, scpCommand },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("not in session host 'liku' agents");
+    expect(result.stderr).toContain("[[session_hosts]]");
+  });
+
+  test("send resumes over the session host (id passthrough, sandbox re-read from the declaration)", async () => {
+    const fixture = createFixture();
+    fixture.ensureDefaultAgents();
+    fixture.extendRegistry(sessionHostsBlock());
+    const sshLog = join(fixture.root, "ssh.argv.log");
+    const scpLog = join(fixture.root, "scp.argv.log");
+    process.env.SSH_SHIM_ARGV_LOG = sshLog;
+    process.env.SCP_SHIM_ARGV_LOG = scpLog;
+    try {
+      const spawn = await executeSessionCommand(
+        ["spawn", "--endpoint", "liku", "--agent", "fixture", "--text", "hello"],
+        { registryPath: fixture.registryPath, sshCommand, scpCommand },
+      );
+      expect(spawn.exitCode).toBe(0);
+      const send = await executeSessionCommand(
+        ["send", "fix-remote-thread-1", "--text", "follow up"],
+        { registryPath: fixture.registryPath, sshCommand, scpCommand },
+      );
+      expect(send.exitCode).toBe(0);
+      expect(send.stderr).toContain("fix-remote-thread-1 resumed");
+      const sendExec = readShimLog(sshLog).filter((argv) => argv.includes("amux") && argv.includes("send"));
+      expect(sendExec).toHaveLength(1);
+      expect(sendExec[0]).toContain("fix-remote-thread-1");
+      expect(sendExec[0]).toContain("--sandbox");
+      expect(sendExec[0]![sendExec[0]!.indexOf("--sandbox") + 1]).toBe("read-only");
+    } finally {
+      delete process.env.SSH_SHIM_ARGV_LOG;
+      delete process.env.SCP_SHIM_ARGV_LOG;
+    }
+  });
+
+  test("a wire-served remote binding is refused as a session anchor", async () => {
+    const fixture = createFixture();
+    fixture.ensureDefaultAgents();
+    fixture.extendRegistry('\n[[endpoints]]\nname = "wire-ep"\nkind = "remote"\nurl = "ssh://some-host/ep"\n');
+    const result = await executeSessionCommand(
+      ["spawn", "--endpoint", "wire-ep", "--agent", "fixture", "--text", "hi"],
+      { registryPath: fixture.registryPath, sshCommand, scpCommand },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("wire-served");
+  });
+
+  test("unknown endpoint error points at the session_hosts declaration", async () => {
+    const fixture = createFixture();
+    const result = await executeSessionCommand(
+      ["spawn", "--endpoint", "nowhere", "--agent", "fixture", "--text", "hi"],
+      { registryPath: fixture.registryPath, sshCommand, scpCommand },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("[[session_hosts]]");
   });
 });

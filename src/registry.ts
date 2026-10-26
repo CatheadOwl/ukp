@@ -53,6 +53,18 @@ const registrySchema = z.object({
     tier: z.literal("sdk"),
     command: z.array(z.string().min(1)).min(1),
   }).strict()).optional(),
+  /** Remote session hosts (ukp_session_remote W2): the dispatcher-side
+   * declaration pairing an ssh target with the remote anchor folder and the
+   * hosting grant (agents allowlist + write tier). Hand-edited v0, the
+   * [[agents]] precedent — the trust anchor is the dispatcher's own
+   * registry, disclosed as such in spec §7 (the local-session anchor is the
+   * endpoint manifest; the remote anchor rides the ssh key delegation). */
+  session_hosts: z.array(z.object({
+    name: z.string().min(1),
+    folder: z.string().min(1),
+    agents: z.array(z.string().min(1)).min(1),
+    write: z.enum(["read-only", "workspace"]).optional(),
+  }).strict()).optional(),
 }).strict();
 
 /** Host Registry agent entry (ukp_session): `command` is the substrate argv
@@ -61,6 +73,16 @@ export interface RegistryAgent {
   handle: string;
   tier: "sdk";
   command: string[];
+}
+
+/** Remote session host entry (ukp_session_remote W2): `name` is both the
+ * ssh target and the endpoint-scoping name in the session address book;
+ * `folder` is the remote anchor path passed verbatim into the amux argv. */
+export interface SessionHost {
+  name: string;
+  folder: string;
+  agents: string[];
+  write: "read-only" | "workspace";
 }
 
 /** Binding union over the `kind` axis (D-077). Local bindings keep the
@@ -354,6 +376,36 @@ export function readRegistryAgents(registryPath: string): RegistryAgent[] {
     seen.add(agent.handle);
   }
   return [...agents].sort((left, right) => left.handle < right.handle ? -1 : left.handle > right.handle ? 1 : 0);
+}
+
+/** Remote session hosts declared in the Host Registry (ukp_session_remote
+ * W2). Same read discipline as readRegistryAgents; `write` defaults to
+ * read-only (the scout default, agent-backed.ts vocabulary). Absent table
+ * means "no remote session hosts on this dispatcher". */
+export function readSessionHosts(registryPath: string): SessionHost[] {
+  if (!existsSync(registryPath)) return [];
+  let raw: unknown;
+  try {
+    raw = parse(readFileSync(registryPath, "utf8"));
+    assertRestrictedToml(raw);
+  } catch (error) {
+    if (error instanceof ManifestError) throw new RegistryError(error.message, { cause: error });
+    throw new RegistryError(`Registry is not readable: ${registryPath}`, { cause: error });
+  }
+  const result = registrySchema.safeParse(raw);
+  if (!result.success) throw new RegistryError(`Registry schema is invalid: ${result.error.message}`);
+  const hosts = result.data.session_hosts ?? [];
+  const seen = new Set<string>();
+  for (const host of hosts) {
+    if (seen.has(host.name)) throw new RegistryError(`duplicate session host '${host.name}'`);
+    seen.add(host.name);
+  }
+  return hosts.map((host) => ({
+    name: host.name,
+    folder: host.folder,
+    agents: [...host.agents],
+    write: host.write ?? "read-only",
+  }));
 }
 
 /** Canonical serialization (configuration-contracts canonical form): local rows

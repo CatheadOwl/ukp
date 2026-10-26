@@ -65,8 +65,10 @@ function remoteTimeoutMs(): number {
  * chain. Default 10s (the Ansible baseline); `UKP_SSH_CONNECT_TIMEOUT_MS`
  * overrides, mirroring UKP_REMOTE_TIMEOUT_MS. ssh takes whole seconds, so
  * an integer ms value ≥1000 floors (1500 → 1s); anything else — non-numeric,
- * fractional, below 1000 — keeps the default. */
-function sshConnectTimeoutSeconds(): number {
+ * fractional, below 1000 — keeps the default. Exported for the session
+ * remote transport (ukp_session_remote W2): one knob, one value, every
+ * ssh process UKP spawns. */
+export function sshConnectTimeoutSeconds(): number {
   const raw = process.env.UKP_SSH_CONNECT_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === "") return 10;
   const value = Number(raw);
