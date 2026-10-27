@@ -1,5 +1,6 @@
 import { ENDPOINT_NAME, loadManifest, ServiceFolderInaccessibleError } from "../config/manifest.ts";
 import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
+import { EXTERNAL_TOOL_CAPABILITIES } from "../config/external-tool.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
 import {
   assertRegistrableRemoteUrl,
@@ -119,8 +120,11 @@ export const LIST_SPEC: UkpCommandSpec = {
   summary: "list registered endpoint bindings",
   group: "registry",
   description: "List registered endpoint bindings and capabilities.",
-  usage: "[options]",
+  usage: "[--json]",
   strictArguments: true,
+  options: [
+    { flags: "--json", help: "emit the offline machine-readable endpoint snapshot (schema ukp.list.v1; registry facts only - remote bindings are not probed, their capability fields are null)" },
+  ],
 };
 
 export const UNREGISTER_SPEC: UkpCommandSpec = {
@@ -147,6 +151,59 @@ const DEFAULT_CAPABILITIES = (Object.keys(FILE_NATIVE_CAPABILITIES) as Array<key
   .filter((name) => FILE_NATIVE_CAPABILITIES[name].derived)
   .sort();
 
+/** Base-tier membership for the machine snapshot (ukp.list.v1): the
+ * declaration-free baseline every healthy local endpoint carries — the
+ * derived file-native set (nav, read; ADR 0016 rule 2, the header's own
+ * statement) plus the external-tool base tier (rg; ADR-RG-003). Membership
+ * only: rg's runtime availability still degrades by tool presence (tier
+ * semantics unchanged — `base_tier` is not a liveness claim). */
+const BASE_TIER_CAPABILITIES = [
+  ...DEFAULT_CAPABILITIES,
+  ...(Object.keys(EXTERNAL_TOOL_CAPABILITIES) as Array<keyof typeof EXTERNAL_TOOL_CAPABILITIES>)
+    .filter((name) => EXTERNAL_TOOL_CAPABILITIES[name].baseTier),
+].sort();
+
+/** One endpoint as offline machine facts — the `ukp.list.v1` row (TODO
+ * 20261028-0053). The machine contract is a registry-snapshot projection:
+ * local rows read the Service Manifest (a local file read, never the
+ * network); remote rows carry registry facts only, because the registry
+ * pins no capability or liveness claims for remote bindings and the
+ * contract never probes — the text face's fresh discovery fetch is a
+ * per-invocation human affordance, not snapshot truth. Nullability is the
+ * contract's one rule: `null` = "not asserted in this snapshot". */
+export interface ListEndpointSnapshot {
+  /** Registry handle — the ukp:// authority and the `--endpoint` key. */
+  name: string;
+  /** Local/remote discriminator (registry `kind`; absence = local). */
+  kind: "local" | "remote";
+  /** Binding location: the local canonical absolute path, or the
+   * registered remote url verbatim. Exactly one of path/url is non-null. */
+  location: { path: string | null; url: string | null };
+  /** Remote-declared name snapshot (ADR-REM-007 provenance); null for
+   * local bindings and legacy remote bindings that predate the field. */
+  declared_name: string | null;
+  /** Sorted declared capability extras (the text capabilities cell as an
+   * array); null on degraded local rows and on every remote row. */
+  capabilities: string[] | null;
+  /** Declaration-free baseline members in effect (nav/read/rg today);
+   * null on degraded local rows and on every remote row. */
+  base_tier: string[] | null;
+  /** Local rows: the Service Manifest loaded (true) or the row degraded
+   * (false). Remote rows: null — remote liveness is not an offline fact. */
+  available: boolean | null;
+  /** The same one-line degradation headline the text face emits on
+   * stderr; null when the row is not degraded. */
+  warning: string | null;
+}
+
+/** Envelope of the `--json` snapshot — the repo machine-face convention
+ * (versioned schema id + pretty-printed single document, as nav/rg). */
+export interface ListSnapshotEnvelope {
+  schema: "ukp.list.v1";
+  command: "list";
+  endpoints: ListEndpointSnapshot[];
+}
+
 /** One list row as structured cells — column geometry is decided once, in
  * renderListOutput, from every row's actual widths (raw tab stops made the
  * columns land on a different multiple-of-8 per row once names, paths and
@@ -163,7 +220,23 @@ interface InventoryListRow {
   warning?: string;
 }
 
-function renderLocalListRow(endpoint: { name: string; path: string }): InventoryListRow {
+/** Offline facts for one local binding — the single producer BOTH faces
+ * consume (the same-truth seam of the machine contract: the text row and
+ * the ukp.list.v1 row are projections of this, never parallel assemblies).
+ * Manifest load failures degrade exactly like the text face: no capability
+ * assertions plus the same one-line warning. */
+interface LocalListFacts {
+  name: string;
+  path: string;
+  /** Sorted declared extras; null on a degraded row. */
+  capabilities: string[] | null;
+  /** Baseline members; null on a degraded row. */
+  baseTier: string[] | null;
+  available: boolean;
+  warning: string | null;
+}
+
+function localListFacts(endpoint: { name: string; path: string }): LocalListFacts {
   let service;
   try {
     service = loadManifest(endpoint.path);
@@ -179,8 +252,10 @@ function renderLocalListRow(endpoint: { name: string; path: string }): Inventory
     if (error instanceof ServiceFolderInaccessibleError) {
       return {
         name: endpoint.name,
-        location: endpoint.path,
-        capabilities: "(unavailable)",
+        path: endpoint.path,
+        capabilities: null,
+        baseTier: null,
+        available: false,
         warning: `endpoint '${endpoint.name}' binding is dead: ${headline}; `
           + `if the folder moved, run 'ukp register --rebind' from the new folder `
           + `(or 'ukp unregister --endpoint ${endpoint.name}')`,
@@ -188,15 +263,81 @@ function renderLocalListRow(endpoint: { name: string; path: string }): Inventory
     }
     return {
       name: endpoint.name,
-      location: endpoint.path,
-      capabilities: "(unavailable)",
+      path: endpoint.path,
+      capabilities: null,
+      baseTier: null,
+      available: false,
       warning: `endpoint '${endpoint.name}' declared capabilities unavailable: ${headline}`,
     };
   }
   const extras = Object.keys(service.manifest.capabilities)
     .filter((name) => !(isFileNativeCapability(name) && FILE_NATIVE_CAPABILITIES[name].derived))
     .sort();
-  return { name: endpoint.name, location: endpoint.path, capabilities: extras.length > 0 ? extras.join(",") : "-" };
+  return { name: endpoint.name, path: endpoint.path, capabilities: extras, baseTier: [...BASE_TIER_CAPABILITIES], available: true, warning: null };
+}
+
+function renderLocalListRow(endpoint: { name: string; path: string }): InventoryListRow {
+  const facts = localListFacts(endpoint);
+  return {
+    name: facts.name,
+    location: facts.path,
+    capabilities: facts.available
+      ? (facts.capabilities!.length > 0 ? facts.capabilities!.join(",") : "-")
+      : "(unavailable)",
+    ...(facts.warning !== null ? { warning: facts.warning } : {}),
+  };
+}
+
+/** ukp.list.v1 projection of one local binding — the same localListFacts
+ * the text row renders from, shaped as snapshot fields. */
+function localSnapshotRow(endpoint: { name: string; path: string }): ListEndpointSnapshot {
+  const facts = localListFacts(endpoint);
+  return {
+    name: facts.name,
+    kind: "local",
+    location: { path: facts.path, url: null },
+    declared_name: null,
+    capabilities: facts.capabilities,
+    base_tier: facts.baseTier,
+    available: facts.available,
+    warning: facts.warning,
+  };
+}
+
+/** ukp.list.v1 row for one remote binding: pure registry projection, no
+ * transport. The handle stays the bare `name` — the text face's
+ * `name (declares X)` cell is a rendering; here the declaration rides in
+ * `declared_name` as structure. Capability and liveness fields are null
+ * per the offline contract (the registry pins none for remotes). */
+function remoteSnapshotRow(endpoint: RegistryBinding): ListEndpointSnapshot {
+  return {
+    name: endpoint.name,
+    kind: "remote",
+    location: { path: null, url: endpoint.url! },
+    declared_name: endpoint.declared_name ?? null,
+    capabilities: null,
+    base_tier: null,
+    available: null,
+    warning: null,
+  };
+}
+
+/** `--json` emission (TODO 20261028-0053 machine contract): one
+ * pretty-printed document in the repo machine-face convention, rows in the
+ * text face's order (locals first, then remotes, each in registry order).
+ * Offline and synchronous by construction — no transport pool is ever
+ * created for this path, so a registry full of remote bindings costs zero
+ * network. stderr stays empty in this mode: degradation truth rides in the
+ * rows' `warning` fields. */
+function renderListJsonSnapshot(endpoints: readonly RegistryBinding[]): InventoryCommandResult {
+  const rows = [
+    ...endpoints
+      .filter((endpoint) => !isRemoteBinding(endpoint))
+      .map((endpoint) => localSnapshotRow({ name: endpoint.name, path: endpoint.path! })),
+    ...endpoints.filter(isRemoteBinding).map(remoteSnapshotRow),
+  ];
+  const envelope: ListSnapshotEnvelope = { schema: "ukp.list.v1", command: "list", endpoints: rows };
+  return { exitCode: 0, stdout: `${JSON.stringify(envelope, null, 2)}\n`, stderr: "" };
 }
 
 export function executeRegisterCommand(
@@ -586,7 +727,14 @@ export function executeListCommand(
   }
 
   try {
-    parseKitArgs(LIST_SPEC, args);
+    const parsed = parseKitArgs<{ json?: boolean }>(LIST_SPEC, args);
+    if (parsed.options.json === true) {
+      // Machine contract (ukp.list.v1 / TODO 20261028-0053): the offline
+      // registry snapshot. Returns before any transport pool exists —
+      // see renderListJsonSnapshot; the sync return with remote bindings
+      // present is the structural pin of the no-network promise.
+      return renderListJsonSnapshot(readRegistry(context.registryPath));
+    }
     const endpoints = readRegistry(context.registryPath);
     if (endpoints.length === 0) {
       return { exitCode: 0, stdout: "No endpoints registered.", stderr: "" };

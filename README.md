@@ -167,7 +167,7 @@ Registry commands:
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. |
 | `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings — local folders and remote endpoints alike (`ukp register --url`, see Remote in 60 seconds). `--name <handle>` disambiguates collisions: `notes` vs `ali-notes`. A folder that moved re-binds in one step: `ukp register --rebind` from the new location (local bindings). |
-| `ukp list` | Lists registered endpoints with their declared capabilities. New endpoints on a host door show as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture. |
+| `ukp list` | Lists registered endpoints with their declared capabilities. New endpoints on a host door show as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture. `--json` emits the offline machine snapshot (`ukp.list.v1`: `name`, `kind`, `location`, `capabilities`, `base_tier` per endpoint — stable field names, the same data core as the text listing, and zero network: remote bindings are registry facts only, so their capability fields are `null`). |
 
 Operations commands:
 

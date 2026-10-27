@@ -37,7 +37,7 @@ import { RG_SPEC } from "../src/commands/rg.ts";
 import { READ_SPEC } from "../src/commands/read.ts";
 import { INIT_SPEC } from "../src/commands/init.ts";
 import { GUIDE_SPEC } from "../src/commands/guide.ts";
-import { LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC } from "../src/commands/inventory.ts";
+import { LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC, executeListCommand } from "../src/commands/inventory.ts";
 import { SERVE_SPEC } from "../src/commands/serve.ts";
 import { INIT_SERVICE_SPEC } from "../src/commands/init.ts";
 import { renderKitHelp, type UkpCommandSpec } from "../src/commands/kit.ts";
@@ -62,7 +62,7 @@ const ROOT_MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [
 ];
 const MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [...ROOT_MIGRATED_SPECS, INIT_SERVICE_SPEC];
 import { loadManifest } from "../src/config/manifest.ts";
-import { registerAt, readRegistry } from "../src/registry.ts";
+import { registerAt, readRegistry, registerRemoteAt } from "../src/registry.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
 // Private per-file copy: the fixture's invocation state is written into the
@@ -1645,5 +1645,150 @@ describe("CLI bootstrap", () => {
     expect(new Set(locationStartAt).size).toBe(1);
     expect(new Set(capsStartAt).size).toBe(1);
     expect(rows.every((row) => !row.includes("\t") && !/[ \t]+$/.test(row))).toBe(true);
+  });
+
+  // ukp.list.v1 (TODO 20261028-0053): the machine contract is an offline
+  // registry snapshot — same row order as the text face, same local truth
+  // (one producer), remote bindings projected from registry facts only.
+  interface SnapshotRow {
+    name: string;
+    kind: "local" | "remote";
+    location: { path: string | null; url: string | null };
+    declared_name: string | null;
+    capabilities: string[] | null;
+    base_tier: string[] | null;
+    available: boolean | null;
+    warning: string | null;
+  }
+  const SNAPSHOT_FIELDS = ["available", "base_tier", "capabilities", "declared_name", "kind", "location", "name", "warning"];
+
+  function parseSnapshotEnvelope(lines: readonly string[]): { schema: string; command: string; endpoints: SnapshotRow[] } {
+    return JSON.parse(lines.join("\n"));
+  }
+
+  function mixedSnapshotRegistry(): { registryPath: string; context: { currentDirectory: string; registryPath: string; resolveProvider: () => { supported: boolean } } } {
+    const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-json-")), "registry.toml");
+    registerAt(registryPath, "fixture-qmd", fixture);
+    registerAt(registryPath, "bare", mkdtempSync(join(tmpdir(), "ukp-cli-json-bare-")));
+    // A remote name sorting BEFORE both locals pins locals-first row order
+    // (plain registry order would interleave it first).
+    registerRemoteAt(registryPath, { name: "a-remote", url: "http://127.0.0.1:9", declared_name: "notes" });
+    return {
+      registryPath,
+      context: {
+        currentDirectory: fixture,
+        registryPath,
+        resolveProvider: () => ({ supported: true }),
+      },
+    };
+  }
+
+  test("list --json emits the offline ukp.list.v1 snapshot over a mixed registry", () => {
+    const { registryPath, context } = mixedSnapshotRegistry();
+    const output: string[] = [];
+    const errors: string[] = [];
+    expect(runCli(["list", "--json"], (message) => output.push(message), (message) => errors.push(message), context)).toBe(0);
+    // Machine mode keeps stderr empty: degradation truth rides in rows.
+    expect(errors.join("\n")).toBe("");
+    const envelope = parseSnapshotEnvelope(output);
+    expect(envelope.schema).toBe("ukp.list.v1");
+    expect(envelope.command).toBe("list");
+    // Locals first (registry order), remote after — the text face's row order.
+    expect(envelope.endpoints.map((row) => row.name)).toEqual(["bare", "fixture-qmd", "a-remote"]);
+    // Contract field set is pinned: stable field names ARE the promise.
+    for (const row of envelope.endpoints) {
+      expect(Object.keys(row).sort()).toEqual(SNAPSHOT_FIELDS);
+      expect(Object.keys(row.location).sort()).toEqual(["path", "url"]);
+    }
+    const healthy = envelope.endpoints.find((row) => row.name === "fixture-qmd")!;
+    expect(healthy).toEqual({
+      name: "fixture-qmd",
+      kind: "local",
+      location: { path: realpathSync(fixture), url: null },
+      declared_name: null,
+      capabilities: ["search", "update"],
+      base_tier: ["nav", "read", "rg"],
+      available: true,
+      warning: null,
+    });
+    const degraded = envelope.endpoints.find((row) => row.name === "bare")!;
+    expect(degraded.available).toBe(false);
+    expect(degraded.capabilities).toBeNull();
+    expect(degraded.base_tier).toBeNull();
+    expect(degraded.warning).toContain("endpoint 'bare' declared capabilities unavailable");
+    // Remote rows: registry facts only — no probe, no capability claims.
+    const remote = envelope.endpoints.find((row) => row.name === "a-remote")!;
+    expect(remote).toEqual({
+      name: "a-remote",
+      kind: "remote",
+      location: { path: null, url: "http://127.0.0.1:9" },
+      declared_name: "notes",
+      capabilities: null,
+      base_tier: null,
+      available: null,
+      warning: null,
+    });
+    // The offline promise, pinned structurally: with a remote binding
+    // registered the --json path returns synchronously (the text face's
+    // remote branch would be a Promise here — no transport ever spins up).
+    const direct = executeListCommand(["--json"], { currentDirectory: fixture, registryPath });
+    expect((direct as { then?: unknown }).then).toBeUndefined();
+    expect(parseSnapshotEnvelope([(direct as { stdout: string }).stdout]).endpoints.length).toBe(3);
+  });
+
+  test("list --json and the text listing share one truth (same rows, same warnings)", async () => {
+    const { context } = mixedSnapshotRegistry();
+    const textLines: string[] = [];
+    const textErrors: string[] = [];
+    // The text face resolves the remote row over the network (async); the
+    // --json face on the same registry stays synchronous — both run below.
+    expect(await runCli(["list"], (message) => textLines.push(message), (message) => textErrors.push(message), context)).toBe(0);
+    const jsonLines: string[] = [];
+    expect(runCli(["list", "--json"], (message) => jsonLines.push(message), undefined, context)).toBe(0);
+    const envelope = parseSnapshotEnvelope(jsonLines);
+    // Header line aside, the text table rows and the snapshot rows name the
+    // same endpoints in the same order (the text name cell may carry the
+    // ` (declares X)` annotation; the bare handle is the contract field).
+    const textRows = textLines.join("\n").split("\n").slice(1).map((line) => line.trim().split(/\s{2,}/));
+    expect(textRows.map((cells) => cells[0]!.split(" ")[0])).toEqual(envelope.endpoints.map((row) => row.name));
+    for (const [index, row] of envelope.endpoints.entries()) {
+      const capsCell = textRows[index]![2]!;
+      if (row.kind === "local" && row.available === true) {
+        // Same producer, two projections: the joined array IS the cell
+        // (`-` for an endpoint declaring no extras).
+        const extras = row.capabilities!;
+        expect(capsCell).toBe(extras.length > 0 ? extras.join(",") : "-");
+      }
+      if (row.kind === "local" && row.available === false) {
+        expect(capsCell).toBe("(unavailable)");
+        // The json warning field is byte-identical to the text stderr line.
+        expect(textErrors.join("\n")).toContain(row.warning!);
+      }
+    }
+    // The remote divergence is the documented offline contract, not drift:
+    // the text face fetches (stderr degradation for the dead url), the
+    // machine face asserts nothing.
+    expect(textErrors.join("\n")).toContain("endpoint 'a-remote' declared capabilities unavailable");
+    const remoteRow = envelope.endpoints.find((row) => row.name === "a-remote")!;
+    expect(remoteRow.warning).toBeNull();
+  });
+
+  test("list --json on an empty registry returns an empty endpoints array", () => {
+    const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-json-empty-")), "registry.toml");
+    const context = { currentDirectory: fixture, registryPath, resolveProvider: () => ({ supported: true }) };
+    const output: string[] = [];
+    expect(runCli(["list", "--json"], (message) => output.push(message), undefined, context)).toBe(0);
+    expect(parseSnapshotEnvelope(output)).toEqual({ schema: "ukp.list.v1", command: "list", endpoints: [] });
+  });
+
+  test("list --json is singleton-checked and rejects unknown options", () => {
+    const registryPath = join(mkdtempSync(join(tmpdir(), "ukp-cli-json-usage-")), "registry.toml");
+    const context = { currentDirectory: fixture, registryPath, resolveProvider: () => ({ supported: true }) };
+    const errors: string[] = [];
+    expect(runCli(["list", "--json", "--json"], undefined, (message) => errors.push(message), context)).toBe(2);
+    expect(runCli(["list", "--format", "json"], undefined, (message) => errors.push(message), context)).toBe(2);
+    const text = errors.join("\n");
+    expect(text).toContain("may only be specified once");
+    expect(text).toContain("unknown option '--format'");
   });
 });

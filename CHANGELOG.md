@@ -6,6 +6,23 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp list --json` — the offline machine-readable endpoint snapshot
+  (schema `ukp.list.v1`, TODO 20261028-0053): one pretty-printed document
+  per the repo machine-face convention, one object per binding with
+  `name` / `kind` (local-remote discriminator) / `location` (the local
+  binding root's canonical absolute path, or the registered remote url)
+  / `declared_name` / `capabilities` / `base_tier` (`nav`, `read`, `rg`
+  — declaration-free baseline membership) / `available` / `warning`.
+  Three contract promises (docs/spec/list-command.md): field names are
+  stable across versions (additive fields or a new schema id, never
+  renames); the rows share the text listing's single production core
+  (local rows byte-identical truth, same locals-first order); and the
+  snapshot is offline — remote bindings are projected from registry
+  facts only, no transport, no discovery fetch (their capability fields
+  are `null`; the text face's remote capability cell stays a
+  per-invocation network refresh). stderr stays empty in this mode —
+  degradation truth rides in the rows' `warning` fields, the exact
+  strings the text face prints on stderr.
 - Labeled, scoped, revocable keys for `ukp serve` (RQ-16c / W13):
   `ukp serve token add <label> <scopes>` issues a
   `ukp_<label>_<id>_<secret>` key into `~/.ukp/tokens` (0600, SHA-256

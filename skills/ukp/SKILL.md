@@ -40,7 +40,9 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
   仅远端句柄专用（须配 `--url`），本地命名不走它。
 - **能力分级**：read / nav / rg 是本地 Service 的派生默认，零 provider；
   search / update 需 QMD 在 PATH（缺则 `list` 报 unavailable，退 rg）。
-- **机器面**：`--json`（read 用 `--format json`）。
+- **机器面**：`--json`（read 用 `--format json`）；`ukp list --json` =
+  离线快照 `ukp.list.v1`（远端 binding 零触网，能力字段为 null，
+  字段名跨版本稳定）。
 
 ## 程序
 
