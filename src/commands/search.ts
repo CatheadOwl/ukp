@@ -52,13 +52,14 @@ export const SEARCH_SPEC: UkpCommandSpec = {
   summary: "search a Service's indexed content (provider-backed; use 'ukp rg' to grep raw files)",
   group: "endpoint",
   description: "Run atomic lexical search against the selected Service endpoints.",
-  usage: "<query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--recursive] [--json]",
+  usage: "<query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--recursive] [--timeout <seconds>] [--json]",
   arguments: [{ name: "query", help: "one non-empty search query; quote multi-word queries" }],
   options: [
     { flags: "--limit <1-1000>", help: "maximum results requested from each endpoint (default: 20)" },
     { flags: "-c, --endpoint <name>", help: "select one endpoint; repeat to select multiple endpoints", multi: true },
     { flags: "-g", help: "search every endpoint in the Host Registry; takes no value" },
     { flags: "--recursive", help: "include direct authority and context dependencies" },
+    { flags: "--timeout <seconds>", help: "provider spawn timeout for this search in whole seconds; 0 disables the guard (wait indefinitely - interrupt is then the only cancel); default 60 (UKP_PROVIDER_TIMEOUT_MS applies when the flag is absent)" },
     { flags: "--json", help: "write provider-native results to artifacts and print an envelope" },
   ],
   helpSuffix: [
@@ -86,6 +87,7 @@ interface SearchCommandOptions extends Record<string, unknown> {
   endpoint?: string[];
   g?: boolean;
   recursive?: boolean;
+  timeout?: string;
   json?: boolean;
 }
 
@@ -106,6 +108,20 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
     }
   }
 
+  // Owner ruling 2026-10-28 (TODO 20261028-1113 option 3): whole seconds,
+  // 0 = disable the guard (the classic-interactive "zero disables"
+  // grammar), positive wins over the env override.
+  let timeoutSeconds: number | undefined;
+  if (parsed.options.timeout !== undefined) {
+    if (!/^[0-9]+$/.test(parsed.options.timeout)) {
+      throw new KitUsageError("--timeout must be a non-negative integer number of seconds (0 disables the guard)");
+    }
+    timeoutSeconds = Number(parsed.options.timeout);
+    if (!Number.isSafeInteger(timeoutSeconds)) {
+      throw new KitUsageError("--timeout is out of range");
+    }
+  }
+
   for (const endpoint of parsed.options.endpoint ?? []) {
     if (explicit.includes(endpoint)) warnings.push(`duplicate endpoint '${endpoint}' ignored`);
     else explicit.push(endpoint);
@@ -123,7 +139,7 @@ export function parseSearchArgs(args: readonly string[]): ParsedSearch {
     throw new KitUsageError("--endpoint and -g cannot be used together");
   }
   return {
-    request: { query, limit },
+    request: { query, limit, ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}) },
     options: {
       explicitEndpoints: explicit.length > 0 ? explicit : undefined,
       global: parsed.options.g ?? false,

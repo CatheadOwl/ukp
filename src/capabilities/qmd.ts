@@ -89,6 +89,25 @@ export function providerTimeoutMs(): number {
 }
 
 /**
+ * Resolved spawn timeout for `ukp search` (owner ruling 2026-10-28, TODO
+ * 20261028-1113 option 3): the explicit `--timeout <seconds>` flag — `0`
+ * DISABLES the guard entirely (the 2026-08-16 interactive semantics revived
+ * on demand: user interrupt is then the only cancel mechanism — the
+ * curl/wget/ssh_config "zero disables" grammar), a positive value wins over
+ * the env override. Absent flag falls back to `UKP_PROVIDER_TIMEOUT_MS` /
+ * default 60s — the default-guard-ON posture maps to the unattended
+ * orchestration family (GitHub Actions / GitLab CI / Kubernetes): search's
+ * primary consumers are agent sessions nobody watches. Returns `undefined`
+ * = no timeout (wait indefinitely). `providerTimeoutMs` itself stays
+ * always-bounded for internal probes (rename recovery L2).
+ */
+export function searchSpawnTimeoutMs(flagSeconds?: number): number | undefined {
+  if (flagSeconds === 0) return undefined;
+  if (flagSeconds !== undefined) return flagSeconds * 1000;
+  return providerTimeoutMs();
+}
+
+/**
  * Update runs `qmd update`, which may legitimately index a large corpus —
  * its ceiling is correspondingly higher (default 600s, overridable via
  * `UKP_UPDATE_TIMEOUT_MS`).

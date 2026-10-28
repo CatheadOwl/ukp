@@ -26,7 +26,8 @@ function executeReadCommand(args: readonly string[], context: Parameters<typeof 
   if (result instanceof Promise) throw new Error("local read unexpectedly took the async path");
   return result;
 }
-import { executeHumanSearch, parseSearchArgs } from "../src/commands/search.ts";
+import { executeHumanSearch, executeSearchCommand, parseSearchArgs } from "../src/commands/search.ts";
+import { searchSpawnTimeoutMs } from "../src/capabilities/qmd.ts";
 import { registerAt } from "../src/registry.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
@@ -1143,12 +1144,101 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("provider timed out");
-      expect(result.stderr).toContain("UKP_PROVIDER_TIMEOUT_MS");
+      expect(result.stderr).toContain("provider timed out after 1s");
+      // Owner ruling 2026-10-28 (TODO 20261028-1113 option 3, form 4): the
+      // timeout must be diagnosable and name the flag — never disguised as
+      // a provider crash.
+      expect(result.stderr).toContain("- raise or disable via --timeout");
     } finally {
       if (previous === undefined) delete process.env.UKP_PROVIDER_TIMEOUT_MS;
       else process.env.UKP_PROVIDER_TIMEOUT_MS = previous;
       rmSync(root, { recursive: true, force: true });
     }
   }, 20_000);
+
+  // --timeout flag (owner ruling 2026-10-28, TODO 20261028-1113 option 3):
+  // default 60 guard stays ON; the flag raises or disables (0); precedence
+  // flag > env > default. The "provider-nap" fixture sleeps 1.5s — under a
+  // 1s env guard it times out, with --timeout 3 or --timeout 0 it completes.
+  describe("--timeout (owner ruling 2026-10-28)", () => {
+    const withEnvGuard = (run: () => void) => {
+      const previous = process.env.UKP_PROVIDER_TIMEOUT_MS;
+      process.env.UKP_PROVIDER_TIMEOUT_MS = "1000";
+      try {
+        run();
+      } finally {
+        if (previous === undefined) delete process.env.UKP_PROVIDER_TIMEOUT_MS;
+        else process.env.UKP_PROVIDER_TIMEOUT_MS = previous;
+      }
+    };
+
+    test("resolver precedence: 0 disables, positive wins, absent = env/default", () => {
+      expect(searchSpawnTimeoutMs(0)).toBeUndefined();
+      expect(searchSpawnTimeoutMs(3)).toBe(3_000);
+      withEnvGuard(() => {
+        expect(searchSpawnTimeoutMs(undefined)).toBe(1_000);
+        expect(searchSpawnTimeoutMs(7)).toBe(7_000);
+      });
+    });
+
+    test("--timeout 3 raises over a tighter env guard: the nap completes", () => {
+      const root = mkdtempSync(join(tmpdir(), "ukp-search-nap-raise-"));
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "provider-nap", createService(root, "provider-nap", "provider-nap"));
+      withEnvGuard(() => {
+        const result = executeHumanSearch(parseSearchArgs([
+          "fixture-cad-search-token",
+          "--endpoint",
+          "provider-nap",
+          "--timeout",
+          "3",
+        ]), { currentDirectory: root, registryPath, qmdCommand: [nodeExecutable, fixtureExecutable] });
+        expect(result.exitCode).toBe(0);
+      });
+      rmSync(root, { recursive: true, force: true });
+    }, 15_000);
+
+    test("--timeout 0 disables the guard: the same nap completes with the env guard armed", () => {
+      const root = mkdtempSync(join(tmpdir(), "ukp-search-nap-off-"));
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "provider-nap", createService(root, "provider-nap", "provider-nap"));
+      withEnvGuard(() => {
+        const result = executeHumanSearch(parseSearchArgs([
+          "fixture-cad-search-token",
+          "--endpoint",
+          "provider-nap",
+          "--timeout",
+          "0",
+        ]), { currentDirectory: root, registryPath, qmdCommand: [nodeExecutable, fixtureExecutable] });
+        expect(result.exitCode).toBe(0);
+      });
+      rmSync(root, { recursive: true, force: true });
+    }, 15_000);
+
+    test("json mode keeps the classified timeout failure and names the flag in the error artifact", () => {
+      const root = mkdtempSync(join(tmpdir(), "ukp-search-hang-json-"));
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "provider-hang", createService(root, "provider-hang", "provider-hang"));
+      withEnvGuard(() => {
+        const result = executeSearchCommand(["fixture-cad-search-token", "--endpoint", "provider-hang", "--json"], {
+          currentDirectory: root,
+          registryPath,
+          qmdCommand: [nodeExecutable, fixtureExecutable],
+        }) as { exitCode: number; stdout: string; stderr: string };
+        expect(result.exitCode).toBe(1);
+        const envelope = JSON.parse(result.stdout) as { endpoints: Array<{ status: string; error_artifact?: string }> };
+        expect(envelope.endpoints[0]!.status).toBe("failed");
+        const errorArtifact = envelope.endpoints[0]!.error_artifact!;
+        expect(readFileSync(errorArtifact, "utf8")).toContain("provider timed out after 1s");
+        expect(readFileSync(errorArtifact, "utf8")).toContain("- raise or disable via --timeout");
+      });
+      rmSync(root, { recursive: true, force: true });
+    }, 20_000);
+
+    test("usage: non-integer values and duplicates are rejected", () => {
+      expect(() => parseSearchArgs(["q", "--timeout", "x"])).toThrow("--timeout must be a non-negative integer");
+      expect(() => parseSearchArgs(["q", "--timeout", "1.5"])).toThrow("--timeout must be a non-negative integer");
+      expect(() => parseSearchArgs(["q", "--timeout", "5", "--timeout", "6"])).toThrow("may only be specified once");
+    });
+  });
 });

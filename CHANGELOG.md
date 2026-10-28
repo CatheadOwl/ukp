@@ -6,6 +6,25 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp search --timeout <seconds>` — the provider spawn timeout made an
+  explicit flag (owner ruling 2026-10-28 on the parity-audit finding, seat
+  20261028-1113 option 3): default stays 60s with the hang guard ON
+  (search's primary consumers are unattended agent sessions — the
+  orchestration-family posture: GitHub Actions / GitLab CI / Kubernetes all
+  default-guard), a positive value raises it and wins over
+  `UKP_PROVIDER_TIMEOUT_MS`, and `--timeout 0` disables the guard entirely
+  (the 2026-08-16 interactive semantics — interrupt is then the only cancel
+  mechanism — revived on demand, using the classic-CLI family's universal
+  "zero disables" grammar: curl / wget / ssh_config). Applies to both qmd
+  spawns of a search (human and JSON modes). A timeout kill keeps the
+  `failed` classification but the message now names the flag ("provider
+  timed out after 60s - raise or disable via --timeout") — diagnosable,
+  never disguised as a provider crash; with the guard disabled a SIGTERM is
+  reported as external. No connect/total split (a local subprocess spawn
+  has no connect phase; one gate suffices). The 2026-08-16 spec clause ("no
+  implicit timeout") is superseded in place with the ruling chain and the
+  survey evidence archived verbatim in the seat record; the parity-audit
+  ledger row closes with it (state 3 -> 4).
 - `ukp use <endpoint> [endpoint...]` — the one-step consumer gesture (inbox
   proposal client-portability-and-skill-coverage, owner-endorsed): writes
   or updates the workspace `.ukp/client.toml` `default_endpoints` (explicit

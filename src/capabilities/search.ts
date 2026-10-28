@@ -22,11 +22,17 @@ import {
 import { isRemoteBinding, localPathOf, readRegistry, type RegistryBinding } from "../registry.ts";
 import { resolveScope } from "../scope.ts";
 import { isAbsoluteShapedPath, isInsideRealRoot } from "../path-safety.ts";
-import { buildQmdInvocation, defaultQmdCommand, isDocidBody, providerTimeoutMs, stripDocidHash } from "./qmd.ts";
+import { buildQmdInvocation, defaultQmdCommand, isDocidBody, searchSpawnTimeoutMs, stripDocidHash } from "./qmd.ts";
 
 export interface SearchRequest {
   query: string;
   limit: number;
+  /** Provider spawn timeout for this invocation, in whole seconds
+   * (owner ruling 2026-10-28, TODO 20261028-1113 option 3): 0 disables
+   * the hang guard (interrupt-only cancellation), a positive value wins
+   * over `UKP_PROVIDER_TIMEOUT_MS`. Absent = env/default (60s). Execution
+   * semantics like `limit`, not a surface-shaping option. */
+  timeoutSeconds?: number;
 }
 
 export interface SearchOptions {
@@ -435,13 +441,14 @@ function runHumanMode(
     }
 
     const command = commandFor(endpoint, parsed, true);
+    const timeoutMs = searchSpawnTimeoutMs(parsed.request.timeoutSeconds);
     const result = spawnSync(command.file, command.args, {
       cwd: endpoint.folder!,
       encoding: "utf8",
       windowsHide: true,
       windowsVerbatimArguments: command.verbatim,
       maxBuffer: 64 * 1024 * 1024,
-      timeout: providerTimeoutMs(),
+      ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
     });
     const providerOutput = (result.stdout ?? "").trimEnd();
     const outcome: SearchEndpointOutcome = {
@@ -455,9 +462,13 @@ function runHumanMode(
     endpoints.push(outcome);
     if (result.signal === "SIGTERM") {
       // Zero-output hang guard: a timed-out provider is a classified failure,
-      // never silence (see qmd.ts providerTimeoutMs).
+      // never silence (see qmd.ts searchSpawnTimeoutMs). The message names
+      // the flag (owner ruling form 4: diagnosable, never disguised as a
+      // provider crash); with the guard disabled a SIGTERM is external.
       failed = true;
-      const message = `endpoint '${endpoint.name}' provider timed out after ${providerTimeoutMs() / 1000}s (set UKP_PROVIDER_TIMEOUT_MS to adjust)`;
+      const message = timeoutMs === undefined
+        ? `endpoint '${endpoint.name}' provider terminated by SIGTERM (timeout guard disabled by --timeout 0)`
+        : `endpoint '${endpoint.name}' provider timed out after ${timeoutMs / 1000}s - raise or disable via --timeout`;
       warnings.push(message);
       outcome.status = "failed";
       outcome.providerExitStatus = null;
@@ -1085,12 +1096,13 @@ function runJsonMode(
       stdoutFd = openSync(artifact, "w", 0o600);
       stderrFd = openSync(errorArtifact, "w", 0o600);
       const command = commandFor(endpoint, parsed, true);
+      const timeoutMs = searchSpawnTimeoutMs(parsed.request.timeoutSeconds);
       const result = spawnSync(command.file, command.args, {
         cwd: endpoint.folder!,
         stdio: ["ignore", stdoutFd, stderrFd],
         windowsHide: true,
         windowsVerbatimArguments: command.verbatim,
-        timeout: providerTimeoutMs(),
+        ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
       });
       closeSync(stdoutFd);
       stdoutFd = undefined;
@@ -1102,9 +1114,13 @@ function runJsonMode(
 
       if (result.signal === "SIGTERM") {
         // Zero-output hang guard: classified failure + error artifact, never
-        // silence (see qmd.ts providerTimeoutMs).
+        // silence (see qmd.ts searchSpawnTimeoutMs). The artifact message
+        // names the flag (owner ruling form 4); with the guard disabled a
+        // SIGTERM is external, not a timeout.
         failed = true;
-        appendErrorArtifact(errorArtifact, `provider timed out after ${providerTimeoutMs() / 1000}s`);
+        appendErrorArtifact(errorArtifact, timeoutMs === undefined
+          ? "provider terminated by SIGTERM (timeout guard disabled by --timeout 0)"
+          : `provider timed out after ${timeoutMs / 1000}s - raise or disable via --timeout`);
         const message = `endpoint '${endpoint.name}' provider timed out`;
         warnings.push(message);
         outcome.status = "failed";

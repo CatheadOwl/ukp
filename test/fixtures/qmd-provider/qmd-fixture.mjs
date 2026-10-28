@@ -81,6 +81,14 @@ if (serviceFolder.includes("provider-hang")) {
   await new Promise((resolve) => setTimeout(resolve, 30_000));
 }
 
+// --timeout flag fixture branch (owner ruling 2026-10-28, TODO
+// 20261028-1113 option 3): a short 1.5s nap — under a 1s env guard it times
+// out; with `--timeout 3` (flag wins over env) or `--timeout 0` (guard off)
+// it completes and falls through to normal output.
+if (serviceFolder.includes("provider-nap")) {
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+}
+
 if (isGet) {
   if (serviceFolder.includes("no-lines")) {
     process.stderr.write("qmd: unknown option '--no-line-numbers'\n");
