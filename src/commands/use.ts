@@ -48,7 +48,7 @@ export const USE_SPEC: UkpCommandSpec = {
     "  list is reported). The nearest existing .ukp/client.toml found",
     "  walking up from here is updated; with none found, one is created in",
     "  the current folder. Every name must already be registered",
-    "  ('ukp list'); registering stays a separate explicit gesture.",
+    "  ('ukp list -g'); registering stays a separate explicit gesture.",
     "",
     "Version control rides the same step: .ukp/.gitignore is created with",
     "  machine-local ignores only (declarations stay committable), or",
@@ -145,7 +145,7 @@ export function executeUseCommand(
     const unknown = names.filter((name) => !registered.has(name));
     if (unknown.length > 0) {
       throw new Error(
-        `unknown endpoint '${unknown[0]}'; run 'ukp list' to see registered endpoints, or 'ukp register' first`,
+        `unknown endpoint '${unknown[0]}'; run 'ukp list -g' to see every registered endpoint, or 'ukp register' first`,
       );
     }
 

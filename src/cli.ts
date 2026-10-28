@@ -211,7 +211,7 @@ export function renderHelp(): string {
       ),
       "",
     ]),
-    "Endpoint names for --endpoint come from 'ukp list'.",
+    "Endpoint names for --endpoint come from 'ukp list -g' (every registered endpoint); plain 'ukp list' shows the workspace scope.",
     "",
     "ukp:// references (ukp://<endpoint>/<path>) address registered endpoints, not web pages; open one with 'ukp read <uri>'.",
     "",

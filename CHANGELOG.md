@@ -58,6 +58,23 @@ All notable public changes to UKP will be documented in this file.
 
 ### Changed
 
+- **Breaking-ish** `ukp list` eats the workspace scope by default and gains
+  `-g` (ADR 0031, owner ruling 2026-10-28, restoring the 13ae382 clause the
+  first implementation silently dropped): the default listing now shows the
+  nearest `.ukp/client.toml` default_endpoints resolution — the same
+  `resolveScope` law every consumer command follows — with the full Host
+  Registry as fallback when no client config exists, so bare machines see
+  byte-identical output. `-g` lists every registered endpoint and never
+  reads the client config (the escape hatch for invalid or dangling
+  configs, which otherwise fail the listing with exit 1 and the `-g`
+  remedy). `--json` rides the same scope — no machine-face exemption,
+  which is exactly how the 2026-09-21 spec came to ratify the original
+  drift; the ukp.list.v1 envelope and fields are unchanged, only the row
+  set is selected (`ukp list -g --json` = the full snapshot). Dangling
+  default entries drop out of the rows and warn on stderr in both faces.
+  Guidance follows: the root-help name-source line and `ukp use`'s
+  unknown-endpoint remedy now point at `ukp list -g`. Machine consumers
+  that need the full registry should pin `-g`.
 - `ukp init service` now writes a precise `.ukp/.gitignore` instead of the
   blanket `*`: only the machine-local state that actually lives in `.ukp/`
   is ignored by name (`/instance-uid`, `/tls/`), so the pure declarations —

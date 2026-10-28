@@ -13,6 +13,7 @@ import {
   unregisterAt,
   type RegistryBinding,
 } from "../registry.ts";
+import { resolveScope, type ResolvedScope } from "../scope.ts";
 import {
   createTransportPool,
   fetchDiscoveryDocument,
@@ -117,13 +118,14 @@ export const REGISTER_SPEC: UkpCommandSpec = {
 
 export const LIST_SPEC: UkpCommandSpec = {
   name: "list",
-  summary: "list registered endpoint bindings",
+  summary: "list endpoint bindings - workspace scope by default, every registration with -g",
   group: "registry",
-  description: "List registered endpoint bindings and capabilities.",
-  usage: "[--json]",
+  description: "List endpoint bindings and capabilities: the workspace scope by default (nearest .ukp/client.toml; every registered endpoint when there is none), or the full Host Registry with -g.",
+  usage: "[-g] [--json]",
   strictArguments: true,
   options: [
-    { flags: "--json", help: "emit the offline machine-readable endpoint snapshot (schema ukp.list.v1; registry facts only - remote bindings are not probed, their capability fields are null)" },
+    { flags: "-g, --global", help: "list every registered endpoint (the full Host Registry), ignoring the workspace scope and without reading .ukp/client.toml" },
+    { flags: "--json", help: "emit the offline machine-readable endpoint snapshot (schema ukp.list.v1; registry facts only - remote bindings are not probed, their capability fields are null); rides the same scope as the text listing" },
   ],
 };
 
@@ -727,21 +729,58 @@ export function executeListCommand(
   }
 
   try {
-    const parsed = parseKitArgs<{ json?: boolean }>(LIST_SPEC, args);
+    const parsed = parseKitArgs<{ json?: boolean; global?: boolean }>(LIST_SPEC, args);
+    // Scope semantics (owner ruling 2026-10-28 / ADR 0031, restoring the
+    // 13ae382 clause): list eats the workspace scope like every consumer
+    // command — the nearest client.toml's default_endpoints by default,
+    // full-registry fallback when there is none (bare machines unchanged) —
+    // and -g lists the full Host Registry without reading the config. No
+    // machine-face exemption: --json rides the same resolution (the
+    // exemption pattern is exactly what let the 09-21 contract ratify the
+    // implementation drift); ukp.list.v1's fields are unchanged, only the
+    // row set is selected.
+    const registry = readRegistry(context.registryPath);
+    let endpoints: readonly RegistryBinding[];
+    let scopeWarnings: string[] = [];
+    if (parsed.options.global === true) {
+      endpoints = registry;
+    } else {
+      let scope: ResolvedScope;
+      try {
+        scope = resolveScope({ currentDirectory: context.currentDirectory, registry });
+      } catch (error) {
+        // Same law as the scope family, no list exemption: an invalid
+        // client.toml or one that resolves to nothing fails the listing —
+        // with the -g escape taught in place (it never reads the config).
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: `ukp list: ${message}; use 'ukp list -g' to list every registered endpoint\n`,
+        };
+      }
+      endpoints = scope.bindings;
+      scopeWarnings = scope.warnings;
+    }
     if (parsed.options.json === true) {
       // Machine contract (ukp.list.v1 / TODO 20261028-0053): the offline
-      // registry snapshot. Returns before any transport pool exists —
-      // see renderListJsonSnapshot; the sync return with remote bindings
-      // present is the structural pin of the no-network promise.
-      return renderListJsonSnapshot(readRegistry(context.registryPath));
+      // snapshot of the SELECTED endpoints. Returns before any transport
+      // pool exists — see renderListJsonSnapshot; the sync return with
+      // remote bindings present is the structural pin of the no-network
+      // promise. Scope-level dangling warnings ride stderr (same strings
+      // as the text face); row-level degradation truth stays in rows.
+      const snapshot = renderListJsonSnapshot(endpoints);
+      return {
+        ...snapshot,
+        stderr: scopeWarnings.length > 0 ? `${scopeWarnings.join("\n")}\n` : "",
+      };
     }
-    const endpoints = readRegistry(context.registryPath);
     if (endpoints.length === 0) {
       return { exitCode: 0, stdout: "No endpoints registered.", stderr: "" };
     }
     const remotes = endpoints.filter(isRemoteBinding);
     if (remotes.length === 0) {
-      return renderListOutput(endpoints.map((endpoint) => renderLocalListRow({ name: endpoint.name, path: endpoint.path! })));
+      return renderListOutput(endpoints.map((endpoint) => renderLocalListRow({ name: endpoint.name, path: endpoint.path! })), scopeWarnings);
     }
     // Remote rows fetch the discovery document (fresh per invocation); the
     // same conditional-async seam as search/read keeps all-local listings
@@ -833,7 +872,9 @@ export function executeListCommand(
         // drift fetch may be the slowest leg and a spinner under a finished
         // table would be noise.
         clearProgress();
-        const stderrLines = [...warnings, ...collectSameInstanceNotes(endpoints), ...(await drift)];
+        // Scope dangling warnings lead (they qualify the selection itself),
+        // then row degradation, then the same-instance/drift notes.
+        const stderrLines = [...scopeWarnings, ...warnings, ...collectSameInstanceNotes(endpoints), ...(await drift)];
         return {
           exitCode: 0,
           stdout: context.emitStdout === undefined ? lines.join("\n") : "",
@@ -856,9 +897,10 @@ export function executeListCommand(
 
 function renderListOutput(
   rows: ReadonlyArray<InventoryListRow>,
+  leadingNotes: readonly string[] = [],
   extraNotes: readonly string[] = [],
 ): InventoryCommandResult {
-  const warnings = [...rows.flatMap((row) => (row.warning !== undefined ? [row.warning] : [])), ...extraNotes];
+  const warnings = [...leadingNotes, ...rows.flatMap((row) => (row.warning !== undefined ? [row.warning] : [])), ...extraNotes];
   const stdout = [listHeaderLine(), ...rows.map((row) => renderListLine(row, listRowGeometry(rows)))].join("\n");
   return {
     exitCode: 0,

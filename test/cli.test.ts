@@ -1803,4 +1803,107 @@ describe("CLI bootstrap", () => {
     expect(text).toContain("may only be specified once");
     expect(text).toContain("unknown option '--format'");
   });
+
+  // Scope semantics restored (owner ruling 2026-10-28 / ADR 0031, the
+  // 13ae382 clause): default listing eats the workspace scope like every
+  // consumer command, -g escapes to the full registry, and --json rides
+  // the same law — no machine-face exemption.
+  describe("ukp list scope semantics (ADR 0031)", () => {
+    /** Registry with one healthy Service and one bare-folder binding; a
+     * workspace folder below it whose .ukp/client.toml selects a subset. */
+    function scopedRegistry(config: string): {
+      root: string;
+      workspace: string;
+      context: { currentDirectory: string; registryPath: string; resolveProvider: () => { supported: boolean } };
+    } {
+      const root = mkdtempSync(join(tmpdir(), "ukp-cli-list-scope-"));
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "fixture-qmd", fixture);
+      registerAt(registryPath, "zz-bare", mkdtempSync(join(tmpdir(), "ukp-cli-list-scope-bare-")));
+      const workspace = join(root, "workspace");
+      mkdirSync(join(workspace, ".ukp"), { recursive: true });
+      writeFileSync(join(workspace, ".ukp", "client.toml"), config, "utf8");
+      return {
+        root,
+        workspace,
+        context: { currentDirectory: workspace, registryPath, resolveProvider: () => ({ supported: true }) },
+      };
+    }
+
+    test("default listing eats the workspace scope; -g escapes; --json rides the same law", () => {
+      const { root, context } = scopedRegistry('default_endpoints = ["fixture-qmd"]\n');
+      const output: string[] = [];
+      const errors: string[] = [];
+      try {
+        expect(runCli(["list"], (message) => output.push(message), (message) => errors.push(message), context)).toBe(0);
+        const table = output.join("\n");
+        expect(table).toContain("fixture-qmd");
+        expect(table).not.toContain("zz-bare");
+        expect(errors.join("\n")).toBe("");
+
+        output.length = 0;
+        expect(runCli(["list", "-g"], (message) => output.push(message), undefined, context)).toBe(0);
+        expect(output.join("\n")).toContain("fixture-qmd");
+        expect(output.join("\n")).toContain("zz-bare");
+
+        const jsonLines: string[] = [];
+        expect(runCli(["list", "--json"], (message) => jsonLines.push(message), undefined, context)).toBe(0);
+        const scopedEnvelope = parseSnapshotEnvelope(jsonLines);
+        expect(scopedEnvelope.endpoints.map((row) => row.name)).toEqual(["fixture-qmd"]);
+
+        jsonLines.length = 0;
+        expect(runCli(["list", "--json", "-g"], (message) => jsonLines.push(message), undefined, context)).toBe(0);
+        expect(parseSnapshotEnvelope(jsonLines).endpoints.map((row) => row.name)).toEqual(["fixture-qmd", "zz-bare"]);
+
+        // The corrected name-source note (delegation guidance fix).
+        expect(renderHelp()).toContain("come from 'ukp list -g'");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("dangling default entries warn on stderr in both faces", () => {
+      const { root, context } = scopedRegistry('default_endpoints = ["fixture-qmd", "missing-ep"]\n');
+      const output: string[] = [];
+      const errors: string[] = [];
+      try {
+        expect(runCli(["list"], (message) => output.push(message), (message) => errors.push(message), context)).toBe(0);
+        expect(output.join("\n")).toContain("fixture-qmd");
+        expect(output.join("\n")).not.toContain("missing-ep");
+        expect(errors.join("\n")).toContain("'missing-ep' is not registered");
+
+        const jsonLines: string[] = [];
+        const jsonErrors: string[] = [];
+        expect(runCli(["list", "--json"], (message) => jsonLines.push(message), (message) => jsonErrors.push(message), context)).toBe(0);
+        expect(parseSnapshotEnvelope(jsonLines).endpoints.map((row) => row.name)).toEqual(["fixture-qmd"]);
+        // Machine face: row-level degradation truth stays in rows, but
+        // scope-level dangling warnings ride stderr (same strings as text).
+        expect(jsonErrors.join("\n")).toContain("'missing-ep' is not registered");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("an unresolvable or invalid client config fails the listing; -g never reads it", () => {
+      const { root, context } = scopedRegistry('default_endpoints = ["missing-ep"]\n');
+      try {
+        const errors: string[] = [];
+        expect(runCli(["list"], undefined, (message) => errors.push(message), context)).toBe(1);
+        expect(errors.join("\n")).toContain("does not resolve to any registered endpoint");
+        expect(errors.join("\n")).toContain("ukp list -g");
+
+        writeFileSync(join(root, "workspace", ".ukp", "client.toml"), "not = 1\n", "utf8");
+        errors.length = 0;
+        expect(runCli(["list"], undefined, (message) => errors.push(message), context)).toBe(1);
+        expect(errors.join("\n")).toContain("ukp list -g");
+        // The escape hatch never reads the config at all.
+        const full: string[] = [];
+        expect(runCli(["list", "-g"], (message) => full.push(message), undefined, context)).toBe(0);
+        expect(full.join("\n")).toContain("fixture-qmd");
+        expect(full.join("\n")).toContain("zz-bare");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
 });

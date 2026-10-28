@@ -37,7 +37,10 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
   inspect` 先看命中谁。同一仓双角色（service 同时是消费方）合法：
   client.toml 与 service.toml 各自独立读（`ukp use` 不碰 service 面）。
 - **registry**：`ukp list` 现查 bindings + capabilities（不背清单，
-  会漂）；新 endpoint = 文件夹内 `ukp init service --name <slug>`
+  会漂）；**缺省吃 workspace scope**（同消费命令律；无 client config
+  全量兜底），`ukp list -g` = 全量（不读 client config——机器解析/
+  枚举全部端点名用它，含 `list -g --json`）；新 endpoint = 文件夹内
+  `ukp init service --name <slug>`
   （本地名 = manifest 顶层 `name`，后编辑 service.toml 亦可）→ 要写面
   就声明 capabilities → `ukp diagnose` → `ukp register`；远端消费 =
   `ukp register --url ssh://<host>`（TOFU 钉扎）。`register --name`
