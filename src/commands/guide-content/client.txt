@@ -4,16 +4,23 @@ Goal: use registered Services from a workspace by default, without naming an end
 
 Model:
 - Client path is separate from the provider path: it uses Services; it does not declare one.
-- A folder may hold both roles at once (dual-role): a Service folder may also carry its own .ukp/client.toml to set its default scope. Each file is read independently.
+- A folder may hold both roles at once (dual-role): a Service folder may also carry its own .ukp/client.toml to set its default scope. Each file is read independently; 'ukp use' never touches the Service face.
 - A workspace .ukp/client.toml default_endpoints list selects which registered endpoints you mean when no selector is given.
 - UKP walks up from the current directory to find the nearest .ukp/client.toml.
 - Client Config stores endpoint names only; bindings live in the Host Registry.
 - Explicit --endpoint <name> or -g overrides the client defaults. With no Client Config, most commands fall back to every registered endpoint.
 - ukp update is stricter: it does not fall back to the Registry. It uses your Client Config defaults, or requires --endpoint <name> / -g.
-- ukp register does not edit .ukp/client.toml.
+- ukp register does not edit .ukp/client.toml; 'ukp use' is the one-step writer.
 
-1. Create a workspace Client Config
-   .ukp/client.toml at the workspace root:
+1. Set the workspace defaults (one step)
+   ukp use endpoint-a endpoint-b
+   Writes .ukp/client.toml (default_endpoints = the names you gave, explicit
+   replace, idempotent) and makes it version-visible in the same step:
+   .ukp/.gitignore ignores machine-local state only (instance identity,
+   tls/), so client.toml and service.toml can be committed. Existing repos
+   carrying the retired '*' template are migrated off it; operator-owned
+   ignore files are left untouched.
+   Manual form: .ukp/client.toml with
    default_endpoints = ["endpoint-a", "endpoint-b"]
    Each name must match a registered endpoint; run 'ukp list' to see what is registered.
 
@@ -41,8 +48,12 @@ Model:
 
 Remember:
 - Client path consumes Services; provider path (ukp guide service) creates them.
-- Client Config lists names, not paths or provider details.
+- Client Config lists names, not paths or provider details; 'ukp use' is the one-step writer (register still does not edit it).
 - Explicit selectors always beat Client Config defaults.
 - Register does not edit Client Config, and Client Config does not register endpoints.
+- Declarations (client.toml, service.toml) are committable by design; only
+  machine-local state (.ukp/instance-uid, .ukp/tls/) stays ignored - commit
+  the config so a fresh clone restores the workspace scope once endpoints
+  are registered.
 - Search run artifacts live outside your folders: %LOCALAPPDATA%\ukp\artifacts
   on Windows, ~/.cache/ukp/artifacts (or $XDG_CACHE_HOME) elsewhere.

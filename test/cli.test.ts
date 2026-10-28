@@ -39,6 +39,7 @@ import { INIT_SPEC } from "../src/commands/init.ts";
 import { GUIDE_SPEC } from "../src/commands/guide.ts";
 import { LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC, executeListCommand } from "../src/commands/inventory.ts";
 import { SERVE_SPEC } from "../src/commands/serve.ts";
+import { USE_SPEC } from "../src/commands/use.ts";
 import { INIT_SERVICE_SPEC } from "../src/commands/init.ts";
 import { renderKitHelp, type UkpCommandSpec } from "../src/commands/kit.ts";
 
@@ -59,6 +60,7 @@ const ROOT_MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [
   REGISTER_SPEC,
   UNREGISTER_SPEC,
   LIST_SPEC,
+  USE_SPEC,
 ];
 const MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [...ROOT_MIGRATED_SPECS, INIT_SERVICE_SPEC];
 import { loadManifest } from "../src/config/manifest.ts";
@@ -519,6 +521,7 @@ describe("CLI bootstrap", () => {
       ["list", ["stray"]],
       ["register", ["stray"]],
       ["unregister", ["name"]],
+      ["use", ["endpoint"]],
       ["init", ["stray"]],
       ["guide", ["stray"]],
     ];
@@ -692,11 +695,14 @@ describe("CLI bootstrap", () => {
         registryPath: join(root, "registry.toml"),
       })).toBe(0);
       const gitignore = readFileSync(join(service, ".ukp", ".gitignore"), "utf8");
-      // `*` self-ignore inside the tool-owned directory (virtualenv / venv /
-      // Meson precedent): the guard must cover the whole folder, including
-      // the tls/ private keys serve writes later, without ever touching the
-      // repo-root .gitignore.
-      expect(gitignore.split("\n")).toContain("*");
+      // Precise machine-local ignores (2026-10-28 posture, inbox
+      // client-portability-and-skill-coverage): instance identity and TLS
+      // key material stay out of version control, while the declarations
+      // (service.toml, and client.toml if the folder goes dual-role) are
+      // committable — no blanket `*`, and never a repo-root .gitignore.
+      const rules = gitignore.split("\n").filter((line) => line.length > 0 && !line.startsWith("#"));
+      expect(rules).toEqual(["/instance-uid", "/tls/"]);
+      expect(gitignore.split("\n")).not.toContain("*");
       expect(existsSync(join(root, ".gitignore"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -925,6 +931,12 @@ describe("CLI bootstrap", () => {
     expect(guide).toContain("may hold both roles at once (dual-role)");
     expect(guide).toContain("does not fall back to the Registry");
     expect(guide).toContain("ukp register does not edit .ukp/client.toml");
+    // One-step consumer gesture (inbox client-portability-and-skill-
+    // coverage): the guide teaches `ukp use` as step 1 and states the
+    // version-control posture it lands on.
+    expect(guide).toContain("ukp use endpoint-a endpoint-b");
+    expect(guide).toContain("replace, idempotent)");
+    expect(guide).toContain("machine-local state only");
     // D-088: pin emission is a read flag, never a manual hashing recipe —
     // the guide must route to it instead of teaching sed|sha256sum.
     expect(guide).toContain("ukp read --show-pin");

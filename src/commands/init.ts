@@ -139,14 +139,31 @@ function renderServiceManifest(options: { name?: string; description?: string; d
   return encoded.endsWith("\n") ? encoded : `${encoded}\n`;
 }
 
-/** Self-ignore guard for `.ukp/` (O-020 door-family B-b): the folder holds
- * machine-local Service state (manifest, instance identity, TLS private
- * keys) that must never enter version control or folder sync. `*` inside
- * the tool-owned directory is the virtualenv / Python 3.13 venv / Meson
- * precedent — it never touches the user's repo-root `.gitignore`. An
- * existing file is never touched, so operators who pre-write their own
- * ignore policy keep it (e.g. tracking service.toml on purpose). */
-const UKP_SELF_IGNORE = [
+/** Precise self-ignore template for `.ukp/` (2026-10-28, inbox
+ * client-portability-and-skill-coverage adoption): the tool-owned directory
+ * holds exactly two declaration files (`service.toml`, `client.toml` —
+ * pure declarations with zero machine paths, versionable by design: a
+ * fresh clone re-registers the Service with one `ukp register`) plus the
+ * machine-local state named below. Ignoring by name keeps identity and key
+ * material out of version control and folder sync (the O-020 B-b goal)
+ * while declarations ride with the repo — the `*` blanket it replaces
+ * swallowed them (workflow-lab migration evidence: the endpoint
+ * declaration did not travel with the clone, and carving client.toml back
+ * into tracking cost three fiddly steps). */
+export const UKP_SELF_IGNORE = [
+  "# UKP machine-local state (instance identity, TLS key material) only;",
+  "# declarations (service.toml, client.toml) are versionable by design.",
+  "/instance-uid",
+  "/tls/",
+  "",
+].join("\n");
+
+/** The superseded 2026-09-23 `*` template (the original O-020 B-b
+ * landing), kept verbatim for recognition: `ukp use` migrates a
+ * `.ukp/.gitignore` that still carries it onto the precise template;
+ * anything else is operator-owned and stays untouched (the B-b
+ * operator-policy-wins posture). */
+export const LEGACY_UKP_SELF_IGNORE = [
   "# UKP local Service state (manifest, identity, TLS keys) is machine-local:",
   "# self-ignored to keep it out of version control and folder sync.",
   "*",

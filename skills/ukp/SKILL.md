@@ -10,7 +10,9 @@ description: "ukp dispatch SOP — named knowledge endpoints (search, read, nav,
 用：按名字寻址本地/远端知识——五动词（search / read / nav / rg /
 propose）+ registry 管理 + scope 语义；产出里用 `ukp://` 引用交接
 （folder 可迁移，名字不迁）；把改动以幂等提案递给 endpoint owner；
-解析 `{name}:path` 形跨仓引用（生态通形，非 ukp 专属——裁定与
+给消费仓配默认端点 / 固定 scope / 工作区 scope 配置（一步命令
+`ukp use <e>`，语义见 `ukp guide client`）；解析 `{name}:path` 形跨仓
+引用（生态通形，非 ukp 专属——裁定与
 夹具见 [references/trigger-design.md](references/trigger-design.md)）：
 名在注册表，`ukp read --endpoint <name> <path>` 即开（基径 =
 注册根，项目 endpoint 即仓根）；名不在，ukp 让位。
@@ -30,8 +32,10 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
 | 提案 | `ukp propose --endpoint <e> --id <slug> --file <f>` | 幂等建议箱——created / unchanged / updated，仅 updated bump revision；写面 opt-in（manifest 声明才有） |
 
 - **scope**：`--endpoint <e>` 是正名选择器；缺省 = workspace 默认
-  （`.ukp/client.toml`），`-g` = 全本地 registry；动命令前 `ukp
-  inspect` 先看命中谁。
+  （`.ukp/client.toml`，`ukp use <e> [e...]` 一步写入并保持版控可见，
+  幂等、整表替换），`-g` = 全本地 registry；动命令前 `ukp
+  inspect` 先看命中谁。同一仓双角色（service 同时是消费方）合法：
+  client.toml 与 service.toml 各自独立读（`ukp use` 不碰 service 面）。
 - **registry**：`ukp list` 现查 bindings + capabilities（不背清单，
   会漂）；新 endpoint = 文件夹内 `ukp init service --name <slug>`
   （本地名 = manifest 顶层 `name`，后编辑 service.toml 亦可）→ 要写面
@@ -42,7 +46,7 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
   search / update 需 QMD 在 PATH（缺则 `list` 报 unavailable，退 rg）。
 - **机器面**：`--json`（read 用 `--format json`）；`ukp list --json` =
   离线快照 `ukp.list.v1`（远端 binding 零触网，能力字段为 null，
-  字段名跨版本稳定）。
+  字段名跨版本稳定——跨仓治理工具已实依赖，当作稳定契约消费）。
 
 ## 程序
 

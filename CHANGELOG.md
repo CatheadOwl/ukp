@@ -6,6 +6,19 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp use <endpoint> [endpoint...]` — the one-step consumer gesture (inbox
+  proposal client-portability-and-skill-coverage, owner-endorsed): writes
+  or updates the workspace `.ukp/client.toml` `default_endpoints` (explicit
+  replace, idempotent — same names re-run as unchanged, new names rewrite
+  the list and report the old one) and brings the declarations'
+  version-control visibility along in the same step. Every name must
+  already be registered (admission at write time; registering stays a
+  separate gesture). The target is the nearest existing client.toml
+  walking up from the current directory — the same nearest-wins rule
+  scope resolution applies — or a fresh file in the current folder. An
+  existing structurally invalid config is refused, never clobbered.
+  Dual-role folders are safe: service.toml is never touched. Spec:
+  docs/spec/use-command.md; `ukp guide client` teaches it as step 1.
 - `ukp list --json` — the offline machine-readable endpoint snapshot
   (schema `ukp.list.v1`, TODO 20261028-0053): one pretty-printed document
   per the repo machine-face convention, one object per binding with
@@ -45,6 +58,18 @@ All notable public changes to UKP will be documented in this file.
 
 ### Changed
 
+- `ukp init service` now writes a precise `.ukp/.gitignore` instead of the
+  blanket `*`: only the machine-local state that actually lives in `.ukp/`
+  is ignored by name (`/instance-uid`, `/tls/`), so the pure declarations —
+  `service.toml`, and `client.toml` for dual-role folders — are committable
+  by default (a fresh clone re-registers the Service with one
+  `ukp register`). Real-usage evidence behind the change: endpoint
+  declarations did not travel with clones, and carving client.toml back
+  into tracking cost three error-prone steps. Existing files are still
+  never touched by init; repositories carrying the retired `*` template
+  migrate in one step with `ukp use` (verbatim-template recognition;
+  operator-owned files stay untouched) or by hand. Identity and TLS key
+  material remain ignored on every path.
 - `ukp nav` rides the any-nav scan facade's pathscope engine chain (ADR 0029,
   2026-10-24): the `@any-nav/scan` dependency moves from the registry `0.1.0`
   pin to a local `link:@any-nav/scan` transition supply (two-level chain —

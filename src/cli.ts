@@ -21,6 +21,7 @@ import { executeProposeCommand, PROPOSE_SPEC } from "./commands/propose.ts";
 import { executeUpdateCommand, UPDATE_SPEC } from "./commands/update.ts";
 import { executeServeCommand, SERVE_SPEC } from "./commands/serve.ts";
 import { executeSearchCommand, SEARCH_SPEC } from "./commands/search.ts";
+import { executeUseCommand, USE_SPEC } from "./commands/use.ts";
 
 export { renderSearchHelp } from "./commands/search.ts";
 export { renderDiagnoseHelp } from "./commands/diagnose.ts";
@@ -55,6 +56,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   register: REGISTER_SPEC.summary,
   unregister: UNREGISTER_SPEC.summary,
   list: LIST_SPEC.summary,
+  use: USE_SPEC.summary,
   nav: NAV_SPEC.summary,
   propose: PROPOSE_SPEC.summary,
   search: SEARCH_SPEC.summary,
@@ -80,7 +82,7 @@ export const COMMAND_GROUPS = [
   },
   {
     heading: "Registry commands",
-    commands: ["init", "register", "unregister", "list"],
+    commands: ["init", "register", "unregister", "list", "use"],
   },
   {
     heading: "Operations commands",
@@ -387,6 +389,13 @@ export function runCli(
 
   if (command === "unregister") {
     return writeCommandResult(executeUnregisterCommand(args.slice(1), {
+      currentDirectory,
+      registryPath,
+    }), stdout, stderr);
+  }
+
+  if (command === "use") {
+    return writeCommandResult(executeUseCommand(args.slice(1), {
       currentDirectory,
       registryPath,
     }), stdout, stderr);
