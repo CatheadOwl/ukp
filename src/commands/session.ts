@@ -17,7 +17,6 @@ import {
   loadSessionRecords,
   resolveSessionRecord,
   runAmuxSession,
-  runRemoteAmuxSession,
   sessionStorePath,
   updateSessionRecord,
   SessionError,
@@ -25,8 +24,8 @@ import {
 } from "../capabilities/session.ts";
 import { resolveSessionAgents, resolveSessionWriteTier, type SessionWriteTier } from "../config/agent-backed.ts";
 import { loadManifest, ManifestError } from "../config/manifest.ts";
-import { isRemoteBinding, localPathOf, readRegistry, readRegistryAgents, readSessionHosts, RegistryError } from "../registry.ts";
-import type { RegistryAgent, RegistryBinding, SessionHost } from "../registry.ts";
+import { isRemoteBinding, localPathOf, readRegistry, readRegistryAgents, RegistryError } from "../registry.ts";
+import type { RegistryAgent, RegistryBinding } from "../registry.ts";
 
 export interface SessionCommandResult {
   exitCode: number;
@@ -40,11 +39,6 @@ export interface SessionCommandContext {
   /** amux binary override (test injection / explicit deployments), the
    * rg.ts rgCommand precedent; defaults to PATH lookup + UKP_AMUX. */
   amuxCommand?: readonly string[];
-  /** ssh command override for remote session hosts (test injection), the
-   * remote-client sshCommand precedent (ukp_session_remote W2). */
-  sshCommand?: readonly string[];
-  /** scp command override for remote session hosts (test injection). */
-  scpCommand?: readonly string[];
 }
 
 /** Root-help one-liner (spec §3); feeds COMMAND_DESCRIPTIONS in cli.ts. */
@@ -242,32 +236,23 @@ function readPrompt(
   }
 }
 
-/** Endpoint resolution for session anchoring (ukp_session_remote W2): a
- * name may be a local binding (manifest-anchored, the v0 face unchanged)
- * or a declared remote session host (ssh exec over the amux binary — the
- * dispatcher's session_hosts declaration is the trust anchor, disclosed in
- * spec §7). A remote *binding* (a wire-served knowledge endpoint) is
- * neither: sessions never ride the wire. */
-type SessionAnchor =
-  | { kind: "local"; binding: RegistryBinding; folder: string }
-  | { kind: "remote"; host: SessionHost };
-
+/** Endpoint resolution for session anchoring: the name must be a local
+ * binding (manifest-anchored). A remote *binding* (a wire-served knowledge
+ * endpoint) is refused — sessions never ride the wire. */
 function resolveSessionAnchor(
   registryPath: string,
   endpoint: string,
   subcommand: "spawn" | "send",
-): SessionAnchor {
+): { binding: RegistryBinding; folder: string } {
   const bindings = readRegistry(registryPath);
   const binding = bindings.find((candidate) => candidate.name === endpoint);
-  if (binding !== undefined) {
-    if (isRemoteBinding(binding)) {
-      throw usageError(subcommand, `endpoint '${endpoint}' is a remote knowledge endpoint (wire-served) — session hosting anchors to local endpoints and [[session_hosts]] declarations, not wire bindings`);
-    }
-    return { kind: "local", binding, folder: localPathOf(binding) };
+  if (binding === undefined) {
+    throw usageError(subcommand, `unknown endpoint '${endpoint}' (see 'ukp list')`);
   }
-  const host = readSessionHosts(registryPath).find((candidate) => candidate.name === endpoint);
-  if (host !== undefined) return { kind: "remote", host };
-  throw usageError(subcommand, `unknown endpoint '${endpoint}' (see 'ukp list'; remote session hosts are declared as [[session_hosts]] in the Host Registry)`);
+  if (isRemoteBinding(binding)) {
+    throw usageError(subcommand, `endpoint '${endpoint}' is a wire-served remote endpoint — sessions anchor to local endpoints, not wire bindings`);
+  }
+  return { binding, folder: localPathOf(binding) };
 }
 
 /** Spec §1/§5 authorization gate + substrate resolution. The manifest is the
@@ -321,40 +306,6 @@ function authorizedSubstrate(
     );
   }
   return { substrate, write };
-}
-
-/** Remote authorization gate (ukp_session_remote W2): the session_hosts
- * declaration carries the hosting grant (agents allowlist + write tier) —
- * the dispatcher-side anchor, the remote counterpart of the manifest gate.
- * The substrate command still resolves from the shared [[agents]] table. */
-function authorizedRemoteSubstrate(
-  registryPath: string,
-  host: SessionHost,
-  handle: string,
-): { substrate: RegistryAgent; write: SessionWriteTier } {
-  if (!host.agents.includes(handle)) {
-    throw new SessionError(
-      "not-authorized",
-      `agent '${handle}' is not in session host '${host.name}' agents (allowed: ${host.agents.join(", ")}) — edit the [[session_hosts]] declaration in the Host Registry`,
-    );
-  }
-  let substrates;
-  try {
-    substrates = readRegistryAgents(registryPath);
-  } catch (error) {
-    if (error instanceof RegistryError) {
-      throw new SessionError("substrate-unavailable", error.message, { cause: error });
-    }
-    throw error;
-  }
-  const substrate = substrates.find((candidate) => candidate.handle === handle);
-  if (substrate === undefined) {
-    throw new SessionError(
-      "substrate-unavailable",
-      `agent '${handle}' has no [[agents]] entry in the Host Registry (${registryPath}) — add one to spawn sessions with it`,
-    );
-  }
-  return { substrate, write: host.write };
 }
 
 function ownerName(): string {
@@ -413,34 +364,17 @@ async function runSpawn(
   const anchor = resolveSessionAnchor(context.registryPath, endpoint, "spawn");
   const storePath = sessionStorePath(context.registryPath);
 
-  const outcome = anchor.kind === "local"
-    ? await (async () => {
-        const { substrate, write } = authorizedSubstrate(context.registryPath, anchor.folder, endpoint, handle);
-        return runAmuxSession(
-          {
-            kind: "spawn",
-            folder: anchor.folder,
-            agentCommand: substrate.command,
-            prompt,
-            sandbox: amuxSandboxTier(write),
-          },
-          { amuxCommand: context.amuxCommand },
-        );
-      })()
-    : await (async () => {
-        const { substrate, write } = authorizedRemoteSubstrate(context.registryPath, anchor.host, handle);
-        return runRemoteAmuxSession(
-          {
-            kind: "spawn",
-            host: anchor.host.name,
-            folder: anchor.host.folder,
-            agentCommand: substrate.command,
-            prompt,
-            sandbox: amuxSandboxTier(write),
-          },
-          { sshCommand: context.sshCommand, scpCommand: context.scpCommand },
-        );
-      })();
+  const { substrate, write } = authorizedSubstrate(context.registryPath, anchor.folder, endpoint, handle);
+  const outcome = await runAmuxSession(
+    {
+      kind: "spawn",
+      folder: anchor.folder,
+      agentCommand: substrate.command,
+      prompt,
+      sandbox: amuxSandboxTier(write),
+    },
+    { amuxCommand: context.amuxCommand },
+  );
 
   const nowIso = (context.now?.() ?? new Date()).toISOString();
   const notes: string[] = [];
@@ -504,51 +438,29 @@ async function runSend(
   // Identity is frozen at spawn (the address book); permissions are not —
   // the write tier is re-read from the endpoint's current declaration every
   // run, so an owner revoking `write` downgrades the next send, not just the
-  // next spawn (owner ruling 2026-10-18). The remote branch re-reads the
-  // session_hosts declaration the same way (ukp_session_remote W2).
-  const outcome = anchor.kind === "local"
-    ? await (async () => {
-        let write: SessionWriteTier;
-        try {
-          write = resolveSessionWriteTier(loadManifest(anchor.folder).manifest);
-        } catch (error) {
-          if (error instanceof ManifestError) {
-            throw new SessionError(
-              "not-authorized",
-              `endpoint '${record.endpoint}' authorization declaration is unreadable: ${error.message}`,
-              { cause: error },
-            );
-          }
-          throw error;
-        }
-        return runAmuxSession(
-          {
-            kind: "send",
-            sessionId: record.id,
-            prompt,
-            sandbox: amuxSandboxTier(write),
-          },
-          { amuxCommand: context.amuxCommand },
-        );
-      })()
-    : await (async () => {
-        if (!anchor.host.agents.includes(record.agent)) {
-          throw new SessionError(
-            "not-authorized",
-            `agent '${record.agent}' is no longer in session host '${anchor.host.name}' agents — edit the [[session_hosts]] declaration to re-authorize`,
-          );
-        }
-        return runRemoteAmuxSession(
-          {
-            kind: "send",
-            host: anchor.host.name,
-            sessionId: record.id,
-            prompt,
-            sandbox: amuxSandboxTier(anchor.host.write),
-          },
-          { sshCommand: context.sshCommand, scpCommand: context.scpCommand },
-        );
-      })();
+  // next spawn (owner ruling 2026-10-18).
+  let write: SessionWriteTier;
+  try {
+    write = resolveSessionWriteTier(loadManifest(anchor.folder).manifest);
+  } catch (error) {
+    if (error instanceof ManifestError) {
+      throw new SessionError(
+        "not-authorized",
+        `endpoint '${record.endpoint}' authorization declaration is unreadable: ${error.message}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  const outcome = await runAmuxSession(
+    {
+      kind: "send",
+      sessionId: record.id,
+      prompt,
+      sandbox: amuxSandboxTier(write),
+    },
+    { amuxCommand: context.amuxCommand },
+  );
   updateSessionRecord(storePath, record.id, (context.now?.() ?? new Date()).toISOString(), outcome.outcome);
   return {
     exitCode: outcome.outcome === "finished" ? 0 : 1,

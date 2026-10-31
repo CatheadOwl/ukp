@@ -62,9 +62,6 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
    id 不 dup，owner 在 endpoint inbox 裁决。
 4. **session**（opt-in endpoint 才有）：`ukp session spawn / send /
    status / list`——amux 引擎，派遣纪律与停用状态以 amux 技能为正本。
-   远端主机同面：Host Registry 的 `[[session_hosts]]` 声明（name /
-   远端 folder / agents / write）后 `--endpoint <host>` 即跨机派遣
-   （ssh exec + scp brief；不走 wire）。
 
 ## 产出契约
 

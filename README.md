@@ -137,7 +137,7 @@ it writes `.ukp/client.toml` and keeps it committable in one step.
 
 Grouping below follows `ukp --help`; primary capability commands stay a flat
 `ukp <verb>`, while multi-verb capability families appear as object command
-groups (`ukp session`, after the `init`/`guide` precedent). `--endpoint <name>`
+groups (`ukp init service`, `ukp guide <topic>`). `--endpoint <name>`
 is the canonical endpoint selector (`ukp unregister <name>` still takes the
 endpoint as a positional legacy form); `-g` selects the full local Host
 Registry where supported.
@@ -155,12 +155,6 @@ Endpoint commands:
 | `ukp nav` | Markdown outline of an endpoint (`--depth`, respects `.gitignore`); on by default, configurable via `[capabilities.nav]`. |
 | `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; `--files` enumerates them instead of searching. Results become `read`-ready `ukp://` references. A missing rg binary skips the endpoint with a warning. |
 | `ukp propose` | Submits an idempotent change proposal (suggestion box — the owner decides what happens next). Created/unchanged/updated; the revision bumps only on `updated`. |
-
-Session commands (opt-in per endpoint):
-
-| Command | What it does |
-|---|---|
-| `ukp session` | Spawns and converses with agent sessions anchored to an endpoint — `spawn` / `send` / `status` / `list` (sdk tier). Opt-in: the endpoint manifest must declare `[capabilities.session]` with an `agents` allowlist, and each agent needs a `[[agents]]` entry in the Host Registry. Remote hosts: a `[[session_hosts]]` entry in the Host Registry (name / remote folder / agents allowlist / write tier) anchors sessions over ssh — `ukp session spawn --endpoint <host>` dispatches `ssh <host> amux …` per turn (briefs travel as scp'd files; keep-alives on; sessions never ride the ukp-remote wire). The session engine is the `amux` binary (found on PATH; point `UKP_AMUX` at a specific build to override). spawn/send print the agent's final report on stdout (`--events` opts into the AG-UI JSONL event stream — exactly one run boundary pair per call); the session id is the agent's native thread id — `ukp session send <id>` resumes it. `wait` / `answer` / `stop` are reserved for the app-server tier. Conversation history stays in the agent's own global space; UKP records only the address book. |
 
 Registry commands:
 
@@ -283,11 +277,6 @@ please don't use public issues for security reports.
 
 - remote operation of `update`, and a formally specified network protocol
   beyond the current ukp-remote wire v1;
-- remote session spawn over the ukp-remote wire (the ssh-exec shape A is
-  live via `[[session_hosts]]`; the streaming wire gate is the deferred
-  shape B) and the app-server session tier (`wait` / `answer` / `stop`,
-  mid-run steering): sessions today are sdk-tier only, and the agent
-  binary is invoked with the caller's environment;
 - semantic search tier, query rewrite, reranking, or deduplication;
 - full Client Scope with aliases, visibility, inheritance, or profiles;
 - automatic artifact browsing, cleanup, or "select result N" references;
