@@ -155,7 +155,7 @@ describe("nav capability", () => {
       ]);
       const parsed = await navJson({ endpoint: "kb" }, context);
       expect(parsed.entries).toEqual([
-        { path: "area", kind: "folder", description: "The area", truncated: true, omittedMarkdownCount: 2 },
+        { path: "area", kind: "folder", description: "The area", truncated: true, omittedMarkdownCount: 2, markdown: "area/README.md" },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -201,7 +201,58 @@ describe("nav capability", () => {
       registerAt(registryPath, "kb", service);
       const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       expect(parsed.entries).toEqual([
-        { path: "area", kind: "folder", description: "The npm description", truncated: true, omittedMarkdownCount: 2 },
+        { path: "area", kind: "folder", description: "The npm description", truncated: true, omittedMarkdownCount: 2, markdown: "area/README.md" },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("R3 markdown locator: truncated folder entries surface the representative README path (additive, engine model field)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
+    try {
+      const service = createNavService(root, "kb");
+      writeFiles(service, [
+        { path: "area/README.md", description: "The README description" },
+        { path: "area/a.md" },
+        { path: "top.md" },
+      ]);
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "kb", service);
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      const area = parsed.entries.find((entry: { path: string }) => entry.path === "area");
+      expect(area.markdown).toBe("area/README.md");
+      // File entries are their own read target — the locator is folder-only.
+      expect(parsed.entries.find((entry: { path: string }) => entry.path === "top.md")?.markdown).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("R3 markdown locator: absent when the representative README is excluded — the engine field stays missing, never derived", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
+    try {
+      const folder = join(root, "kb-service");
+      mkdirSync(join(folder, ".ukp"), { recursive: true });
+      writeFileSync(
+        join(folder, ".ukp", "service.toml"),
+        [
+          'name = "kb"',
+          "[capabilities.nav]",
+          'provider = "file"',
+          "[capabilities.nav.config]",
+          'exclude_files = ["README.md"]',
+        ].join("\n") + "\n",
+      );
+      writeFiles(folder, [
+        { path: "area/README.md", description: "The README description" },
+        { path: "area/a.md" },
+      ]);
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "kb", folder);
+      const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
+      expect(parsed.entries).toEqual([
+        { path: "area", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 1 },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

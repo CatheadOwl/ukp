@@ -6,6 +6,14 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp nav --json` (`ukp.nav.v1`) folder entries carry `markdown` — the
+  representative README child's endpoint-relative path, restored additively
+  (W2 问 4 waiting slot closed, 2026-10-31): mapped verbatim from the
+  upstream `NavNode.markdown` model field (`@any-nav/scan` 0.2.0, the
+  DEC-0020 locator) with zero derivation at the projection layer. Present
+  iff that README is in the scan tree (a budget cut past it or an exclusion
+  leaves the field absent); folder entries only — file entries are their
+  own read target. The human face is unchanged.
 - `ukp search --timeout <seconds>` — the provider spawn timeout made an
   explicit flag (owner ruling 2026-10-28 on the parity-audit finding, seat
   20261028-1113 option 3): default stays 60s with the hang guard ON

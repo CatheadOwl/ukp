@@ -77,6 +77,11 @@ export interface NavEntry {
   truncated?: boolean;
   /** Recursive `.md` total under a truncated folder (exclusions applied). */
   omittedMarkdownCount?: number;
+  /** Truncated folder entries only: the representative README child's
+   * endpoint-relative POSIX path, mapped verbatim from the engine's
+   * `NavNode.markdown` — present iff that README is in the tree (W2 问 4
+   * restoration, 2026-10-31; zero derivation at the projection layer). */
+  markdown?: string;
 }
 
 export interface NavDiagnostic {
@@ -297,6 +302,7 @@ async function buildNavResult(
         description: entry.node.description ?? null,
         truncated: true,
         omittedMarkdownCount: entry.omittedMarkdownCount,
+        ...(entry.node.markdown === undefined ? {} : { markdown: entry.node.markdown }),
       };
     }
     const description = nullDescriptionPaths.has(entry.path)
