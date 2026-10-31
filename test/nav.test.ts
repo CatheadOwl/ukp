@@ -187,7 +187,7 @@ describe("nav capability", () => {
     }
   });
 
-  test("R3 folder description chain: _category_ sidecar wins over README", async () => {
+  test("R3 folder description chain: standardized carriers — package.json wins over README; the retired _category_ sidecar no longer shadows (any-nav DEC-0025)", async () => {
     const root = mkdtempSync(join(tmpdir(), "ukp-nav-"));
     try {
       const service = createNavService(root, "kb");
@@ -195,12 +195,13 @@ describe("nav capability", () => {
         { path: "area/README.md", description: "The README description" },
         { path: "area/a.md" },
       ]);
+      writeFileSync(join(service, "area", "package.json"), JSON.stringify({ description: "The npm description" }));
       writeFileSync(join(service, "area", "_category_.yml"), "description: Sidecar area blurb\n");
       const registryPath = join(root, "registry.toml");
       registerAt(registryPath, "kb", service);
       const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       expect(parsed.entries).toEqual([
-        { path: "area", kind: "folder", description: "Sidecar area blurb", truncated: true, omittedMarkdownCount: 2 },
+        { path: "area", kind: "folder", description: "The npm description", truncated: true, omittedMarkdownCount: 2 },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

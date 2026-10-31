@@ -77,6 +77,19 @@ All notable public changes to UKP will be documented in this file.
 
 ### Changed
 
+- The nav engine supply closed its transition window (ADR 0029 closing,
+  2026-10-31): `@any-nav/scan` moves from the local `link:@any-nav/scan`
+  transition (which made every publish intentionally red under pack-audit
+  and required a per-machine `bun link` registration) to the registry pin
+  `^0.2.0`, riding the any-nav 0.2.0 facade train (`@catheadowl/pathscope
+  ^0.1.1` transitively). The pack-audit `link:` dependency guard retires
+  with the window — the publish face is green again; fresh clones install
+  from the registry alone. One nav test re-encodes the folder description
+  chain to the standardized carriers any-nav DEC-0025 shipped (package.json
+  wins over README; the Docusaurus-shaped `_category_` sidecar no longer
+  reads) — a re-adjudicated upstream assertion retired, not a behavior
+  change on the UKP face.
+
 - **Breaking-ish** `ukp list` eats the workspace scope by default and gains
   `-g` (ADR 0031, owner ruling 2026-10-28, restoring the 13ae382 clause the
   first implementation silently dropped): the default listing now shows the

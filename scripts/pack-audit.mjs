@@ -40,17 +40,6 @@ for (const entry of manifest.files ?? []) {
   if (outOfPkg(entry)) violations.push(`manifest files entry leaves the package: ${entry}`);
   if (metaHit(entry)) violations.push(`manifest files entry is meta layer: ${entry}`);
 }
-// A2. 依赖 spec 面：`link:` 是 npm 不可安装的 URL type——进 tarball 即坏包。
-//     过渡期持有它是有意的本地形态（ADR 0029），发布闸在此机械拦截；收口窗口
-//     （TODO/trigger 20261024-1124）换 registry pin 后本检查自然回绿。
-for (const [name, spec] of Object.entries(manifest.dependencies ?? {})) {
-  if (typeof spec === "string" && spec.startsWith("link:")) {
-    violations.push(
-      `manifest dependencies.${name} carries a non-publishable 'link:' spec (${spec}) — swap to the registry pin at the closing window (ADR 0029 / TODO trigger 20261024-1124)`,
-    );
-  }
-}
-
 // B. tarball 模拟面（--ignore-scripts 防递归）
 const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
 const packed = spawnSync(npmBin, ["pack", "--dry-run", "--json", "--ignore-scripts"], {
