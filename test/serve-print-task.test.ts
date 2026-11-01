@@ -176,18 +176,21 @@ describe("serve --print-task rendering (W12)", () => {
     });
     expect(certOut).toContain('del "%USERPROFILE%\\.ukp\\tls\\key.pem" "%USERPROFILE%\\.ukp\\tls\\cert.pem"');
     expect(certOut).toContain("the certificate paths step 0 printed");
-    // Self-signed single-endpoint door: the identity sits INSIDE the
-    // served folder - the sync-carries-the-private-key-out warning and
-    // the init-service self-ignore pointer are the load-bearing lines.
+    // Self-signed single-endpoint door: since 2026-11-01 the identity is
+    // host-local beside the registry (adjudication item 2) — the old
+    // inside-the-KB-folder / sync-carries-the-key-out warning is gone, and
+    // the machine-home path with the endpoint name is the load-bearing line.
     const single = renderServeTaskArtifacts({
       endpoint: "notes",
       host: "0.0.0.0",
       port: 8570,
       tls: { mode: "self-signed", sanEntries: [] },
     });
-    expect(single).toContain("served folder's .ukp\\tls\\");
-    expect(single).toContain("carries the private key out");
-    expect(single).toContain("self-ignoring");
+    expect(single).toContain("%USERPROFILE%\\.ukp\\tls\\");
+    expect(single).toContain("notes\\");
+    expect(single).toContain("never inside");
+    expect(single).not.toContain("carries the private key out");
+    expect(single).not.toContain("self-ignoring");
     // Host door instead: the identity is host-local - no
     // inside-the-KB-folder warning for this shape.
     expect(hostDoorSelfSigned).toContain("host-local");

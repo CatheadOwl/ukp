@@ -13,7 +13,8 @@ import {
   proposeEnvelope,
   proposeUpsert,
 } from "./capabilities/propose.ts";
-import { certSanOf, ensureSelfSignedTlsFiles, spkiPinOf } from "./capabilities/tls-identity.ts";
+import { certSanOf, ensureSelfSignedTlsFiles, migrateLegacyServiceTlsDir, spkiPinOf } from "./capabilities/tls-identity.ts";
+import { retireTlsIgnoreLine } from "./commands/init.ts";
 import {
   buildInlineReferences,
   projectSearchEnvelope,
@@ -124,8 +125,10 @@ export interface ServeConfig {
    * own effective set — no new 403 class exists. */
   tokenFilePath?: string;
   /** TLS transport (W5' / D-079): `self-signed` generates and persists an
-   * identity under the Service folder (`.ukp/tls/`) — in door mode under the
-   * registry's directory, since a door has no single Service folder;
+   * identity in the machine home beside the registry — `~/.ukp/tls/<name>/`
+   * in endpoint mode, the flat `~/.ukp/tls/` in door mode (a door has no
+   * single Service folder; endpoint mode converged on the same home
+   * 2026-11-01 because the identity is machine-scoped material);
    * `certificates` serves operator-provided PEM files (Let's Encrypt IP
    * certs, mkcert, private CA). `sanEntries` (the `--tls-san` flag, already
    * normalized `IP:x`/`DNS:y`) merges extra coverage into the self-signed
@@ -752,8 +755,10 @@ function startServeListener(
 
 /** TLS material resolution (W5' / D-079), shared by both serve modes: a
  * self-signed identity is generated/re-signed/persisted under `identityDir`
- * (the Service folder's `.ukp/tls/` in endpoint mode, the registry directory
- * in door mode — a door has no single Service folder), explicit certificates
+ * (the machine home beside the registry: `~/.ukp/tls/<name>/` in endpoint
+ * mode, the home's flat root in door mode — a door has no single Service
+ * folder, and endpoint mode converged on the same home 2026-11-01 because
+ * the identity is machine-scoped material), explicit certificates
  * are read from the operator's paths. Bun.serve takes PEM contents
  * (path-string handling is platform-dependent). Every failure — unreadable
  * operator files, an unusable persisted identity, openssl unable to sign —
@@ -1139,7 +1144,21 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     );
   }
 
-  const tlsMaterial = resolveTlsMaterial(config, join(serviceFolder, ".ukp", "tls"));
+  // The self-signed identity is machine-scoped material (its SAN coverage
+  // names THIS host's interfaces) and lives in the machine home beside the
+  // registry — `~/.ukp/tls/<endpoint>/` here, the same home's flat root in
+  // door mode (adjudication 2026-11-01, inbox service-dir-layering item 2;
+  // endpoint mode converged on the home door mode already used). Keyed by
+  // the manifest's effective name: the registry namespace holds one
+  // endpoint per name, so a re-cloned folder re-attaches to its pinned
+  // identity instead of orphaning every client (INV-04). A pre-2026-11-01
+  // `.ukp/tls/` moves in once, keypair untouched; the retired `/tls/`
+  // ignore rule swaps out in the same gesture.
+  const identityDir = join(dirname(config.registryPath), "tls", startupManifest.effectiveName);
+  if (migrateLegacyServiceTlsDir(serviceFolder, identityDir) === "moved") {
+    retireTlsIgnoreLine(join(serviceFolder, ".ukp"));
+  }
+  const tlsMaterial = resolveTlsMaterial(config, identityDir);
 
   const handler = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);

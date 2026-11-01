@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { hostname, networkInterfaces } from "node:os";
 import { X509Certificate, createHash } from "node:crypto";
@@ -124,8 +124,12 @@ export interface SelfSignedIdentity {
 }
 
 /** Idempotent self-signed identity for `ukp serve --tls`: persisted under
- * `<serviceFolder>/.ukp/tls/` (machine-local; `init service` self-ignores
- * `.ukp/` via its `.gitignore` — the instance-uid posture). openssl signs
+ * the machine home the caller resolves (`~/.ukp/tls/<endpoint-name>/` in
+ * endpoint mode, `~/.ukp/tls/` flat in door mode — the registry's
+ * directory, machine-scoped by adjudication 2026-11-01, inbox
+ * service-dir-layering item 2; the pre-2026-11-01 home was
+ * `<serviceFolder>/.ukp/tls/`, relocated by migrateLegacyServiceTlsDir).
+ * openssl signs
  * it because node:crypto cannot issue X.509; the
  * identity is the keypair, so losing the key loses the identity (clients
  * re-register). `extraSanEntries` (the `--tls-san` flag, already normalized
@@ -226,5 +230,52 @@ function runOpenssl(args: readonly string[], outputs: readonly string[]): void {
     throw new Error(
       `unable to generate a self-signed TLS identity with openssl (exit ${proc.exitCode}): ${stderr || "is openssl installed and on PATH? 'ukp serve --tls' self-signs through the local openssl"}`,
     );
+  }
+}
+
+/** One-time relocation of a Service folder's TLS identity into its machine
+ * home (adjudication 2026-11-01, inbox service-dir-layering item 2): the
+ * identity is machine-scoped material — its SAN coverage names THIS host's
+ * interfaces — so the keypair moves from the pre-2026-11-01
+ * `<serviceFolder>/.ukp/tls/` to the caller-resolved machine home,
+ * untouched (the SPKI pin every client holds survives; nothing re-signs —
+ * INV-04 renewal semantics by construction). The caller swaps the retired
+ * `/tls/` ignore rule in the same gesture.
+ *
+ * `occupied`: the machine home already holds a complete identity while the
+ * legacy dir also exists (a folder copied between machines rather than
+ * cloned through git). The stale duplicate stays put — silently deleting
+ * key material is not this step's call, and the legacy ignore rule keeps
+ * guarding it. */
+export function migrateLegacyServiceTlsDir(
+  serviceFolder: string,
+  identityDir: string,
+): "moved" | "absent" | "occupied" {
+  const legacyDir = join(serviceFolder, ".ukp", "tls");
+  if (!existsSync(legacyDir)) return "absent";
+  if (existsSync(join(identityDir, "cert.pem")) && existsSync(join(identityDir, "key.pem"))) {
+    return "occupied";
+  }
+  mkdirSync(identityDir, { recursive: true, mode: 0o700 });
+  for (const name of ["cert.pem", "key.pem"] as const) {
+    const source = join(legacyDir, name);
+    if (existsSync(source)) moveFileStrict(source, join(identityDir, name));
+  }
+  // With the material out, the whole legacy dir goes: anything left behind
+  // (.lock residue from a crashed serve) is transient state, not identity.
+  rmSync(legacyDir, { recursive: true, force: true });
+  return "moved";
+}
+
+/** rename with a cross-device fallback (a service folder and the user home
+ * can live on different drives); the key keeps its 0600 either way. */
+function moveFileStrict(source: string, target: string): void {
+  try {
+    renameSync(source, target);
+  } catch (error) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    copyFileSync(source, target);
+    chmodSync(target, 0o600);
+    unlinkSync(source);
   }
 }

@@ -84,9 +84,12 @@ supported (its `-c` quoting drops the wake form).
 
 ## Native TLS (bare IP, no domain — zero extra components)
 
-`--tls` self-signs on first start (identity = keypair, persisted under the
-Service folder's `.ukp/tls/`; SAN covers the host's addresses). Clients pin
-the certificate automatically at registration — same command as any other
+`--tls` self-signs on first start (identity = keypair, persisted in the
+machine home beside the host registry — `~/.ukp/tls/<endpoint-name>/` for a
+single endpoint, `~/.ukp/tls/` for a host door; SAN covers the host's
+addresses, so the identity never travels with the knowledge folder and a
+re-cloned endpoint on the same host keeps its pin). Clients pin the
+certificate automatically at registration — same command as any other
 remote, no flags added:
 
 ```bash
@@ -292,11 +295,13 @@ prints this checklist as its §5):
    plaintext** — deleting it destroys this copy; if it ever left the
    machine, treat the token as burned), `start-door-hidden.vbs`, and
    `door.log`, plus the certificate material: your `--tls-cert` /
-   `--tls-key` paths, or — with `--tls` — the identity in the served
-   folder's `.ukp\tls\` (single-endpoint door: *inside* the KB folder,
-   so git or cloud sync carries the private key out;
-   `ukp init service` drops a self-ignoring `.ukp\.gitignore` there) or
-   beside the host registry (host door). The endpoints stay registered
+   `--tls-key` paths, or — with `--tls` — the self-signed identity beside
+   the host registry: `%USERPROFILE%\.ukp\tls\<endpoint-name>\` for a
+   single-endpoint door, `%USERPROFILE%\.ukp\tls\` for a host door (it
+   never lives inside the knowledge folder, so git or cloud sync cannot
+   carry the private key out; `ukp unregister` leaves it in place on
+   purpose — a re-registered endpoint keeps its pin — so delete it by
+   hand when you are done). The endpoints stay registered
    on the host for local use — `ukp unregister --endpoint <name>` per
    endpoint only if you are done with them; and every consumer that
    registered holds the token in plaintext in its own registry —

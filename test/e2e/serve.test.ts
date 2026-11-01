@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -546,7 +547,10 @@ describe("serve TLS (W5' / D-079)", () => {
     const first = start({ tls: { mode: "self-signed" } });
     expect(first.info.url.startsWith("https://")).toBe(true);
     expect(first.info.tls?.source).toBe("generated");
-    const certPem = readFileSync(join(serviceFolder, ".ukp", "tls", "cert.pem"), "utf8");
+    // Machine home beside the registry (adjudication 2026-11-01), never the
+    // service folder: the identity is machine-scoped material.
+    const certPem = readFileSync(join(root, "tls", "serve-fixture", "cert.pem"), "utf8");
+    expect(existsSync(join(serviceFolder, ".ukp", "tls"))).toBe(false);
     expect(first.info.tls?.pin).toBe(spkiPinOf(certPem));
 
     // Plain fetch rejects the self-signed chain; an anchored fetch (what a
@@ -628,7 +632,8 @@ describe("serve TLS (W5' / D-079)", () => {
     const tlsSanRegistry = join(root, "tls-san-registry.toml");
     const folder = createService("tls-san-svc", "tls-san-ep");
     registerAt(tlsSanRegistry, "tls-san-ep", folder);
-    const tlsDir = join(folder, ".ukp", "tls");
+    // The machine home beside that registry, keyed by endpoint name.
+    const tlsDir = join(root, "tls", "tls-san-ep");
 
     const first = start({
       endpointName: "tls-san-ep",
@@ -694,7 +699,7 @@ describe("serve TLS (W5' / D-079)", () => {
     });
     expect(first.info.tls?.source).toBe("generated");
     // the canonical (expanded) key is what coverage tracking sees
-    expect(certSanEntriesOf(readFileSync(join(folder, ".ukp", "tls", "cert.pem"), "utf8")).has("IP:fd00:0:0:0:0:0:0:1"))
+    expect(certSanEntriesOf(readFileSync(join(root, "tls", "tls-san-v6-ep", "cert.pem"), "utf8")).has("IP:fd00:0:0:0:0:0:0:1"))
       .toBe(true);
     first.server.stop(true);
     const second = start({
@@ -710,7 +715,7 @@ describe("serve TLS (W5' / D-079)", () => {
     const tlsSanRegistry = join(root, "tls-san-corrupt-registry.toml");
     const folder = createService("tls-san-corrupt-svc", "tls-san-corrupt-ep");
     registerAt(tlsSanRegistry, "tls-san-corrupt-ep", folder);
-    const tlsDir = join(folder, ".ukp", "tls");
+    const tlsDir = join(root, "tls", "tls-san-corrupt-ep");
     mkdirSync(tlsDir, { recursive: true });
     writeFileSync(join(tlsDir, "cert.pem"), "not a certificate", "utf8");
     writeFileSync(join(tlsDir, "key.pem"), "not a key", "utf8");
@@ -721,6 +726,54 @@ describe("serve TLS (W5' / D-079)", () => {
         tls: { mode: "self-signed", sanEntries: ["IP:203.0.113.7"] },
       }),
     ).toThrow("TLS material is unusable");
+  });
+
+  test.skipIf(!opensslAvailable)("a pre-2026-11-01 .ukp/tls migrates into the machine home with its pin; the retired /tls/ ignore swaps out; a stale duplicate is never deleted (adjudication item 2)", async () => {
+    const { UKP_SELF_IGNORE, UKP_SELF_IGNORE_WITH_TLS } = await import("../../src/commands/init.ts");
+    const homeRegistry = join(root, "tls-home-registry.toml");
+    const folder = createService("tls-home-svc", "tls-home-ep");
+    registerAt(homeRegistry, "tls-home-ep", folder);
+    const identityDir = join(root, "tls", "tls-home-ep");
+    const legacyDir = join(folder, ".ukp", "tls");
+
+    const first = start({ endpointName: "tls-home-ep", registryPath: homeRegistry, tls: { mode: "self-signed" } });
+    expect(first.info.tls?.source).toBe("generated");
+    expect(existsSync(join(identityDir, "key.pem"))).toBe(true);
+    expect(existsSync(legacyDir)).toBe(false);
+    const pin = first.info.tls?.pin;
+    first.server.stop(true);
+
+    // Rewind the folder to its pre-2026-11-01 shape: identity inside
+    // .ukp/tls/, guarded by the first precise template's /tls/ rule.
+    mkdirSync(legacyDir, { recursive: true });
+    renameSync(join(identityDir, "cert.pem"), join(legacyDir, "cert.pem"));
+    renameSync(join(identityDir, "key.pem"), join(legacyDir, "key.pem"));
+    writeFileSync(join(folder, ".ukp", ".gitignore"), UKP_SELF_IGNORE_WITH_TLS, "utf8");
+
+    const second = start({ endpointName: "tls-home-ep", registryPath: homeRegistry, tls: { mode: "self-signed" } });
+    // The keypair moved untouched — persisted reuse, pin survived (INV-04:
+    // nothing re-signed, every pinned client re-anchors transparently).
+    expect(second.info.tls?.source).toBe("persisted");
+    expect(second.info.tls?.pin).toBe(pin);
+    expect(existsSync(join(identityDir, "key.pem"))).toBe(true);
+    expect(existsSync(legacyDir)).toBe(false);
+    // The retired /tls/ rule swapped out in the same gesture.
+    expect(readFileSync(join(folder, ".ukp", ".gitignore"), "utf8")).toBe(UKP_SELF_IGNORE);
+    second.server.stop(true);
+
+    // A stale duplicate (a folder copied between machines rather than
+    // cloned) loses to the machine home: nothing is deleted, the legacy dir
+    // and the template guarding it stay exactly as found.
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "cert.pem"), "stale copy", "utf8");
+    writeFileSync(join(legacyDir, "key.pem"), "stale copy", "utf8");
+    writeFileSync(join(folder, ".ukp", ".gitignore"), UKP_SELF_IGNORE_WITH_TLS, "utf8");
+    const third = start({ endpointName: "tls-home-ep", registryPath: homeRegistry, tls: { mode: "self-signed" } });
+    expect(third.info.tls?.source).toBe("persisted");
+    expect(third.info.tls?.pin).toBe(pin);
+    expect(readFileSync(join(legacyDir, "key.pem"), "utf8")).toBe("stale copy");
+    expect(readFileSync(join(folder, ".ukp", ".gitignore"), "utf8")).toBe(UKP_SELF_IGNORE_WITH_TLS);
+    third.server.stop(true);
   });
 });
 

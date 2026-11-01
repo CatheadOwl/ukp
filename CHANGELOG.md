@@ -223,6 +223,30 @@ All notable public changes to UKP will be documented in this file.
 
 ### Security
 
+- The serve `--tls` self-signed identity of a single endpoint now lives in
+  the machine home beside the host registry — `~/.ukp/tls/<endpoint-name>/`
+  (0700 dir, 0600 key) — instead of the served folder's `.ukp/tls/`
+  (adjudication 2026-11-01, inbox/service-dir-layering item 2, ADR-REM-012).
+  The identity is machine-scoped material: its SAN coverage names this
+  host's interfaces, and the reuse path never re-validated that coverage,
+  so a folder copied to another machine kept serving a certificate
+  describing the old machine's addresses. Door mode already lived in the
+  registry directory; endpoint mode converges on the same home, keyed by
+  the manifest's effective name so a re-cloned endpoint on the same host
+  keeps its SPKI pin (every pinned consumer re-anchors transparently —
+  INV-04's renewal semantics, now also across re-clones). The
+  sync-carries-the-private-key-out exposure (git or cloud sync of the
+  knowledge folder) is structurally gone. A pre-existing `.ukp/tls/`
+  moves in once on the first `--tls` serve with the keypair untouched
+  (nothing re-signs, the pin survives; cross-drive moves fall back to
+  copy+0600+unlink); when the machine home already holds a complete
+  identity, a leftover folder copy is left in place, never deleted. The
+  `.ukp/.gitignore` precise template drops its `/tls/` rule — the first
+  form is still recognized as current and swapped out only in the same
+  gesture that removes the directory. `ukp unregister` deliberately leaves
+  `~/.ukp/tls/<name>/` in place (identity continuity); `serve --print-task`
+  §5 names the path for manual removal. Spec:
+  docs/spec/configuration-contracts.md "Serve TLS Identity Home".
 - The serve bearer gate now compares tokens in constant time: the
   presented `Authorization` header and each expected `Bearer <token>`
   string are SHA-256-digested before a `crypto.timingSafeEqual`

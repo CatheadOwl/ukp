@@ -301,11 +301,11 @@ export function renderServeTaskArtifacts(input: ServeTaskInput): string {
       : []),
     ...(input.tls?.mode === "self-signed" && input.endpoint !== undefined
       ? [
-          "   The --tls identity lives in the served folder's .ukp\\tls\\ -",
-          "   INSIDE the knowledge folder. Git or cloud sync",
-          "   carries the private key out with it. Delete it when the folder",
-          "   leaves this machine; ukp init service drops a self-ignoring",
-          "   .ukp\\.gitignore there for exactly this reason.",
+          `   The --tls identity is host-local: %USERPROFILE%\\.ukp\\tls\\`,
+          `   ${input.endpoint}\\ - beside the host registry, never inside`,
+          "   the knowledge folder (git or cloud sync cannot carry it out;",
+          "   a pre-2026-11-01 .ukp\\tls\\ moved there on first serve).",
+          "   Delete that folder with the endpoint if you are done.",
         ]
       : []),
     ...(input.tls?.mode === "self-signed" && input.endpoint === undefined

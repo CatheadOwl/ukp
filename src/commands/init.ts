@@ -140,17 +140,35 @@ function renderServiceManifest(options: { name?: string; description?: string; d
 }
 
 /** Precise self-ignore template for `.ukp/` (2026-10-28, inbox
- * client-portability-and-skill-coverage adoption): the tool-owned directory
- * holds exactly two declaration files (`service.toml`, `client.toml` —
- * pure declarations with zero machine paths, versionable by design: a
- * fresh clone re-registers the Service with one `ukp register`) plus the
- * machine-local state named below. Ignoring by name keeps identity and key
- * material out of version control and folder sync (the O-020 B-b goal)
- * while declarations ride with the repo — the `*` blanket it replaces
- * swallowed them (workflow-lab migration evidence: the endpoint
- * declaration did not travel with the clone, and carving client.toml back
- * into tracking cost three fiddly steps). */
+ * client-portability-and-skill-coverage adoption; `/tls/` line retired
+ * 2026-11-01 by the inbox service-dir-layering adjudication item 2): the
+ * tool-owned directory holds exactly two declaration files
+ * (`service.toml`, `client.toml` — pure declarations with zero machine
+ * paths, versionable by design: a fresh clone re-registers the Service
+ * with one `ukp register`) plus the machine-local state named below.
+ * Ignoring by name keeps identity out of version control and folder sync
+ * (the O-020 B-b goal) while declarations ride with the repo — the `*`
+ * blanket it replaces swallowed them (workflow-lab migration evidence:
+ * the endpoint declaration did not travel with the clone, and carving
+ * client.toml back into tracking cost three fiddly steps). The serve TLS
+ * identity no longer lives here (see UKP_SELF_IGNORE_WITH_TLS). */
 export const UKP_SELF_IGNORE = [
+  "# UKP machine-local state (instance identity) only;",
+  "# declarations (service.toml, client.toml) are versionable by design.",
+  "/instance-uid",
+  "",
+].join("\n");
+
+/** The 2026-10-28 template's first form, retired 2026-11-01 when the
+ * serve TLS identity moved to the machine home (`~/.ukp/tls/<name>/`,
+ * inbox service-dir-layering item 2): its `/tls/` rule named a resident
+ * that no longer exists. Kept verbatim for two recognitions — the posture
+ * ladder classifies it "current" (it IS precise, and a folder that still
+ * carries its legacy `tls/` dir stays correctly ignored until the
+ * serve-side migration moves the material out), and the serve migration
+ * (`retireTlsIgnoreLine`) swaps it onto the current template in the same
+ * gesture that removes the directory. */
+export const UKP_SELF_IGNORE_WITH_TLS = [
   "# UKP machine-local state (instance identity, TLS key material) only;",
   "# declarations (service.toml, client.toml) are versionable by design.",
   "/instance-uid",
@@ -194,7 +212,9 @@ export function ensureVersionVisibleUkpIgnore(ukpDirectory: string): UkpIgnorePo
   const gitignorePath = join(ukpDirectory, ".gitignore");
   const classify = (): UkpIgnorePosture => {
     const content = readFileSync(gitignorePath, "utf8");
-    if (content === UKP_SELF_IGNORE) return "current";
+    // Both precise generations are "current": a WITH_TLS file may still
+    // guard a legacy tls/ dir that the serve migration has not moved yet.
+    if (content === UKP_SELF_IGNORE || content === UKP_SELF_IGNORE_WITH_TLS) return "current";
     if (content === LEGACY_UKP_SELF_IGNORE) {
       // Same-file swap through a temp + rename: a concurrent reader sees
       // either template, never a torn file.
@@ -239,7 +259,27 @@ export function renderUkpIgnorePostureLine(posture: UkpIgnorePosture, ukpDirecto
 /** stderr warning for the operator-owned-star posture: the declarations
  * stay invisible until the operator narrows the file. */
 export function ukpIgnoreStarWarning(ukpDirectory: string): string {
-  return `warning: ${join(ukpDirectory, ".gitignore")} ignores everything ('*'); declarations stay invisible to version control - narrow it to machine-local state (instance-uid, tls/) so they can be committed\n`;
+  return `warning: ${join(ukpDirectory, ".gitignore")} ignores everything ('*'); declarations stay invisible to version control - narrow it to machine-local state (instance-uid) so they can be committed\n`;
+}
+
+/** Service-side half of the TLS identity relocation (2026-11-01): once the
+ * legacy `.ukp/tls/` material has moved into the machine home, the
+ * by-then-retired first precise template (whose `/tls/` rule guarded it)
+ * swaps onto the current one — verbatim recognition only, so an
+ * operator-owned file is never touched. Returns whether a swap happened. */
+export function retireTlsIgnoreLine(ukpDirectory: string): boolean {
+  const gitignorePath = join(ukpDirectory, ".gitignore");
+  let content: string;
+  try {
+    content = readFileSync(gitignorePath, "utf8");
+  } catch {
+    return false; // no guard in place — nothing to retire
+  }
+  if (content !== UKP_SELF_IGNORE_WITH_TLS) return false;
+  const tempPath = join(ukpDirectory, ".gitignore.ukp-tmp");
+  writeFileSync(tempPath, UKP_SELF_IGNORE, "utf8");
+  renameSync(tempPath, gitignorePath);
+  return true;
 }
 
 function ensureUkpSelfIgnore(ukpDirectory: string): void {

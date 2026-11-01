@@ -696,12 +696,14 @@ describe("CLI bootstrap", () => {
       })).toBe(0);
       const gitignore = readFileSync(join(service, ".ukp", ".gitignore"), "utf8");
       // Precise machine-local ignores (2026-10-28 posture, inbox
-      // client-portability-and-skill-coverage): instance identity and TLS
-      // key material stay out of version control, while the declarations
-      // (service.toml, and client.toml if the folder goes dual-role) are
-      // committable — no blanket `*`, and never a repo-root .gitignore.
+      // client-portability-and-skill-coverage; the /tls/ rule retired
+      // 2026-11-01 when the serve TLS identity moved to the machine home —
+      // inbox service-dir-layering item 2): instance identity stays out of
+      // version control, while the declarations (service.toml, and
+      // client.toml if the folder goes dual-role) are committable — no
+      // blanket `*`, and never a repo-root .gitignore.
       const rules = gitignore.split("\n").filter((line) => line.length > 0 && !line.startsWith("#"));
-      expect(rules).toEqual(["/instance-uid", "/tls/"]);
+      expect(rules).toEqual(["/instance-uid"]);
       expect(gitignore.split("\n")).not.toContain("*");
       expect(existsSync(join(root, ".gitignore"))).toBe(false);
     } finally {

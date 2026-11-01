@@ -16,9 +16,10 @@ Model:
    ukp use endpoint-a endpoint-b
    Writes .ukp/client.toml (default_endpoints = the names you gave, explicit
    replace, idempotent) and makes it version-visible in the same step:
-   .ukp/.gitignore ignores machine-local state only (instance identity,
-   tls/), so client.toml and service.toml can be committed. Existing repos
-   carrying the retired '*' template are migrated off it; operator-owned
+   .ukp/.gitignore ignores machine-local state only (the instance
+   identity), so client.toml and service.toml can be committed. Existing
+   repos carrying the retired '*' template are migrated off it (a local
+   'ukp register' does the same on the service side); operator-owned
    ignore files are left untouched.
    Manual form: .ukp/client.toml with
    default_endpoints = ["endpoint-a", "endpoint-b"]
@@ -52,8 +53,9 @@ Remember:
 - Explicit selectors always beat Client Config defaults.
 - Register does not edit Client Config, and Client Config does not register endpoints.
 - Declarations (client.toml, service.toml) are committable by design; only
-  machine-local state (.ukp/instance-uid, .ukp/tls/) stays ignored - commit
-  the config so a fresh clone restores the workspace scope once endpoints
-  are registered.
+  machine-local state (.ukp/instance-uid) stays ignored - the serve TLS
+  identity lives beside the host registry (~/.ukp/tls/), never in the
+  folder. Commit the config so a fresh clone restores the workspace scope
+  once endpoints are registered.
 - Search run artifacts live outside your folders: %LOCALAPPDATA%\ukp\artifacts
   on Windows, ~/.cache/ukp/artifacts (or $XDG_CACHE_HOME) elsewhere.
