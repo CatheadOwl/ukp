@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, openSync, closeSync, writeFileSync, unlinkSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, closeSync, writeFileSync, unlinkSync, readFileSync, renameSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { stringify } from "smol-toml";
 import { ENDPOINT_NAME, loadManifest, type ManifestDependency } from "../config/manifest.ts";
@@ -159,8 +159,8 @@ export const UKP_SELF_IGNORE = [
 ].join("\n");
 
 /** The superseded 2026-09-23 `*` template (the original O-020 B-b
- * landing), kept verbatim for recognition: `ukp use` migrates a
- * `.ukp/.gitignore` that still carries it onto the precise template;
+ * landing), kept verbatim for recognition: the posture step below migrates
+ * a `.ukp/.gitignore` that still carries it onto the precise template;
  * anything else is operator-owned and stays untouched (the B-b
  * operator-policy-wins posture). */
 export const LEGACY_UKP_SELF_IGNORE = [
@@ -169,6 +169,78 @@ export const LEGACY_UKP_SELF_IGNORE = [
   "*",
   "",
 ].join("\n");
+
+/** Posture of `.ukp/.gitignore` after a version-control step ran. Two
+ * gestures carry the declarations' version visibility and share this
+ * ladder: `ukp use` (client face) and `ukp register`'s local path (service
+ * face — the service-side touchpoint pure Service folders were missing
+ * until 2026-11-01; they have no reason to run `use`, and re-running
+ * `init service` is refused once the manifest exists). */
+export type UkpIgnorePosture =
+  | "created"
+  | "migrated"
+  | "current"
+  | "operator-owned"
+  /** Operator-owned AND still carries a bare `*` rule — the declarations
+   * stay invisible; surfaced as a stderr warning with the remedy. */
+  | "operator-owned-star";
+
+/** Bring `.ukp/.gitignore` to the precise-ignore posture (the version
+ * control half of `ukp use` and register's local path): create when absent,
+ * migrate a verbatim legacy `*` template, leave anything else untouched —
+ * the O-020 B-b operator-policy-wins rule. The `*` detector is advisory
+ * only (a note, never a rewrite). */
+export function ensureVersionVisibleUkpIgnore(ukpDirectory: string): UkpIgnorePosture {
+  const gitignorePath = join(ukpDirectory, ".gitignore");
+  const classify = (): UkpIgnorePosture => {
+    const content = readFileSync(gitignorePath, "utf8");
+    if (content === UKP_SELF_IGNORE) return "current";
+    if (content === LEGACY_UKP_SELF_IGNORE) {
+      // Same-file swap through a temp + rename: a concurrent reader sees
+      // either template, never a torn file.
+      const tempPath = join(ukpDirectory, ".gitignore.ukp-tmp");
+      writeFileSync(tempPath, UKP_SELF_IGNORE, "utf8");
+      renameSync(tempPath, gitignorePath);
+      return "migrated";
+    }
+    return content.split("\n").some((line) => line.trim() === "*")
+      ? "operator-owned-star"
+      : "operator-owned";
+  };
+  if (!existsSync(gitignorePath)) {
+    try {
+      writeFileSync(gitignorePath, UKP_SELF_IGNORE, { flag: "wx", mode: 0o644 });
+      return "created";
+    } catch (error) {
+      // Concurrent writer installed a guard — classify whatever landed.
+      if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  return classify();
+}
+
+/** stdout line reporting a posture — shared verbatim by every carrier
+ * gesture so the version-control face reads identically wherever it runs. */
+export function renderUkpIgnorePostureLine(posture: UkpIgnorePosture, ukpDirectory: string): string {
+  switch (posture) {
+    case "created":
+      return `version_control: .ukp/.gitignore created (machine-local state ignored; declarations committable)`;
+    case "migrated":
+      return `version_control: .ukp/.gitignore migrated off the retired '*' template (declarations committable; machine-local state stays ignored)`;
+    case "current":
+      return `version_control: .ukp/.gitignore already precise (machine-local state only)`;
+    case "operator-owned":
+      return `version_control: .ukp/.gitignore is operator-owned - left untouched (${join(ukpDirectory, ".gitignore")})`;
+    case "operator-owned-star":
+      return `version_control: .ukp/.gitignore is operator-owned - left untouched (see warning)`;
+  }
+}
+
+/** stderr warning for the operator-owned-star posture: the declarations
+ * stay invisible until the operator narrows the file. */
+export function ukpIgnoreStarWarning(ukpDirectory: string): string {
+  return `warning: ${join(ukpDirectory, ".gitignore")} ignores everything ('*'); declarations stay invisible to version control - narrow it to machine-local state (instance-uid, tls/) so they can be committed\n`;
+}
 
 function ensureUkpSelfIgnore(ukpDirectory: string): void {
   const gitignorePath = join(ukpDirectory, ".gitignore");

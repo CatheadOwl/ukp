@@ -1,7 +1,13 @@
+import { join } from "node:path";
 import { ENDPOINT_NAME, loadManifest, ServiceFolderInaccessibleError } from "../config/manifest.ts";
 import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
 import { EXTERNAL_TOOL_CAPABILITIES } from "../config/external-tool.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
+import {
+  ensureVersionVisibleUkpIgnore,
+  renderUkpIgnorePostureLine,
+  ukpIgnoreStarWarning,
+} from "./init.ts";
 import {
   assertRegistrableRemoteUrl,
   isRemoteBinding,
@@ -94,7 +100,11 @@ export const REGISTER_SPEC: UkpCommandSpec = {
     "",
     "Binding:",
     "  The Host Registry binds the Service Manifest's effective name to this",
-    "  folder's location; 'ukp list' shows the resulting bindings.",
+    "  folder's location; 'ukp list' shows the resulting bindings. A local",
+    "  register (plain or --rebind) also brings .ukp/.gitignore to the",
+    "  precise-ignore posture: created when absent, a legacy '*' template",
+    "  migrated so the declarations can be committed, an operator-owned",
+    "  file left untouched.",
     "  With --url, the declared name and instance identity come from the",
     "  remote discovery document (/.well-known/ukp.json) and are pinned",
     "  TOFU-style as provenance; your registry binds them under a local",
@@ -388,23 +398,33 @@ export function executeRegisterCommand(
         (endpoint) => endpoint.name === report.service.effectiveName,
       );
       rebindAt(context.registryPath, report.service.effectiveName, report.service.folder);
+      // The service-side version-control step rides the same binding
+      // gestures (use is the client-face carrier; a pure Service folder —
+      // the fresh-clone revival path this command IS — has no reason to
+      // run use, and re-running init is refused once the manifest exists).
+      const ukpDirectory = join(report.service.folder, ".ukp");
+      const posture = ensureVersionVisibleUkpIgnore(ukpDirectory);
       const lines = [
         `rebound: ${report.service.effectiveName}`,
         `from: ${previous?.path ?? "(unknown)"}`,
         ...(report.service.manifest.description ? [`description: ${report.service.manifest.description}`] : []),
         `location: ${report.service.folder}`,
+        renderUkpIgnorePostureLine(posture, ukpDirectory),
       ];
       return {
         exitCode: 0,
         stdout: lines.join("\n"),
-        stderr: "",
+        stderr: posture === "operator-owned-star" ? ukpIgnoreStarWarning(ukpDirectory) : "",
       };
     }
     registerAt(context.registryPath, report.service.effectiveName, report.service.folder);
+    const ukpDirectory = join(report.service.folder, ".ukp");
+    const posture = ensureVersionVisibleUkpIgnore(ukpDirectory);
     const lines = [
       `registered: ${report.service.effectiveName}`,
       ...(report.service.manifest.description ? [`description: ${report.service.manifest.description}`] : []),
       `location: ${report.service.folder}`,
+      renderUkpIgnorePostureLine(posture, ukpDirectory),
       // Register never edits Client Config (guide client owns that); this is
       // a pointer for the cross-workspace consumption case, which is the
       // standard follow-up after registering a Service others will reference.
@@ -413,7 +433,7 @@ export function executeRegisterCommand(
     return {
       exitCode: 0,
       stdout: lines.join("\n"),
-      stderr: "",
+      stderr: posture === "operator-owned-star" ? ukpIgnoreStarWarning(ukpDirectory) : "",
     };
   } catch (error) {
     if (error instanceof HelpRequestError) {

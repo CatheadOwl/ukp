@@ -85,6 +85,22 @@ All notable public changes to UKP will be documented in this file.
 
 ### Changed
 
+- `ukp register` (local path — plain and `--rebind`) now carries the
+  `.ukp/.gitignore` posture step in the same binding gesture (adjudication
+  2026-11-01, inbox/service-dir-layering item 6): the ignore file is created
+  with the precise template when absent, a verbatim legacy `*` template is
+  migrated so the declarations (`service.toml`, `client.toml`) become
+  committable, and an operator-owned file stays untouched (a bare `*` one
+  warns on stderr). The stdout gains a `version_control: …` line after
+  `location:` — byte-identical rendering to `ukp use`'s, whose mechanism
+  (`ensureVersionVisibleUkpIgnore` and friends) moved from use.ts to
+  init.ts, the template's home. This closes the migration dead corner the
+  2026-10-28 precise-ignore landing left: a pure Service folder has no
+  reason to run the client-gesture `use`, and re-running `init service` is
+  refused once the manifest exists — the exact shape of the 2026-11-01
+  cli-dev description loss. Remote `register --url` and door imports are
+  unchanged. Spec: docs/spec/endpoint-registration-and-lifecycle.md,
+  docs/spec/init-service-command.md step 7.
 - The nav engine supply closed its transition window (ADR 0029 closing,
   2026-10-31): `@any-nav/scan` moves from the local `link:@any-nav/scan`
   transition (which made every publish intentionally red under pack-audit

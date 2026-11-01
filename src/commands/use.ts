@@ -1,9 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ENDPOINT_NAME } from "../config/manifest.ts";
 import { findNearestClientConfig, loadClientConfig } from "../config/client.ts";
 import { readRegistry } from "../registry.ts";
-import { LEGACY_UKP_SELF_IGNORE, UKP_SELF_IGNORE } from "./init.ts";
+import {
+  ensureVersionVisibleUkpIgnore,
+  renderUkpIgnorePostureLine,
+  ukpIgnoreStarWarning,
+} from "./init.ts";
 import {
   KitUsageError,
   parseKitArgs,
@@ -58,49 +62,9 @@ export const USE_SPEC: UkpCommandSpec = {
   ].join("\n"),
 };
 
-/** Posture of `.ukp/.gitignore` after `ukp use` ran. */
-export type UkpIgnorePosture =
-  | "created"
-  | "migrated"
-  | "current"
-  | "operator-owned"
-  /** Operator-owned AND still carries a bare `*` rule — the declarations
-   * stay invisible; surfaced as a stderr warning with the remedy. */
-  | "operator-owned-star";
-
-/** Bring `.ukp/.gitignore` to the precise-ignore posture (the one-step
- * version-control half of `ukp use`): create when absent, migrate a
- * verbatim legacy `*` template, leave anything else untouched — the
- * O-020 B-b operator-policy-wins rule. The `*` detector is advisory only
- * (a note, never a rewrite). */
-export function ensureVersionVisibleUkpIgnore(ukpDirectory: string): UkpIgnorePosture {
-  const gitignorePath = join(ukpDirectory, ".gitignore");
-  const classify = (): UkpIgnorePosture => {
-    const content = readFileSync(gitignorePath, "utf8");
-    if (content === UKP_SELF_IGNORE) return "current";
-    if (content === LEGACY_UKP_SELF_IGNORE) {
-      // Same-file swap through a temp + rename: a concurrent reader sees
-      // either template, never a torn file.
-      const tempPath = join(ukpDirectory, ".gitignore.ukp-tmp");
-      writeFileSync(tempPath, UKP_SELF_IGNORE, "utf8");
-      renameSync(tempPath, gitignorePath);
-      return "migrated";
-    }
-    return content.split("\n").some((line) => line.trim() === "*")
-      ? "operator-owned-star"
-      : "operator-owned";
-  };
-  if (!existsSync(gitignorePath)) {
-    try {
-      writeFileSync(gitignorePath, UKP_SELF_IGNORE, { flag: "wx", mode: 0o644 });
-      return "created";
-    } catch (error) {
-      // Concurrent writer installed a guard — classify whatever landed.
-      if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-  }
-  return classify();
-}
+/** Posture of `.ukp/.gitignore` after `ukp use` ran — the ladder and its
+ * mechanism live in init.ts (the template's home); `use` is the client-face
+ * carrier, register's local path the service-face one. */
 
 function renderClientConfig(names: readonly string[]): string {
   // Hand-rendered rather than smol-toml stringify: the schema is exactly
@@ -189,15 +153,13 @@ export function executeUseCommand(
       `default_endpoints: ${names.join(", ")}`,
       ...(previous !== undefined && status === "updated" ? [`replaced: ${previous.join(", ")}`] : []),
       `client_config: ${status}: ${targetPath}`,
-      ...versionControlLines(posture, ukpDirectory),
+      renderUkpIgnorePostureLine(posture, ukpDirectory),
       "next: ukp inspect (see the active scope)",
     ];
     return {
       exitCode: 0,
       stdout: lines.join("\n"),
-      stderr: posture === "operator-owned-star"
-        ? `warning: ${join(ukpDirectory, ".gitignore")} ignores everything ('*'); client.toml stays invisible to version control - narrow it to machine-local state (instance-uid, tls/) so declarations can be committed\n`
-        : "",
+      stderr: posture === "operator-owned-star" ? ukpIgnoreStarWarning(ukpDirectory) : "",
     };
   } catch (error) {
     if (error instanceof HelpRequestError) {
@@ -207,20 +169,5 @@ export function executeUseCommand(
       return { exitCode: 2, stdout: "", stderr: renderKitUsageError(USE_SPEC, error.message) };
     }
     return { exitCode: 1, stdout: "", stderr: `ukp use: ${error instanceof Error ? error.message : String(error)}\n` };
-  }
-}
-
-function versionControlLines(posture: UkpIgnorePosture, ukpDirectory: string): string[] {
-  switch (posture) {
-    case "created":
-      return [`version_control: .ukp/.gitignore created (machine-local state ignored; declarations committable)`];
-    case "migrated":
-      return [`version_control: .ukp/.gitignore migrated off the retired '*' template (declarations committable; machine-local state stays ignored)`];
-    case "current":
-      return [`version_control: .ukp/.gitignore already precise (machine-local state only)`];
-    case "operator-owned":
-      return [`version_control: .ukp/.gitignore is operator-owned - left untouched (${join(ukpDirectory, ".gitignore")})`];
-    case "operator-owned-star":
-      return [`version_control: .ukp/.gitignore is operator-owned - left untouched (see warning)`];
   }
 }
