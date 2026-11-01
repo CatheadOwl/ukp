@@ -4,6 +4,7 @@ import { ENDPOINT_NAME } from "../config/manifest.ts";
 import { findNearestClientConfig, loadClientConfig } from "../config/client.ts";
 import { readRegistry } from "../registry.ts";
 import {
+  assertUkpResidents,
   ensureVersionVisibleUkpIgnore,
   renderUkpIgnorePostureLine,
   ukpIgnoreStarWarning,
@@ -119,6 +120,10 @@ export function executeUseCommand(
     const existingPath = findNearestClientConfig(context.currentDirectory);
     const targetPath = existingPath ?? join(context.currentDirectory, ".ukp", "client.toml");
     const ukpDirectory = dirname(targetPath);
+    // INV-19 admission gate before any write: the whole gesture refuses
+    // atomically when .ukp/ holds foreign residents (no half-written
+    // client.toml, no guard rewritten over material it no longer covers).
+    assertUkpResidents(ukpDirectory);
     let status: "created" | "updated" | "unchanged";
     let previous: string[] | undefined;
     if (existingPath !== undefined) {

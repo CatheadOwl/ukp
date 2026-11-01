@@ -174,6 +174,27 @@ All notable public changes to UKP will be documented in this file.
 
 ### Fixed
 
+- The `.ukp/.gitignore` posture step (`ukp use`, local `ukp register`,
+  and `ukp init service`) now refuses before writing when `.ukp/` holds
+  anything outside its closed resident set — `service.toml`,
+  `client.toml`, `instance-uid`, `.gitignore` and the two atomic-write
+  transients (`*.ukp-tmp`) — naming every offending path (INV-19, owner
+  ruling 2026-11-02). Regression window being closed: between the
+  2026-11-01 TLS relocation and this fix, a folder that still carried a
+  pre-2026-11-01 `.ukp/tls/` identity under the retired `*` guard would,
+  on `use` or `register`, have that guard swapped onto the current
+  template — which no longer names `tls/` — leaving `key.pem` addable
+  (two KB endpoints hit it on 2026-11-02). Template succession and
+  on-disk state were never checked against each other; now the rewrite
+  cannot land over material it does not cover, and a refused gesture
+  leaves the registry, the client config and the guard exactly as found.
+  The step migrates nothing (`tls/` gets the move-to-`~/.ukp/tls/<name>/`
+  remedy in the error, keeping the pin; anything else the delete
+  remedy), ignores nothing, writes no tombstone rule. With the gate in
+  place the retired first precise template (the one with the `/tls/`
+  rule) is refreshed onto the current one instead of lingering — a new
+  `refreshed` posture line reports it. Spec:
+  docs/spec/configuration-contracts.md ".ukp/ Resident Invariant".
 - Trailing separators in endpoint-relative references are now
   address-encoding noise instead of a syntax error (ADR 0023 amendment,
   D-099): `ukp read --endpoint X "docs/"` addresses the same slot as

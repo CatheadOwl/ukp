@@ -4,6 +4,7 @@ import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file
 import { EXTERNAL_TOOL_CAPABILITIES } from "../config/external-tool.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
 import {
+  assertUkpResidents,
   ensureVersionVisibleUkpIgnore,
   renderUkpIgnorePostureLine,
   ukpIgnoreStarWarning,
@@ -390,6 +391,12 @@ export function executeRegisterCommand(
     if (expectedName !== undefined && expectedName !== report.service.effectiveName) {
       throw new Error(`expected endpoint '${expectedName}', but this Service effective name is '${report.service.effectiveName}'`);
     }
+    // INV-19 admission gate BEFORE the binding write: a foreign resident in
+    // .ukp/ refuses the whole gesture — registry untouched, guard not
+    // rewritten over material it no longer covers (the 2026-11-02 KB shape:
+    // a '*' guard swapped onto the current template above a legacy tls/).
+    const ukpDirectory = join(report.service.folder, ".ukp");
+    assertUkpResidents(ukpDirectory, { endpointName: report.service.effectiveName });
     if (parsed.options.rebind === true) {
       // Diagnosis already validated the new Service folder — a failed rebind
       // (unknown name, remote handle, taken location) leaves the old binding
@@ -402,7 +409,6 @@ export function executeRegisterCommand(
       // gestures (use is the client-face carrier; a pure Service folder —
       // the fresh-clone revival path this command IS — has no reason to
       // run use, and re-running init is refused once the manifest exists).
-      const ukpDirectory = join(report.service.folder, ".ukp");
       const posture = ensureVersionVisibleUkpIgnore(ukpDirectory);
       const lines = [
         `rebound: ${report.service.effectiveName}`,
@@ -418,7 +424,6 @@ export function executeRegisterCommand(
       };
     }
     registerAt(context.registryPath, report.service.effectiveName, report.service.folder);
-    const ukpDirectory = join(report.service.folder, ".ukp");
     const posture = ensureVersionVisibleUkpIgnore(ukpDirectory);
     const lines = [
       `registered: ${report.service.effectiveName}`,

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, openSync, closeSync, writeFileSync, unlinkSync, readFileSync, renameSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, closeSync, writeFileSync, unlinkSync, readFileSync, readdirSync, renameSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { stringify } from "smol-toml";
 import { ENDPOINT_NAME, loadManifest, type ManifestDependency } from "../config/manifest.ts";
@@ -188,6 +188,72 @@ export const LEGACY_UKP_SELF_IGNORE = [
   "",
 ].join("\n");
 
+/** Closed resident set of `.ukp/` (INV-19, owner ruling 2026-11-02): the
+ * declarations, the instance identity, the ignore guard — plus the two
+ * atomic-write transients a crash can leave behind (documented as
+ * "overwritten by the next write"; tolerating them is not an ignore rule,
+ * it is the tool owning its own residue). Anything else is a violation
+ * the posture step refuses on. The serve TLS identity left this directory
+ * on 2026-11-01 (ADR-REM-012), which is exactly why the set is closed:
+ * the template no longer carries defensive rules for residents that
+ * must not exist. */
+const UKP_RESIDENTS: ReadonlySet<string> = new Set([
+  "service.toml",
+  "client.toml",
+  "instance-uid",
+  ".gitignore",
+  ".gitignore.ukp-tmp",
+  "client.toml.ukp-tmp",
+]);
+
+/** Refusal of a posture step over a `.ukp/` holding entries outside the
+ * closed set. Carries the offending paths so every carrier gesture can
+ * print the same operator-facing body. */
+export class UkpResidentError extends Error {
+  constructor(
+    readonly ukpDirectory: string,
+    readonly residents: readonly string[],
+    endpointName?: string,
+  ) {
+    const home = `~/.ukp/tls/${endpointName ?? "<endpoint-name>"}/`;
+    const hasTls = residents.includes("tls");
+    const others = residents.filter((name) => name !== "tls");
+    const lines = [
+      ".ukp/ holds entries UKP does not own (INV-19: service.toml, client.toml, instance-uid and .gitignore only):",
+      ...residents.map((name) => `  ${join(ukpDirectory, name)}`),
+      ...(hasTls
+        ? [`tls/ is a pre-2026-11-01 serve TLS identity: move its cert.pem and key.pem to ${home} to keep the pin clients hold, or delete it.`]
+        : []),
+      ...(others.length > 0 ? [`Delete ${hasTls ? "the rest" : "them"}.`] : []),
+      "The version-control step is refused until .ukp/ is clean - rewriting the ignore guard over material it no longer covers is how a private key becomes committable.",
+    ];
+    super(lines.join("\n"));
+    this.name = "UkpResidentError";
+  }
+}
+
+/** INV-19 admission gate of every posture step (init / use / register):
+ * enumerate `.ukp/` and refuse on any entry outside the closed resident
+ * set. Runs BEFORE any write of the carrying gesture — the template
+ * rewrite most of all. The 2026-11-02 KB incident was a `*` guard swapped
+ * onto the current template while a legacy `tls/` still sat beneath it:
+ * key.pem became addable. Disposition is the owner's (delete, or move the
+ * identity to its machine home); nothing migrates here (key material
+ * relocation is serve's lifecycle), nothing is ignored, no tombstone rule
+ * is written. A missing `.ukp/` passes (nothing to inspect). */
+export function assertUkpResidents(ukpDirectory: string, options: { endpointName?: string } = {}): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(ukpDirectory);
+  } catch (error) {
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const strangers = entries.filter((name) => !UKP_RESIDENTS.has(name)).sort();
+  if (strangers.length === 0) return;
+  throw new UkpResidentError(ukpDirectory, strangers, options.endpointName);
+}
+
 /** Posture of `.ukp/.gitignore` after a version-control step ran. Two
  * gestures carry the declarations' version visibility and share this
  * ladder: `ukp use` (client face) and `ukp register`'s local path (service
@@ -197,31 +263,45 @@ export const LEGACY_UKP_SELF_IGNORE = [
 export type UkpIgnorePosture =
   | "created"
   | "migrated"
+  /** The 2026-10-28 first precise form (WITH_TLS) swapped onto the current
+   * template: its `/tls/` rule named a resident INV-19 now guarantees
+   * absent — safe to drop only because the admission gate ran first. */
+  | "refreshed"
   | "current"
   | "operator-owned"
   /** Operator-owned AND still carries a bare `*` rule — the declarations
    * stay invisible; surfaced as a stderr warning with the remedy. */
   | "operator-owned-star";
 
+/** Same-file template swap through a temp + rename: a concurrent reader
+ * sees either template, never a torn file. */
+function swapUkpIgnoreTemplate(ukpDirectory: string): void {
+  const tempPath = join(ukpDirectory, ".gitignore.ukp-tmp");
+  writeFileSync(tempPath, UKP_SELF_IGNORE, "utf8");
+  renameSync(tempPath, join(ukpDirectory, ".gitignore"));
+}
+
 /** Bring `.ukp/.gitignore` to the precise-ignore posture (the version
  * control half of `ukp use` and register's local path): create when absent,
- * migrate a verbatim legacy `*` template, leave anything else untouched —
- * the O-020 B-b operator-policy-wins rule. The `*` detector is advisory
- * only (a note, never a rewrite). */
+ * migrate a verbatim legacy `*` template, refresh the retired first precise
+ * form, leave anything else untouched — the O-020 B-b operator-policy-wins
+ * rule. The `*` detector is advisory only (a note, never a rewrite). The
+ * INV-19 gate runs here too, so the rewrite itself can never land over
+ * foreign residents even if a carrier forgot to pre-gate (carriers still
+ * pre-gate before their own writes so the whole gesture fails atomically). */
 export function ensureVersionVisibleUkpIgnore(ukpDirectory: string): UkpIgnorePosture {
+  assertUkpResidents(ukpDirectory);
   const gitignorePath = join(ukpDirectory, ".gitignore");
   const classify = (): UkpIgnorePosture => {
     const content = readFileSync(gitignorePath, "utf8");
-    // Both precise generations are "current": a WITH_TLS file may still
-    // guard a legacy tls/ dir that the serve migration has not moved yet.
-    if (content === UKP_SELF_IGNORE || content === UKP_SELF_IGNORE_WITH_TLS) return "current";
+    if (content === UKP_SELF_IGNORE) return "current";
     if (content === LEGACY_UKP_SELF_IGNORE) {
-      // Same-file swap through a temp + rename: a concurrent reader sees
-      // either template, never a torn file.
-      const tempPath = join(ukpDirectory, ".gitignore.ukp-tmp");
-      writeFileSync(tempPath, UKP_SELF_IGNORE, "utf8");
-      renameSync(tempPath, gitignorePath);
+      swapUkpIgnoreTemplate(ukpDirectory);
       return "migrated";
+    }
+    if (content === UKP_SELF_IGNORE_WITH_TLS) {
+      swapUkpIgnoreTemplate(ukpDirectory);
+      return "refreshed";
     }
     return content.split("\n").some((line) => line.trim() === "*")
       ? "operator-owned-star"
@@ -247,6 +327,8 @@ export function renderUkpIgnorePostureLine(posture: UkpIgnorePosture, ukpDirecto
       return `version_control: .ukp/.gitignore created (machine-local state ignored; declarations committable)`;
     case "migrated":
       return `version_control: .ukp/.gitignore migrated off the retired '*' template (declarations committable; machine-local state stays ignored)`;
+    case "refreshed":
+      return `version_control: .ukp/.gitignore refreshed (retired tls/ rule dropped; machine-local state stays ignored)`;
     case "current":
       return `version_control: .ukp/.gitignore already precise (machine-local state only)`;
     case "operator-owned":
@@ -262,11 +344,13 @@ export function ukpIgnoreStarWarning(ukpDirectory: string): string {
   return `warning: ${join(ukpDirectory, ".gitignore")} ignores everything ('*'); declarations stay invisible to version control - narrow it to machine-local state (instance-uid) so they can be committed\n`;
 }
 
-/** Service-side half of the TLS identity relocation (2026-11-01): once the
+/** Serve-side half of the TLS identity relocation (2026-11-01): once the
  * legacy `.ukp/tls/` material has moved into the machine home, the
  * by-then-retired first precise template (whose `/tls/` rule guarded it)
  * swaps onto the current one — verbatim recognition only, so an
- * operator-owned file is never touched. Returns whether a swap happened. */
+ * operator-owned file is never touched. The posture ladder performs the
+ * same swap as its `refreshed` state; this entry point exists for serve,
+ * which carries no posture step. Returns whether a swap happened. */
 export function retireTlsIgnoreLine(ukpDirectory: string): boolean {
   const gitignorePath = join(ukpDirectory, ".gitignore");
   let content: string;
@@ -276,9 +360,7 @@ export function retireTlsIgnoreLine(ukpDirectory: string): boolean {
     return false; // no guard in place — nothing to retire
   }
   if (content !== UKP_SELF_IGNORE_WITH_TLS) return false;
-  const tempPath = join(ukpDirectory, ".gitignore.ukp-tmp");
-  writeFileSync(tempPath, UKP_SELF_IGNORE, "utf8");
-  renameSync(tempPath, gitignorePath);
+  swapUkpIgnoreTemplate(ukpDirectory);
   return true;
 }
 
@@ -301,6 +383,10 @@ function createServiceManifest(
   const ukpDirectory = join(folder, ".ukp");
   const manifestPath = join(ukpDirectory, "service.toml");
   const { name, nameSource, dependencies } = validateInitServiceOptions(folder, options);
+  // INV-19 admission gate: a pre-existing .ukp/ must hold nothing UKP does
+  // not own before init writes into it — operator-made junk fails loudly
+  // with zero residue (nothing has been written yet).
+  assertUkpResidents(ukpDirectory, { endpointName: name });
   if (existsSync(manifestPath)) {
     throw new Error(`Service Manifest already exists: ${manifestPath}`);
   }
