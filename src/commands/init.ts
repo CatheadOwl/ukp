@@ -188,7 +188,7 @@ export const LEGACY_UKP_SELF_IGNORE = [
   "",
 ].join("\n");
 
-/** Closed resident set of `.ukp/` (INV-19, owner ruling 2026-11-02): the
+/** Closed resident set of `.ukp/` (INV-21, owner ruling 2026-11-02): the
  * declarations, the instance identity, the ignore guard — plus the two
  * atomic-write transients a crash can leave behind (documented as
  * "overwritten by the next write"; tolerating them is not an ignore rule,
@@ -219,7 +219,7 @@ export class UkpResidentError extends Error {
     const hasTls = residents.includes("tls");
     const others = residents.filter((name) => name !== "tls");
     const lines = [
-      ".ukp/ holds entries UKP does not own (INV-19: service.toml, client.toml, instance-uid and .gitignore only):",
+      ".ukp/ holds entries UKP does not own (INV-21: service.toml, client.toml, instance-uid and .gitignore only):",
       ...residents.map((name) => `  ${join(ukpDirectory, name)}`),
       ...(hasTls
         ? [`tls/ is a pre-2026-11-01 serve TLS identity: move its cert.pem and key.pem to ${home} to keep the pin clients hold, or delete it.`]
@@ -232,7 +232,7 @@ export class UkpResidentError extends Error {
   }
 }
 
-/** INV-19 admission gate of every posture step (init / use / register):
+/** INV-21 admission gate of every posture step (init / use / register):
  * enumerate `.ukp/` and refuse on any entry outside the closed resident
  * set. Runs BEFORE any write of the carrying gesture — the template
  * rewrite most of all. The 2026-11-02 KB incident was a `*` guard swapped
@@ -264,7 +264,7 @@ export type UkpIgnorePosture =
   | "created"
   | "migrated"
   /** The 2026-10-28 first precise form (WITH_TLS) swapped onto the current
-   * template: its `/tls/` rule named a resident INV-19 now guarantees
+   * template: its `/tls/` rule named a resident INV-21 now guarantees
    * absent — safe to drop only because the admission gate ran first. */
   | "refreshed"
   | "current"
@@ -286,7 +286,7 @@ function swapUkpIgnoreTemplate(ukpDirectory: string): void {
  * migrate a verbatim legacy `*` template, refresh the retired first precise
  * form, leave anything else untouched — the O-020 B-b operator-policy-wins
  * rule. The `*` detector is advisory only (a note, never a rewrite). The
- * INV-19 gate runs here too, so the rewrite itself can never land over
+ * INV-21 gate runs here too, so the rewrite itself can never land over
  * foreign residents even if a carrier forgot to pre-gate (carriers still
  * pre-gate before their own writes so the whole gesture fails atomically). */
 export function ensureVersionVisibleUkpIgnore(ukpDirectory: string): UkpIgnorePosture {
@@ -383,7 +383,7 @@ function createServiceManifest(
   const ukpDirectory = join(folder, ".ukp");
   const manifestPath = join(ukpDirectory, "service.toml");
   const { name, nameSource, dependencies } = validateInitServiceOptions(folder, options);
-  // INV-19 admission gate: a pre-existing .ukp/ must hold nothing UKP does
+  // INV-21 admission gate: a pre-existing .ukp/ must hold nothing UKP does
   // not own before init writes into it — operator-made junk fails loudly
   // with zero residue (nothing has been written yet).
   assertUkpResidents(ukpDirectory, { endpointName: name });

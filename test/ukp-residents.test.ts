@@ -6,7 +6,7 @@ import { runCli } from "../src/cli.ts";
 import { LEGACY_UKP_SELF_IGNORE, UKP_SELF_IGNORE, UKP_SELF_IGNORE_WITH_TLS } from "../src/commands/init.ts";
 import { readRegistry, registerAt } from "../src/registry.ts";
 
-// INV-19 (owner ruling 2026-11-02): .ukp/ holds a closed resident set —
+// INV-21 (owner ruling 2026-11-02): .ukp/ holds a closed resident set —
 // declarations (service.toml, client.toml), instance-uid, the ignore guard
 // (plus the two atomic-write transients). Every posture carrier (init /
 // use / register) refuses BEFORE writing when anything else is present.
@@ -44,7 +44,7 @@ function plantLegacyTls(ukp: string): void {
   writeFileSync(join(ukp, "tls", "key.pem"), "key", "utf8");
 }
 
-describe("INV-19: .ukp/ closed resident set — posture carriers refuse before writing", () => {
+describe("INV-21: .ukp/ closed resident set — posture carriers refuse before writing", () => {
   test("the KB incident shape: '*' guard + legacy tls/ -> register refuses, guard untouched, registry untouched", () => {
     const { root, ukp, registryPath, context } = freshService(LEGACY_UKP_SELF_IGNORE);
     try {
@@ -52,7 +52,7 @@ describe("INV-19: .ukp/ closed resident set — posture carriers refuse before w
       const errors: string[] = [];
       expect(runCli(["register"], undefined, (message) => errors.push(message), context)).toBe(1);
       const text = errors.join("\n");
-      expect(text).toContain("INV-19");
+      expect(text).toContain("INV-21");
       expect(text).toContain(join(ukp, "tls"));
       // The tls hint carries the machine-home target keyed by the endpoint.
       expect(text).toContain("move its cert.pem and key.pem to ~/.ukp/tls/svc-a/");
@@ -76,7 +76,7 @@ describe("INV-19: .ukp/ closed resident set — posture carriers refuse before w
       plantLegacyTls(ukp);
       const errors: string[] = [];
       expect(runCli(["register", "--rebind"], undefined, (message) => errors.push(message), context)).toBe(1);
-      expect(errors.join("\n")).toContain("INV-19");
+      expect(errors.join("\n")).toContain("INV-21");
       expect(readRegistry(registryPath).find((binding) => binding.name === "svc-a")?.path).toBe(oldFolder);
       expect(readFileSync(join(ukp, ".gitignore"), "utf8")).toBe(LEGACY_UKP_SELF_IGNORE);
     } finally {
@@ -91,7 +91,7 @@ describe("INV-19: .ukp/ closed resident set — posture carriers refuse before w
       plantLegacyTls(ukp);
       const errors: string[] = [];
       expect(runCli(["use", "svc-a"], undefined, (message) => errors.push(message), context)).toBe(1);
-      expect(errors.join("\n")).toContain("INV-19");
+      expect(errors.join("\n")).toContain("INV-21");
       expect(existsSync(join(ukp, "client.toml"))).toBe(false);
       expect(readFileSync(join(ukp, ".gitignore"), "utf8")).toBe(LEGACY_UKP_SELF_IGNORE);
     } finally {

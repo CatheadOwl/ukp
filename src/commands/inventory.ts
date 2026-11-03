@@ -391,7 +391,7 @@ export function executeRegisterCommand(
     if (expectedName !== undefined && expectedName !== report.service.effectiveName) {
       throw new Error(`expected endpoint '${expectedName}', but this Service effective name is '${report.service.effectiveName}'`);
     }
-    // INV-19 admission gate BEFORE the binding write: a foreign resident in
+    // INV-21 admission gate BEFORE the binding write: a foreign resident in
     // .ukp/ refuses the whole gesture — registry untouched, guard not
     // rewritten over material it no longer covers (the 2026-11-02 KB shape:
     // a '*' guard swapped onto the current template above a legacy tls/).
