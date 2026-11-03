@@ -6,278 +6,176 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
-- `ukp nav --json` (`ukp.nav.v1`) folder entries carry `markdown` — the
-  representative README child's endpoint-relative path, restored additively
-  (W2 问 4 waiting slot closed, 2026-10-31): mapped verbatim from the
-  upstream `NavNode.markdown` model field (`@any-nav/scan` 0.2.0, the
-  DEC-0020 locator) with zero derivation at the projection layer. Present
-  iff that README is in the scan tree (a budget cut past it or an exclusion
-  leaves the field absent); folder entries only — file entries are their
-  own read target. The human face is unchanged.
-- `ukp search --timeout <seconds>` — the provider spawn timeout made an
-  explicit flag (owner ruling 2026-10-28 on the parity-audit finding, seat
-  20261028-1113 option 3): default stays 60s with the hang guard ON
-  (search's primary consumers are unattended agent sessions — the
-  orchestration-family posture: GitHub Actions / GitLab CI / Kubernetes all
-  default-guard), a positive value raises it and wins over
-  `UKP_PROVIDER_TIMEOUT_MS`, and `--timeout 0` disables the guard entirely
-  (the 2026-08-16 interactive semantics — interrupt is then the only cancel
-  mechanism — revived on demand, using the classic-CLI family's universal
-  "zero disables" grammar: curl / wget / ssh_config). Applies to both qmd
-  spawns of a search (human and JSON modes). A timeout kill keeps the
-  `failed` classification but the message now names the flag ("provider
-  timed out after 60s - raise or disable via --timeout") — diagnosable,
-  never disguised as a provider crash; with the guard disabled a SIGTERM is
-  reported as external. No connect/total split (a local subprocess spawn
-  has no connect phase; one gate suffices). The 2026-08-16 spec clause ("no
-  implicit timeout") is superseded in place with the ruling chain and the
-  survey evidence archived verbatim in the seat record; the parity-audit
-  ledger row closes with it (state 3 -> 4).
-- `ukp use <endpoint> [endpoint...]` — the one-step consumer gesture (inbox
-  proposal client-portability-and-skill-coverage, owner-endorsed): writes
-  or updates the workspace `.ukp/client.toml` `default_endpoints` (explicit
-  replace, idempotent — same names re-run as unchanged, new names rewrite
-  the list and report the old one) and brings the declarations'
-  version-control visibility along in the same step. Every name must
-  already be registered (admission at write time; registering stays a
-  separate gesture). The target is the nearest existing client.toml
-  walking up from the current directory — the same nearest-wins rule
-  scope resolution applies — or a fresh file in the current folder. An
-  existing structurally invalid config is refused, never clobbered.
-  Dual-role folders are safe: service.toml is never touched. Spec:
-  docs/spec/use-command.md; `ukp guide client` teaches it as step 1.
+- `ukp use <endpoint> [endpoint...]` — the one-step consumer gesture:
+  writes or updates `default_endpoints` in the nearest `.ukp/client.toml`
+  (walking up from the current directory, or a fresh file here), so every
+  consumer command resolves endpoints without flags. Same names re-run as
+  unchanged; every name must already be registered. A structurally invalid
+  existing config is refused, never clobbered, and `service.toml` in
+  dual-role folders is never touched. The same step brings the
+  declarations' version-control visibility along (see the
+  `.ukp/.gitignore` changes below).
+- `ukp register --rebind <path>` — same-name relocation in one step, for
+  local bindings: an atomic swap to the new folder, idempotent when the
+  path is unchanged. The same-name refusal now embeds the `--rebind`
+  remedy instead of a manual unregister dance.
 - `ukp list --json` — the offline machine-readable endpoint snapshot
-  (schema `ukp.list.v1`, TODO 20261028-0053): one pretty-printed document
-  per the repo machine-face convention, one object per binding with
-  `name` / `kind` (local-remote discriminator) / `location` (the local
-  binding root's canonical absolute path, or the registered remote url)
-  / `declared_name` / `capabilities` / `base_tier` (`nav`, `read`, `rg`
-  — declaration-free baseline membership) / `available` / `warning`.
-  Three contract promises (docs/spec/list-command.md): field names are
-  stable across versions (additive fields or a new schema id, never
-  renames); the rows share the text listing's single production core
-  (local rows byte-identical truth, same locals-first order); and the
-  snapshot is offline — remote bindings are projected from registry
-  facts only, no transport, no discovery fetch (their capability fields
-  are `null`; the text face's remote capability cell stays a
-  per-invocation network refresh). stderr stays empty in this mode —
-  degradation truth rides in the rows' `warning` fields, the exact
-  strings the text face prints on stderr.
-- Labeled, scoped, revocable keys for `ukp serve` (RQ-16c / W13):
-  `ukp serve token add <label> <scopes>` issues a
-  `ukp_<label>_<id>_<secret>` key into `~/.ukp/tokens` (0600, SHA-256
-  hash-only storage — the raw key is shown exactly once), `token list`
-  tabulates labels/key-ids/scopes, and `token revoke <label>` deletes
-  every key of a label. Scopes are required per key in Docker-registry
-  grammar (`notes:ro,cad:rw`; full power is the explicit `*:rw`): a
-  scoped key reads only its endpoints, `rw` adds the propose route, and
-  out-of-scope names answer byte-identically to unknown ones (the
-  ADR-REM-010 roster-404 mechanism, no 403 class). The serve gate
-  re-reads the file on every request, so deleting a line revokes without
-  a restart; a malformed or (POSIX) world-permission file refuses
-  startup loudly, and mid-flight corruption fails closed. While
+  (schema `ukp.list.v1`): one object per binding with `name`, `kind`
+  (local/remote), `location`, `declared_name`, `capabilities`,
+  `base_tier`, `available` and `warning`. The snapshot never touches the
+  network — remote bindings project registry facts only (capability
+  fields `null`). Field names are stable across versions (additive
+  fields or a new schema id, never renames); stderr stays empty, with
+  degradation truth riding in the rows' `warning` fields.
+- `ukp list` gives dead local bindings their own warning frame: a binding
+  whose folder has become unreachable now splits from the
+  declared-capabilities degradation message into its own dead-binding
+  warning that names the `--rebind` remedy.
+- `ukp search --timeout <seconds>` — the provider spawn timeout as an
+  explicit flag. The default stays 60s with the hang guard on (search's
+  primary consumers are unattended agent sessions); a positive value
+  raises it and wins over `UKP_PROVIDER_TIMEOUT_MS`, and `--timeout 0`
+  disables the guard entirely (interrupt is then the only cancel
+  mechanism). A timeout kill keeps the `failed` classification with a
+  message naming the flag — diagnosable, never disguised as a provider
+  crash. Applies to both provider spawns of a search.
+- `ukp serve token add <label> <scopes>` / `token list` /
+  `token revoke <label>` — labeled, scoped, revocable keys for
+  `ukp serve`: `token add` issues a `ukp_<label>_<id>_<secret>` key into
+  `~/.ukp/tokens` (0600, stored hash-only — the raw key is shown exactly
+  once), `token list` tabulates the issued keys, and `token revoke`
+  deletes every key of a label. Scopes follow the Docker-registry grammar
+  (`notes:ro,cad:rw`; full power is the explicit `*:rw`): a scoped key
+  reads only its endpoints, `rw` adds the propose route, and out-of-scope
+  endpoint names answer byte-identically to unknown ones. The serve gate
+  re-reads the file on every request — deleting a line revokes without a
+  restart; a malformed or (POSIX) world-readable file refuses startup
+  loudly, and mid-flight corruption fails closed. While
   `UKP_SERVE_TOKEN` is set it keeps its exact previous full-power
-  semantics and the file is not consulted (env > file chain order, the
-  AWS/gh/kubectl convention); deny-by-default admission now spans both
-  sources. The mechanism lives in a new purity-enforced
-  `src/plumbing/token-file.ts` (zero UKP imports, machine-checked by
-  test).
+  semantics (env wins over the file).
+- `ukp nav --json` folder entries carry a `markdown` field — the
+  representative README child's endpoint-relative path, present whenever
+  that README is inside the scan tree; folder entries only (file entries
+  are their own read target). The human face is unchanged.
+- `ukp read` rejection messages and the root help summary now name
+  `--from` at the point where it applies.
+- The package now ships a `SECURITY.md` — scope, private vulnerability
+  reporting via GitHub security advisories, coordinated disclosure — and
+  the README gained a Security section: local by default,
+  deny-by-default serving, registration-time TLS pinning or SSH
+  transport, byte-identical 404s for unselected endpoints on a subset
+  door, with the accepted tradeoffs disclosed (client-side plaintext
+  0600 token storage, the token-bearing Windows door artifact, the
+  trust-on-first-use window).
 
 ### Changed
 
-- `ukp register` (local path — plain and `--rebind`) now carries the
-  `.ukp/.gitignore` posture step in the same binding gesture (adjudication
-  2026-11-01, inbox/service-dir-layering item 6): the ignore file is created
-  with the precise template when absent, a verbatim legacy `*` template is
-  migrated so the declarations (`service.toml`, `client.toml`) become
-  committable, and an operator-owned file stays untouched (a bare `*` one
-  warns on stderr). The stdout gains a `version_control: …` line after
-  `location:` — byte-identical rendering to `ukp use`'s, whose mechanism
-  (`ensureVersionVisibleUkpIgnore` and friends) moved from use.ts to
-  init.ts, the template's home. This closes the migration dead corner the
-  2026-10-28 precise-ignore landing left: a pure Service folder has no
-  reason to run the client-gesture `use`, and re-running `init service` is
-  refused once the manifest exists — the exact shape of the 2026-11-01
-  cli-dev description loss. Remote `register --url` and door imports are
-  unchanged. Spec: docs/spec/endpoint-registration-and-lifecycle.md,
-  docs/spec/init-service-command.md step 7.
-- The nav engine supply closed its transition window (ADR 0029 closing,
-  2026-10-31): `@any-nav/scan` moves from the local `link:@any-nav/scan`
-  transition (which made every publish intentionally red under pack-audit
-  and required a per-machine `bun link` registration) to the registry pin
-  `^0.2.0`, riding the any-nav 0.2.0 facade train (`@catheadowl/pathscope
-  ^0.1.1` transitively). The pack-audit `link:` dependency guard retires
-  with the window — the publish face is green again; fresh clones install
-  from the registry alone. One nav test re-encodes the folder description
-  chain to the standardized carriers any-nav DEC-0025 shipped (package.json
-  wins over README; the Docusaurus-shaped `_category_` sidecar no longer
-  reads) — a re-adjudicated upstream assertion retired, not a behavior
-  change on the UKP face.
-
-- **Breaking-ish** `ukp list` eats the workspace scope by default and gains
-  `-g` (ADR 0031, owner ruling 2026-10-28, restoring the 13ae382 clause the
-  first implementation silently dropped): the default listing now shows the
-  nearest `.ukp/client.toml` default_endpoints resolution — the same
-  `resolveScope` law every consumer command follows — with the full Host
-  Registry as fallback when no client config exists, so bare machines see
-  byte-identical output. `-g` lists every registered endpoint and never
-  reads the client config (the escape hatch for invalid or dangling
-  configs, which otherwise fail the listing with exit 1 and the `-g`
-  remedy). `--json` rides the same scope — no machine-face exemption,
-  which is exactly how the 2026-09-21 spec came to ratify the original
-  drift; the ukp.list.v1 envelope and fields are unchanged, only the row
-  set is selected (`ukp list -g --json` = the full snapshot). Dangling
-  default entries drop out of the rows and warn on stderr in both faces.
-  Guidance follows: the root-help name-source line and `ukp use`'s
-  unknown-endpoint remedy now point at `ukp list -g`. Machine consumers
-  that need the full registry should pin `-g`.
-- `ukp init service` now writes a precise `.ukp/.gitignore` instead of the
-  blanket `*`: only the machine-local state that actually lives in `.ukp/`
-  is ignored by name (`/instance-uid`, `/tls/`), so the pure declarations —
-  `service.toml`, and `client.toml` for dual-role folders — are committable
-  by default (a fresh clone re-registers the Service with one
-  `ukp register`). Real-usage evidence behind the change: endpoint
-  declarations did not travel with clones, and carving client.toml back
-  into tracking cost three error-prone steps. Existing files are still
-  never touched by init; repositories carrying the retired `*` template
-  migrate in one step with `ukp use` (verbatim-template recognition;
-  operator-owned files stay untouched) or by hand. Identity and TLS key
-  material remain ignored on every path.
-- `ukp nav` rides the any-nav scan facade's pathscope engine chain (ADR 0029,
-  2026-10-24): the `@any-nav/scan` dependency moves from the registry `0.1.0`
-  pin to a local `link:@any-nav/scan` transition supply (two-level chain —
-  scan delegates its walk to `@catheadowl/pathscope`; bun's path-form `link:`
-  and `file:` protocols were probed and rejected with evidence). Accepted
-  engine-semantic increments, each adjudicated against a three-endpoint
-  regression gate: nested `.git` subtrees (vendored repos) no longer appear
-  in the route view, and pointing `nav` into one fails with `route root
-  segment … vanished from the scan tree` (exact-path `ukp read` still
-  retrieves that content); `vendor/` and `coverage/` join the default
+- **Breaking-ish** `ukp list` resolves the workspace scope by default and
+  gains `-g`: the default listing follows the nearest `.ukp/client.toml`
+  `default_endpoints` — the same scope law every consumer command follows
+  — with the full host registry as fallback when no client config exists,
+  so bare machines see byte-identical output. `-g` lists every registered
+  endpoint and never reads the client config; it is also the escape hatch
+  when an invalid client config would otherwise fail the listing (exit 1),
+  and dangling default entries drop out of the rows with a stderr warning
+  in both faces. `--json` rides the same scope — machine consumers that
+  need the full registry should pin `-g`. The root help's name-source
+  line and `ukp use`'s unknown-endpoint remedy now point at
+  `ukp list -g`.
+- `ukp init service` writes a precise `.ukp/.gitignore` instead of the
+  blanket `*`: only the machine-local state that actually lives in
+  `.ukp/` is ignored by name, so the declarations — `service.toml`, and
+  `client.toml` in dual-role folders — travel with clones, and a fresh
+  clone re-registers the Service with one `ukp register`. Existing files
+  are never touched by init; repositories carrying the retired `*`
+  template migrate in one step with `ukp use` or local `ukp register`
+  (verbatim-template recognition; operator-owned files stay untouched),
+  or by hand. Identity and TLS key material remain ignored on every
+  path.
+- `ukp register` (local path, plain and `--rebind`) carries the
+  `.ukp/.gitignore` posture step in the same gesture and prints a
+  `version_control:` line after `location:`. Remote `register --url` and
+  door imports are unchanged.
+- `ukp nav` scan-engine semantics ride the any-nav facade upgrade:
+  nested `.git` subtrees (vendored repos) no longer appear in the route
+  view — pointing `nav` into one fails with `route root segment …
+  vanished from the scan tree`, while exact-path `ukp read` still
+  retrieves that content; `vendor/` and `coverage/` join the default
   exclusion floor (opt out via a repo `.gitignore` negation such as
-  `!vendor/`); `**` glob patterns follow git truth (zero or more directory
-  levels, so `**/x.md` now matches a root-level `x.md`); gitignore and floor
-  matching is case-insensitive (on Windows this aligns nav with the platform
-  git default); gitignore inheritance now reaches above the Service folder
-  up to the repository root; the `unreadable-directory` maintainer diagnostic
-  is retired. The runtime install closure widens to scan + pathscope
-  (ignore/fdir/find-up, all with zero install scripts); until the closing
-  window swaps the dependency back to a registry pin, `npm publish` is
-  intentionally blocked by the pack-audit `link:` guard.
+  `!vendor/`); `**` globs follow git truth (`**/x.md` now matches a
+  root-level `x.md`); gitignore and floor matching is case-insensitive
+  (aligning with the Windows git default); and gitignore inheritance
+  now reaches above the Service folder up to the repository root. The
+  folder-description chain now prefers a `package.json` description
+  over README (the Docusaurus-shaped `_category_` sidecar no longer
+  reads). `@any-nav/scan` rides as a normal registry dependency
+  (`^0.2.0`), so fresh clones install from the registry alone.
 - `ukp list` no longer word-wraps its stderr footnotes on interactive
-  terminals: they stay raw single lines in every mode and the terminal
-  wraps what it must (owner ruling 2026-10-24 — neither human nor agent
-  reading benefits from CLI-side pre-wrapping, which splits sentences at
-  a fixed width; the 2026-09-21 interactive word-boundary wrap and its
-  width snapshot are removed together with their tests). Piped/CI stderr
-  bytes were already raw and are unchanged; the TTY-gated progress line
-  is unaffected.
+  terminals: they stay raw single lines and the terminal wraps what it
+  must. Piped/CI stderr bytes were already raw and are unchanged; the
+  TTY-gated progress line is unaffected.
 
 ### Fixed
 
 - The `.ukp/.gitignore` posture step (`ukp use`, local `ukp register`,
-  and `ukp init service`) now refuses before writing when `.ukp/` holds
-  anything outside its closed resident set — `service.toml`,
-  `client.toml`, `instance-uid`, `.gitignore` and the two atomic-write
-  transients (`*.ukp-tmp`) — naming every offending path (INV-19, owner
-  ruling 2026-11-02). Regression window being closed: between the
-  2026-11-01 TLS relocation and this fix, a folder that still carried a
-  pre-2026-11-01 `.ukp/tls/` identity under the retired `*` guard would,
-  on `use` or `register`, have that guard swapped onto the current
-  template — which no longer names `tls/` — leaving `key.pem` addable
-  (two KB endpoints hit it on 2026-11-02). Template succession and
-  on-disk state were never checked against each other; now the rewrite
-  cannot land over material it does not cover, and a refused gesture
-  leaves the registry, the client config and the guard exactly as found.
-  The step migrates nothing (`tls/` gets the move-to-`~/.ukp/tls/<name>/`
-  remedy in the error, keeping the pin; anything else the delete
-  remedy), ignores nothing, writes no tombstone rule. With the gate in
-  place the retired first precise template (the one with the `/tls/`
-  rule) is refreshed onto the current one instead of lingering — a new
-  `refreshed` posture line reports it. Spec:
-  docs/spec/configuration-contracts.md ".ukp/ Resident Invariant".
+  `ukp init service`) refuses before writing when `.ukp/` holds anything
+  outside its closed resident set — the two declarations, `instance-uid`,
+  `.gitignore` itself and the atomic-write transients — naming every
+  offending path. A refused gesture leaves the registry, the client
+  config and the guard exactly as found; the error carries the remedy (a
+  legacy `.ukp/tls/` identity names the move to `~/.ukp/tls/<name>/`,
+  anything else the delete). Nothing is migrated, ignored, or tombstoned
+  implicitly; a superseded first-generation precise template is refreshed
+  onto the current one in the same gesture (reported as `refreshed`).
 - Trailing separators in endpoint-relative references are now
-  address-encoding noise instead of a syntax error (ADR 0023 amendment,
-  D-099): `ukp read --endpoint X "docs/"` addresses the same slot as
-  `docs` and stat decides — a directory tail reports the friendly
-  "is a directory, not a readable resource" failure instead of
-  "reference must not contain empty path segments", and a file tail
-  reads normally. Applies uniformly to `ukp read` (both the plain and
-  `ukp://` tiers) and `ukp nav` routes; interior empty segments
-  (`a//b`) are still rejected as a grammar error.
-- Windows: tool stderr routed through the win32 spawn relay no longer
-  leaks a `#< CLIXML` serialization header ahead of the real error.
-  The relay's first cmdlet (the not-found `Get-Command` guard) made
-  PowerShell emit its one-time "Preparing modules for first use"
-  progress record, which a redirected stderr serializes as CLIXML —
-  so `ukp rg "{{template:"` (a pattern rg itself rejects as a regex)
-  surfaced `status: failed: #< CLIXML` instead of rg's readable parse
-  error. The relay now suppresses the progress stream; native tool
-  stderr passes through byte-clean with the exit code preserved
-  (rg and the ssh wake transport both benefit). Literal `{{...}}`
-  searches keep working via the passthrough form
-  (`ukp rg "{{seedcast:" -- -F`).
-- Windows: the spawn relay's not-found guard actually fires again. The
-  guard's `Get-Command -LiteralName` used a parameter that Windows
-  PowerShell 5.1 does not have — the unknown parameter is silently
-  swallowed and the check returns every command, so the guard was
-  vacuous: on a machine without ripgrep, `ukp rg` silently reported an
-  empty result instead of the intended "rg unavailable" skip with a
-  warning (a missing tool even exited 0 through the relay). The guard
-  now resolves via `-Name` and a live test pins the 127 sentinel.
-- `ukp rg --help` and the rg guide topic no longer advertise `-uu`: the
-  passthrough allowlist (ADR-RG-002 frozen set) rejects that compound
-  form with exit 2, so agents following the visibility note hit a dead
-  end. The wording now teaches the equivalent allowlisted form
-  (`-- --no-ignore` to lift .gitignore rules; `--hidden` + `--no-ignore`
-  together cover the full `-uu` semantics).
-
-### Added
-
-- Security policy and posture declaration: the package now ships a
-  `SECURITY.md` (scope, private vulnerability reporting via GitHub
-  security advisories, coordinated disclosure) and the README gained a
-  Security section — local by default, deny-by-default serving,
-  registration-time TLS pinning or SSH transport, byte-identical 404s for
-  unselected endpoints on a subset door — with the accepted tradeoffs
-  disclosed (client-side plaintext 0600 token storage, the token-bearing
-  Windows door artifact, the trust-on-first-use window).
+  address-encoding noise instead of a syntax error: `ukp read --endpoint
+  X "docs/"` addresses the same slot as `docs` — a directory tail reports
+  the friendly "is a directory, not a readable resource" failure, a file
+  tail reads normally. Interior empty segments (`a//b`) are still a
+  grammar error. Applies to `ukp read` (plain and `ukp://` tiers) and
+  `ukp nav` routes.
+- Windows: tool stderr routed through the spawn relay no longer leaks a
+  `#< CLIXML` serialization header ahead of the real error — the relay's
+  one-time PowerShell module-preparation progress record is suppressed,
+  so native tool stderr (rg parse errors, the ssh wake transport) passes
+  through byte-clean with the exit code preserved.
+- Windows: the spawn relay's tool-not-found guard actually fires again.
+  A Windows PowerShell 5.1 parameter mismatch made the check vacuous —
+  on a machine without ripgrep, `ukp rg` silently reported an empty
+  result (even exiting 0) instead of the intended "rg unavailable"
+  warning.
+- `ukp rg --help` and the rg guide topic no longer advertise `-uu` (the
+  passthrough allowlist rejects compound forms, so the note dead-ended):
+  the wording teaches the equivalent allowlisted forms —
+  `-- --no-ignore` to lift .gitignore rules; `--hidden` together with it
+  covers the full `-uu` semantics.
 
 ### Security
 
-- The serve `--tls` self-signed identity of a single endpoint now lives in
-  the machine home beside the host registry — `~/.ukp/tls/<endpoint-name>/`
-  (0700 dir, 0600 key) — instead of the served folder's `.ukp/tls/`
-  (adjudication 2026-11-01, inbox/service-dir-layering item 2, ADR-REM-012).
-  The identity is machine-scoped material: its SAN coverage names this
-  host's interfaces, and the reuse path never re-validated that coverage,
-  so a folder copied to another machine kept serving a certificate
-  describing the old machine's addresses. Door mode already lived in the
-  registry directory; endpoint mode converges on the same home, keyed by
-  the manifest's effective name so a re-cloned endpoint on the same host
-  keeps its SPKI pin (every pinned consumer re-anchors transparently —
-  INV-04's renewal semantics, now also across re-clones). The
-  sync-carries-the-private-key-out exposure (git or cloud sync of the
-  knowledge folder) is structurally gone. A pre-existing `.ukp/tls/`
-  moves in once on the first `--tls` serve with the keypair untouched
-  (nothing re-signs, the pin survives; cross-drive moves fall back to
-  copy+0600+unlink); when the machine home already holds a complete
-  identity, a leftover folder copy is left in place, never deleted. The
-  `.ukp/.gitignore` precise template drops its `/tls/` rule — the first
-  form is still recognized as current and swapped out only in the same
-  gesture that removes the directory. `ukp unregister` deliberately leaves
-  `~/.ukp/tls/<name>/` in place (identity continuity); `serve --print-task`
-  §5 names the path for manual removal. Spec:
-  docs/spec/configuration-contracts.md "Serve TLS Identity Home".
-- The serve bearer gate now compares tokens in constant time: the
-  presented `Authorization` header and each expected `Bearer <token>`
-  string are SHA-256-digested before a `crypto.timingSafeEqual`
-  comparison (hash-then-compare). Operator-chosen tokens are arbitrary
-  lengths, so digesting first makes the comparison length-uniform —
-  unequal lengths neither throw nor leak through early exits, and every
-  auth-failure class (missing / malformed / wrong token) runs the same
-  path. The auth outcome surface (status codes, messages, headers) is
-  unchanged, and the byte-identical 401 across failure classes is now
-  pinned by a wire test.
+- The serve `--tls` self-signed identity of a single endpoint now lives
+  in the machine home beside the host registry —
+  `~/.ukp/tls/<endpoint-name>/` (0700 directory, 0600 key) — instead of
+  the served folder's `.ukp/tls/`. The identity is machine-scoped
+  material: its certificate names this host's interfaces, and a folder
+  copied or synced to another machine must not keep serving a
+  certificate describing the old machine's addresses — the
+  sync-carries-the-private-key-out exposure is structurally gone. Keyed
+  by the manifest's effective name, a re-cloned endpoint on the same
+  host keeps its SPKI pin and every pinned consumer re-anchors
+  transparently. A pre-existing `.ukp/tls/` moves in once on the first
+  `--tls` serve with the keypair untouched (nothing re-signs, the pin
+  survives); a leftover folder copy is never deleted. `ukp unregister`
+  deliberately leaves the machine-home identity in place (identity
+  continuity); `ukp serve --print-task` §5 names the path for manual
+  removal. The precise `.ukp/.gitignore` template drops its `/tls/` rule
+  in the same gesture.
+- The serve bearer gate compares tokens in constant time: the presented
+  `Authorization` header and each expected `Bearer <token>` string are
+  SHA-256-digested before a `crypto.timingSafeEqual` comparison, making
+  the check length-uniform for operator-chosen tokens of arbitrary
+  lengths — unequal lengths neither throw nor leak through early exits.
+  The auth outcome surface (status codes, messages, headers) is
+  unchanged.
 
 ## [0.2.6] - 2026-09-23
 
