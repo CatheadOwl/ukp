@@ -18,8 +18,8 @@ propose）+ registry 管理 + scope 语义；产出里用 `ukp://` 引用交接
 注册根，项目 endpoint 即仓根）；名不在，ukp 让位。
 
 不用：一次性本地文件操作（直接 rg / cat 更省）；agent 进程派遣
-（amux 的辖区——`ukp session` 以 amux 为引擎，纪律见其 face）；
-provider（QMD）自身的配置维护（UKP 指路不代劳）。
+（非知识面，不归 ukp）；provider（QMD）自身的配置维护（UKP 指路
+不代劳）。
 
 ## 命令面（热数据，派遣每次查）
 
@@ -60,8 +60,6 @@ provider（QMD）自身的配置维护（UKP 指路不代劳）。
    注册根）。
 3. **提案**：起草文件 → `ukp propose --id <slug> --file <f>`；重提同
    id 不 dup，owner 在 endpoint inbox 裁决。
-4. **session**（opt-in endpoint 才有）：`ukp session spawn / send /
-   status / list`——amux 引擎，派遣纪律与停用状态以 amux 技能为正本。
 
 ## 产出契约
 
