@@ -13,7 +13,7 @@ import { executeReadCommand, READ_SPEC } from "./commands/read.ts";
 import { executeRgCommand, RG_SPEC } from "./commands/rg.ts";
 import { executeGuideCommand, GUIDE_SPEC, GUIDE_TOPICS } from "./commands/guide.ts";
 import { executeInitCommand, INIT_SPEC } from "./commands/init.ts";
-import { executeSessionCommand, SESSION_SUMMARY } from "./commands/session.ts";
+import { executeSessionCommand } from "./commands/session.ts";
 import { executeInspectCommand, INSPECT_SPEC } from "./commands/inspect.ts";
 import { executeListCommand, executeRegisterCommand, executeUnregisterCommand, LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC } from "./commands/inventory.ts";
 import { executeNavCommand, NAV_SPEC } from "./commands/nav.ts";
@@ -60,7 +60,6 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   nav: NAV_SPEC.summary,
   propose: PROPOSE_SPEC.summary,
   search: SEARCH_SPEC.summary,
-  session: SESSION_SUMMARY,
   version: "show version information",
 };
 
@@ -70,15 +69,14 @@ export const COMMANDS = Object.entries(COMMAND_DESCRIPTIONS).map(
 
 // Help-display groups (ADR 0022): purpose-noun headings over a flat verb
 // surface. Every command must appear in exactly one group; a guard test
-// locks group membership against COMMANDS.
+// locks group membership against COMMANDS. `session` is deliberately
+// outside the advertised surface (owner ruling 2026-11-03, extending the
+// 2026-10-31 contract-face exit): dispatch stays live, the skill face
+// documents it — hidden but functional, the clig.dev shape.
 export const COMMAND_GROUPS = [
   {
     heading: "Endpoint commands",
     commands: ["search", "read", "nav", "rg", "propose"],
-  },
-  {
-    heading: "Session commands",
-    commands: ["session"],
   },
   {
     heading: "Registry commands",
