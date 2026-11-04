@@ -20,8 +20,3 @@
   
   - 非package.json白名单定义即是开发面文件，禁止从 SKILL.md 链接或提及；开发面的维护规则住本文件，不住 SKILL.md。
 
-- TODO
-  
-  - 删除setup.mjs手动模式
-    
-    - junction 整目录暴露（白名单复用）
