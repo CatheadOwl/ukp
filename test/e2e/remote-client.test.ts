@@ -1,4 +1,5 @@
 import { describe, expect, test, afterAll, beforeEach } from "bun:test";
+import { binAvailable } from "../helpers/bin-probe.ts";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -580,7 +581,7 @@ describe("ukp list with remote rows", () => {
 // exactly when the tests are slowest and silently skip them). The rg tests
 // carry explicit 30s timeouts to absorb that spawn tax.
 
-const rgAvailable = Bun.spawnSync(["rg", "--version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+const rgAvailable = binAvailable("rg");
 
 describe("remote nav (ukp_remote W6)", () => {
   test("nav runs against a remote endpoint: depth, json, and miss mapping", async () => {
@@ -810,8 +811,7 @@ describe("remote rg (ukp_remote W6)", () => {
 // (Bun.spawn bypasses shell path mangling), the real startUkpServer with TLS,
 // and the real register/search adapters — the full bare-IP rehearsal path.
 
-const opensslAvailable =
-  Bun.spawnSync(["openssl", "version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+const opensslAvailable = binAvailable("openssl", ["version"]);
 
 function selfSignPair(name: string, renewFromKey?: string): { certPath: string; keyPath: string } {
   const certPath = join(root, "tls", `${name}.cert.pem`);

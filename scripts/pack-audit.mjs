@@ -13,7 +13,9 @@
 //
 // 触发：npm pack / npm publish 经 package.json "prepack" 自动跑；手动：
 //   cd ukp && bun scripts/pack-audit.mjs
-// 退出码 0 = 通过（一行摘要），1 = 有违规（逐条 VIOLATION）。
+// 退出码 0 = 通过（一行摘要），1 = 有违规（逐条 VIOLATION）。全部输出走
+// stderr——prepack 是 lifecycle script，任何 stdout 都会混进外层
+// `npm pack --json` 的输出、破坏消费者的 JSON.parse。
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -75,4 +77,4 @@ if (violations.length > 0) {
   console.error(`\npack-audit: ${violations.length} violation(s) — publish face NOT clean, FAILED`);
   process.exit(1);
 }
-console.log(`pack-audit: ${packedFiles.length} files, 0 violations — publish face clean`);
+console.error(`pack-audit: ${packedFiles.length} files, 0 violations — publish face clean`);
