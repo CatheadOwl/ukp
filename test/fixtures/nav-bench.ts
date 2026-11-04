@@ -46,7 +46,7 @@ for (const depth of [0, 2] as const) {
     const elapsed = performance.now() - start;
     if (!outcome.ok) throw new Error(outcome.failure.message);
     times.push(elapsed);
-    entries = outcome.result.routeCount;
+    entries = outcome.result.route_count;
     diagnostics = outcome.result.diagnostics.length;
   }
   console.log(

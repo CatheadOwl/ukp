@@ -24,13 +24,13 @@ import { isInsideRealRoot, splitEndpointRelativeSegments } from "../path-safety.
 // budget counting); UKP owns addressing, the route-root/depth projection,
 // the entry window and the ukp.nav.v1 envelope.
 
-/** Safety cap on listed route entries (owner R6 问1 = A1, 2026-10-22): the
+/** Safety cap on listed route entries (owner R6 Q1 = A1, 2026-10-22): the
  * structure walk sees everything, then this UKP projection window cuts —
  * loud via `max-entries-reached`, same diagnostic shape as the native
  * implementation, agent contract unchanged. */
 export const NAV_MAX_ENTRIES = 2000;
 
-/** Terminal scan budget for the structure walk (owner R6 问2 = B1,
+/** Terminal scan budget for the structure walk (owner R6 Q2 = B1,
  * 2026-10-22): `ResolvedScanOptions.maxFiles` is a required number with no
  * "unlimited" sentinel (≤0 caps instantly), so a high terminal value is the
  * practical-unbounded form — counts stay exact on every realistic corpus.
@@ -45,7 +45,7 @@ export function resolveNavScanOptions(capability: ManifestCapability): ResolvedS
   const config = capability.config ?? {};
   if (Object.hasOwn(config, "max_description_files")) {
     throw new NavProviderError(
-      "nav config 'max_description_files' is retired (owner R6 问3 = C1, 2026-10-22): "
+      "nav config 'max_description_files' is retired (owner R6 Q3 = C1, 2026-10-22): "
         + "the description budget collapsed into the entry window — remove the key",
     );
   }
@@ -73,13 +73,13 @@ export interface NavEntry {
   path: string;
   kind: "file" | "folder";
   description: string | null;
-  /** Depth-boundary folders only: `true` with `omittedMarkdownCount`. */
+  /** Depth-boundary folders only: `true` with `omitted_markdown_count`. */
   truncated?: boolean;
   /** Recursive `.md` total under a truncated folder (exclusions applied). */
-  omittedMarkdownCount?: number;
+  omitted_markdown_count?: number;
   /** Truncated folder entries only: the representative README child's
    * endpoint-relative POSIX path, mapped verbatim from the engine's
-   * `NavNode.markdown` — present iff that README is in the tree (W2 问 4
+   * `NavNode.markdown` — present iff that README is in the tree (W2 Q4
    * restoration, 2026-10-31; zero derivation at the projection layer). */
   markdown?: string;
 }
@@ -96,9 +96,9 @@ export interface NavResult {
   root: string;
   depth: number;
   entries: NavEntry[];
-  routeCount: number;
+  route_count: number;
   diagnostics: NavDiagnostic[];
-  /** Maintainer-audience findings (owner R6 问5 = E1, 2026-10-22): engine
+  /** Maintainer-audience findings (owner R6 Q5 = E1, 2026-10-22): engine
    * audience triage — these never enter the ukp.nav.v1 envelope; the human
    * face renders them to stderr, the JSON face stays silent. */
   maintainerDiagnostics: NavDiagnostic[];
@@ -211,7 +211,7 @@ interface FlatEntry {
   kind: "file" | "folder";
   node: NavNode;
   /** Folder entries only. */
-  omittedMarkdownCount?: number;
+  omitted_markdown_count?: number;
 }
 
 function flattenToDepth(node: NavNode, remaining: number, out: FlatEntry[]): void {
@@ -223,7 +223,7 @@ function flattenToDepth(node: NavNode, remaining: number, out: FlatEntry[]): voi
     } else {
       const count = countMarkdown(child);
       if (count > 0) {
-        out.push({ path: child.path, kind: "folder", node: child, omittedMarkdownCount: count });
+        out.push({ path: child.path, kind: "folder", node: child, omitted_markdown_count: count });
       }
     }
   }
@@ -237,7 +237,7 @@ async function buildNavResult(
   endpoint: string,
   options: ResolvedScanOptions,
 ): Promise<NavResult> {
-  // B1 (owner R6 问2, 2026-10-22): structure walk with zero content reads,
+  // B1 (owner R6 Q2, 2026-10-22): structure walk with zero content reads,
   // then hydrate descriptions only for the window survivors.
   const structure = await scanStructure(serviceFolder, builtinDescriptionProvider, options);
   const routeRelative = relative(serviceFolder, routeRootFolder).replace(/\\/g, "/");
@@ -301,7 +301,7 @@ async function buildNavResult(
         kind: "folder",
         description: entry.node.description ?? null,
         truncated: true,
-        omittedMarkdownCount: entry.omittedMarkdownCount,
+        omitted_markdown_count: entry.omitted_markdown_count,
         ...(entry.node.markdown === undefined ? {} : { markdown: entry.node.markdown }),
       };
     }
@@ -317,7 +317,7 @@ async function buildNavResult(
     root,
     depth,
     entries,
-    routeCount: entries.length,
+    route_count: entries.length,
     diagnostics,
     maintainerDiagnostics,
   };
@@ -344,7 +344,10 @@ export function validateNavRoutePath(routePath: string): string[] {
 /** Presentation projection (ADR 0021 two-stage form): the structured,
  * serializable view. First-class citizen — adapters (CLI today, MCP /
  * programmatic later) consume this view, never the raw scan result.
- * Maintainer diagnostics stay out (E1): the envelope is the agent face. */
+ * Maintainer diagnostics stay out (E1): the envelope is the agent face.
+ * Wire names are UKP-owned snake_case (owner ruling 2026-11-03): the
+ * projection layer owns the wire schema, so engine-internal camelCase
+ * never leaks past it. */
 export interface NavEnvelope {
   schema: "ukp.nav.v1";
   command: "nav";
@@ -352,7 +355,7 @@ export interface NavEnvelope {
   endpoint: string;
   root: string;
   depth: number;
-  routeCount: number;
+  route_count: number;
   entries: NavEntry[];
   diagnostics: NavDiagnostic[];
 }
@@ -365,7 +368,7 @@ export function projectNavEnvelope(result: NavResult): NavEnvelope {
     endpoint: result.endpoint,
     root: result.root,
     depth: result.depth,
-    routeCount: result.routeCount,
+    route_count: result.route_count,
     entries: result.entries,
     diagnostics: result.diagnostics,
   };
@@ -380,7 +383,7 @@ export function renderNavHuman(envelope: NavEnvelope): string {
     if (entry.kind === "folder") {
       // Self-explanatory unexpanded form: an unexpanded folder plus the exact
       // recursive .md count inside (never "truncated" — nothing was cut).
-      const line = `${entry.path}/ (+${entry.omittedMarkdownCount} .md)`;
+      const line = `${entry.path}/ (+${entry.omitted_markdown_count} .md)`;
       lines.push(entry.description ? `${line} | ${entry.description}` : line);
     } else {
       lines.push(entry.description ? `${entry.path} | ${entry.description}` : entry.path);

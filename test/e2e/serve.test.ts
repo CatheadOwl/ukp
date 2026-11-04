@@ -1,4 +1,5 @@
 import { describe, expect, test, afterAll } from "bun:test";
+import { binAvailable } from "../helpers/bin-probe.ts";
 import { createHash } from "node:crypto";
 import { connect as netConnect } from "node:net";
 import {
@@ -263,7 +264,7 @@ describe("serve /v1/read", () => {
   });
 });
 
-const rgAvailable = Bun.spawnSync(["rg", "--version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+const rgAvailable = binAvailable("rg");
 
 describe("serve /v1/nav (W6)", () => {
   test("returns the ukp.nav.v1 envelope; a missing route root is a 404", async () => {
@@ -274,13 +275,13 @@ describe("serve /v1/nav (W6)", () => {
       schema: string;
       endpoint: string;
       root: string;
-      entries: Array<{ path: string; kind: string; description: string | null; truncated?: boolean; omittedMarkdownCount?: number }>;
+      entries: Array<{ path: string; kind: string; description: string | null; truncated?: boolean; omitted_markdown_count?: number }>;
     };
     expect(envelope.schema).toBe("ukp.nav.v1");
     expect(envelope.endpoint).toBe("serve-fixture");
     expect(envelope.root).toBe(".");
     expect(envelope.entries).toEqual([
-      { path: "documents", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 1 },
+      { path: "documents", kind: "folder", description: null, truncated: true, omitted_markdown_count: 1 },
     ]);
 
     const deep = await fetch(`${info.url}/v1/nav?depth=1`);
@@ -538,8 +539,7 @@ describe("serve argument parsing", () => {
 // (Bun.spawn bypasses shell path mangling, so tests sign on every platform
 // that has openssl); --tls-cert/--tls-key serve operator certificates.
 
-const opensslAvailable =
-  Bun.spawnSync(["openssl", "version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+const opensslAvailable = binAvailable("openssl", ["version"]);
 
 describe("serve TLS (W5' / D-079)", () => {
   test.skipIf(!opensslAvailable)("--tls generates a self-signed identity, persists it, and reuses it on restart", async () => {

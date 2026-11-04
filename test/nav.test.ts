@@ -94,10 +94,10 @@ describe("nav capability", () => {
       expect(parsed.root).toBe(".");
       expect(parsed.depth).toBe(0);
       expect(parsed.entries).toEqual([
-        { path: "docs", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 3 },
+        { path: "docs", kind: "folder", description: null, truncated: true, omitted_markdown_count: 3 },
         { path: "README.md", kind: "file", description: "Root knowledge base" },
       ]);
-      expect(parsed.routeCount).toBe(2);
+      expect(parsed.route_count).toBe(2);
       expect(parsed.diagnostics).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -115,7 +115,7 @@ describe("nav capability", () => {
       const parsed = await navJson({ endpoint: "kb", depth: 1 }, context);
       expect(parsed.entries).toEqual([
         { path: "docs/guide.md", kind: "file", description: "The guide" },
-        { path: "docs/notes", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 2 },
+        { path: "docs/notes", kind: "folder", description: null, truncated: true, omitted_markdown_count: 2 },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -134,13 +134,13 @@ describe("nav capability", () => {
       const parsed = await navJson({ endpoint: "kb", path: "docs" }, context);
       expect(parsed.root).toBe("docs");
       expect(parsed.entries).toEqual([
-        { path: "docs/deep", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 1 },
+        { path: "docs/deep", kind: "folder", description: null, truncated: true, omitted_markdown_count: 1 },
         { path: "docs/guide.md", kind: "file", description: null },
         { path: "docs/README.md", kind: "file", description: "Documentation area" },
       ]);
       // observed from the endpoint root the same subtree counts identically
       const whole = await navJson({ endpoint: "kb" }, context);
-      expect(whole.entries.find((entry: { path: string }) => entry.path === "docs").omittedMarkdownCount).toBe(3);
+      expect(whole.entries.find((entry: { path: string }) => entry.path === "docs").omitted_markdown_count).toBe(3);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -155,7 +155,7 @@ describe("nav capability", () => {
       ]);
       const parsed = await navJson({ endpoint: "kb" }, context);
       expect(parsed.entries).toEqual([
-        { path: "area", kind: "folder", description: "The area", truncated: true, omittedMarkdownCount: 2, markdown: "area/README.md" },
+        { path: "area", kind: "folder", description: "The area", truncated: true, omitted_markdown_count: 2, markdown: "area/README.md" },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -201,7 +201,7 @@ describe("nav capability", () => {
       registerAt(registryPath, "kb", service);
       const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       expect(parsed.entries).toEqual([
-        { path: "area", kind: "folder", description: "The npm description", truncated: true, omittedMarkdownCount: 2, markdown: "area/README.md" },
+        { path: "area", kind: "folder", description: "The npm description", truncated: true, omitted_markdown_count: 2, markdown: "area/README.md" },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -252,7 +252,7 @@ describe("nav capability", () => {
       registerAt(registryPath, "kb", folder);
       const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       expect(parsed.entries).toEqual([
-        { path: "area", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 1 },
+        { path: "area", kind: "folder", description: null, truncated: true, omitted_markdown_count: 1 },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -332,7 +332,7 @@ describe("nav capability", () => {
       const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       // root: area/*.md ignored except reinstated; deeper file: keep re-included, drop-nested ignored
       expect(parsed.entries).toEqual([
-        { path: "area", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 2 },
+        { path: "area", kind: "folder", description: null, truncated: true, omitted_markdown_count: 2 },
       ]);
       const deep = await navJson({ endpoint: "kb", path: "area" }, { currentDirectory: root, registryPath });
       expect(deep.entries).toEqual([
@@ -493,7 +493,7 @@ describe("nav capability", () => {
       const parsed = await navJson({ endpoint: "kb" }, { currentDirectory: root, registryPath });
       // docs still appears (real.md counts); AGENTS.md never shows.
       expect(parsed.entries).toEqual([
-        { path: "docs", kind: "folder", description: null, truncated: true, omittedMarkdownCount: 1 },
+        { path: "docs", kind: "folder", description: null, truncated: true, omitted_markdown_count: 1 },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -843,7 +843,7 @@ describe("nav command surface", () => {
       expect(envelope.command).toBe("nav");
       expect(envelope.capability).toBe("nav");
       expect(envelope.endpoint).toBe("kb");
-      expect(envelope.routeCount).toBe(2);
+      expect(envelope.route_count).toBe(2);
       expect(envelope.entries).toHaveLength(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
