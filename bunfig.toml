@@ -1,6 +1,8 @@
 # bunfig is dev-surface only: not in the package "files" set, never packed.
-# The preload wires the commit-msg English gate (hooks/) before tests run —
-# ukp/package.json must stay free of meta-layer references because it is
-# shipped verbatim inside the npm tarball. Charter: ../../hooks/README.md
+# The preload (kept inside the package so a public split checkout stays
+# self-sufficient — outside the full workspace it skips silently) wires the
+# commit-msg English gate before tests run; ukp/package.json must stay free
+# of meta-layer references because it is shipped verbatim inside the npm
+# tarball. Charter: ../../hooks/README.md
 [test]
-preload = ["../hooks/test-preload.mjs"]
+preload = ["./scripts/test-preload.mjs"]
