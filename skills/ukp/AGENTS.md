@@ -2,7 +2,7 @@
 
 - 发布面rules
   
-  - package.json白名单定义公开件（模仿npm tarball）
+  - package.json `files` 白名单定义公开件——`skills/ukp/SKILL.md` 已入 `files`，npm tarball 机械事实（非模仿）；内层其余文件（含 owner 另用的 package.json）不在白名单即不发布
   
   - 英文、产品介绍体
   

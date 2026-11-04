@@ -1,6 +1,6 @@
 {
   "name": "@catheadowl/ukp",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
     "bun": ">=1.3.14"
@@ -32,10 +32,10 @@
     "bin",
     "src",
     "docs",
+    "skills/ukp/SKILL.md",
     "README.md",
     "SECURITY.md",
-    "LICENSE",
-    "package.json"
+    "LICENSE"
   ],
   "scripts": {
     "dev": "bun run src/cli.ts",

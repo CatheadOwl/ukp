@@ -139,7 +139,10 @@ describe("serve token file: gate mechanics (fresh read, revocation, uniform 401)
     const key = issueInto(path, "liku-live", "notes:ro");
     const door = startDoor({ tokenFilePath: path });
     expect((await read(door.info, "notes", key)).status).toBe(200);
-    writeFileSync(path, "garbage while an operator edits\n", "utf8");
+    // mode 0o600: on POSIX the product's permission gate (tokenFileModeProblem)
+    // refuses group/other-readable files before the behavior under test runs —
+    // default-mode fixtures 401 for the wrong reason (ali leg, 2026-11-04).
+    writeFileSync(path, "garbage while an operator edits\n", { encoding: "utf8", mode: 0o600 });
     expect((await read(door.info, "notes", key)).status).toBe(401);
   });
 
@@ -150,14 +153,14 @@ describe("serve token file: gate mechanics (fresh read, revocation, uniform 401)
     // File with comments only: still unarmed — an empty file must not wall
     // an --allow-anonymous door off (review P1 regression anchor).
     mkdirSync(join(home, ".ukp"), { recursive: true });
-    writeFileSync(join(home, ".ukp", "tokens"), "# all keys revoked\n", "utf8");
+    writeFileSync(join(home, ".ukp", "tokens"), "# all keys revoked\n", { encoding: "utf8", mode: 0o600 });
     expect(resolveServeAuthSources([], home)).toEqual({ tokens: [] });
     // One key: armed from the file.
     const minted = mintTokenFileKey("liku", "notes:ro");
-    writeFileSync(join(home, ".ukp", "tokens"), `${minted.line}\n`, "utf8");
+    writeFileSync(join(home, ".ukp", "tokens"), `${minted.line}\n`, { encoding: "utf8", mode: 0o600 });
     expect(resolveServeAuthSources([], home)).toEqual({ tokens: [], tokenFilePath: join(home, ".ukp", "tokens") });
     // Malformed file: loud refusal.
-    writeFileSync(join(home, ".ukp", "tokens"), "not a row\n", "utf8");
+    writeFileSync(join(home, ".ukp", "tokens"), "not a row\n", { encoding: "utf8", mode: 0o600 });
     const bad = resolveServeAuthSources([], home);
     expect("error" in bad && bad.error).toContain("expected 4 columns");
     // Env present: the file is not consulted at all — even a malformed one.
@@ -353,7 +356,7 @@ describe("serve token: the issuance command family (scratch home)", () => {
     expect(empty.stdout).toContain("no token file at");
 
     mkdirSync(join(root, "bad-home", ".ukp"), { recursive: true });
-    writeFileSync(join(root, "bad-home", ".ukp", "tokens"), "this is not a token row\n", "utf8");
+    writeFileSync(join(root, "bad-home", ".ukp", "tokens"), "this is not a token row\n", { encoding: "utf8", mode: 0o600 });
     const bad = executeServeCommand(["token", "list"], {
       ...context,
       homeDir: join(root, "bad-home"),

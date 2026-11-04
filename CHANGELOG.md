@@ -4,6 +4,8 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
 ### Added
 
 - `ukp use <endpoint>...` — one-step consumer onboarding: records the
@@ -27,12 +29,17 @@ All notable public changes to UKP will be documented in this file.
   README child's endpoint-relative path.
 - `ukp nav` (human face) prints the scan engine's maintainer findings to
   stderr (`ukp nav: <code>: <message>`); the `ukp.nav.v1` envelope stays silent.
-- `ukp read` rejection messages and the root help name `--from`.
+- `ukp read`: the empty-segment and dot-segment rejections append a
+  `--from` pointer, and the root help's read summary names it
+  (document-relative reads).
 - Zero-prior `ukp://` signage: the README quickstart and the root-help body
   both state a `ukp://` reference names a registered endpoint, not a web link.
 - The package ships a `SECURITY.md` (private vulnerability reporting,
   coordinated disclosure), and the README gained a Security section
   stating the posture and accepted tradeoffs.
+- The npm tarball carries the agent skill face: `skills/ukp/SKILL.md`
+  ships as a single pinned file (the `files` whitelist names it
+  precisely — everything else under `skills/` stays unpublished).
 
 ### Changed
 
