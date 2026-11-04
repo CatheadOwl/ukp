@@ -1,0 +1,23 @@
+# Enforce LF line endings for text files
+* text=auto eol=lf
+
+# Explicitly mark text types
+*.md text eol=lf
+*.toml text eol=lf
+*.ts text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
