@@ -56,19 +56,42 @@ function bunCandidates() {
   return candidates;
 }
 
-function fail(detail) {
+function fail(detail, hint = "") {
   process.stderr.write(
     "ukp: no bun executable found (" + detail + ").\n"
       + "ukp runs on bun — install it (https://bun.sh), or point UKP_BUN at the\n"
       + "bun executable. Standard install locations (~/.bun/bin and the npm\n"
-      + "global prefix) are checked before PATH.\n",
+      + "global prefix) are checked before PATH.\n"
+      + hint,
   );
   process.exit(1);
 }
 
+/** Windows-only diagnosis for a UKP_BUN that the user's shell accepts but
+ * existsSync rejects: name the shape mismatch instead of implying the file
+ * is absent. Two real shapes (0.3.0 release review): Git Bash converts an
+ * exported MSYS path (/c/.../bun) to a native form WITHOUT the .exe
+ * extension before this launcher sees it, so the .exe sibling exists while
+ * the named path does not; and a variable set outside a converting shell
+ * (cmd/PowerShell) reaches us as the raw /c/... or /cygdrive/... form,
+ * which Windows file APIs cannot resolve at all. */
+function ukpBunHint() {
+  const value = process.env.UKP_BUN;
+  if (!isWindows || typeof value !== "string") return "";
+  if (/^\/(?:[a-z]|cygdrive\/[a-z])\//i.test(value)) {
+    return "ukp: UKP_BUN looks like an MSYS-style path; Windows needs a native "
+      + "form like C:/path/to/bun.exe\n";
+  }
+  if (!/\.exe$/i.test(value) && existsSync(value + ".exe")) {
+    return "ukp: UKP_BUN omits the .exe extension (the executable sits next to "
+      + "it); use its full name, e.g. C:/path/to/bun.exe\n";
+  }
+  return "";
+}
+
 const bunPath = bunCandidates().find((candidate) => existsSync(candidate));
 if (bunPath === undefined) {
-  fail("looked at UKP_BUN, the standard install locations, and PATH");
+  fail("looked at UKP_BUN, the standard install locations, and PATH", ukpBunHint());
 }
 
 // In-process handoff when this launcher already runs under bun (bun's own

@@ -51,7 +51,7 @@ export const SEARCH_SPEC: UkpCommandSpec = {
   name: "search",
   summary: "search a Service's indexed content (provider-backed; use 'ukp rg' to grep raw files)",
   group: "endpoint",
-  description: "Run atomic lexical search against the selected Service endpoints.",
+  description: "Run a lexical (text) search across the selected Service endpoints through each endpoint's configured provider.",
   usage: "<query> [--limit <1-1000>] [--endpoint <name> ... | -g] [--recursive] [--timeout <seconds>] [--json]",
   arguments: [{ name: "query", help: "one non-empty search query; quote multi-word queries" }],
   options: [

@@ -18,10 +18,12 @@
   "keywords": [
     "knowledge",
     "cli",
-    "bun",
-    "qmd",
     "search",
-    "agent"
+    "agent",
+    "ai-agents",
+    "knowledge-base",
+    "local-first",
+    "self-hosted"
   ],
   "bin": {
     "ukp": "bin/ukp.js"

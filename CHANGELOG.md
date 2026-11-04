@@ -25,13 +25,21 @@ All notable public changes to UKP will be documented in this file.
   `UKP_SERVE_TOKEN` keeps its previous full-power semantics.
 - `ukp nav --json`: folder entries gain `markdown` — the representative
   README child's endpoint-relative path.
+- `ukp nav` (human face) prints the scan engine's maintainer findings to
+  stderr (`ukp nav: <code>: <message>`); the `ukp.nav.v1` envelope stays silent.
 - `ukp read` rejection messages and the root help name `--from`.
+- Zero-prior `ukp://` signage: the README quickstart and the root-help body
+  both state a `ukp://` reference names a registered endpoint, not a web link.
 - The package ships a `SECURITY.md` (private vulnerability reporting,
   coordinated disclosure), and the README gained a Security section
   stating the posture and accepted tradeoffs.
 
 ### Changed
 
+- **Breaking-ish** `ukp nav --json`: envelope fields rename to snake_case
+  (`routeCount` → `route_count`, `omittedMarkdownCount` →
+  `omitted_markdown_count`) — a pre-adoption rename with no compatibility
+  shim; every machine-facing schema now shares the convention.
 - **Breaking-ish** `ukp list` defaults to the workspace scope (the
   nearest `.ukp/client.toml`, full registry as fallback); `-g` lists
   every registered endpoint. `--json` follows the same scope.
@@ -46,6 +54,8 @@ All notable public changes to UKP will be documented in this file.
   the default exclusions, `**` globs follow git truth, and gitignore
   matching is case-insensitive with inheritance above the Service
   folder. `@any-nav/scan` returns as a normal registry dependency.
+- npm keywords refresh: `bun`/`qmd` drop out for `ai-agents`,
+  `knowledge-base`, `local-first`, `self-hosted`.
 - `ukp list` no longer word-wraps its stderr footnotes on interactive
   terminals.
 
@@ -63,6 +73,21 @@ All notable public changes to UKP will be documented in this file.
   results.
 - The rg help and guide no longer advertise `-uu`, which the passthrough
   allowlist rejects; the allowlisted equivalent is taught instead.
+- `ukp serve --help`'s Wire tables and the deployment handbook now list the
+  write route (`PUT /v1/propose/<id>`, door form `/e/<name>/v1/propose/<id>`,
+  scoped `rw`); the handbook also documents `ukp diagnose --door`.
+- `ukp nav --depth` help copy: truncated folders read `folder/ (+N .md)`
+  instead of `[truncated: N]`.
+- `ukp search --help` drops the never-defined "atomic" label — "a lexical
+  (text) search across the selected Service endpoints through each
+  endpoint's provider."
+- The bin launcher's UKP_BUN failure hint names the real Windows culprits
+  (MSYS-style `/c/...` values, a missing `.exe` extension) instead of
+  implying the file is absent.
+- README landing pass: the install command leads the first screen, the
+  quickstart is end-to-end runnable, docid wording unifies on "handoff
+  key", and first-use terms (write path, current scope, the
+  `~/.ukp/tokens` file) gain local definitions.
 
 ### Security
 

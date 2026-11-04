@@ -32,6 +32,17 @@ the same host forwards from the public side to the loopback bind, so proxied
 deployments treat the token as mandatory (serve cannot see past its own bind
 address).
 
+The complete route list (ukp-remote v1) — what a client or a fronting proxy's
+path allowlist must account for: `GET /.well-known/ukp.json` (the public
+discovery document — the door's roster document in host door mode, where each
+endpoint also serves its own at `/e/<name>/.well-known/ukp.json`), the read
+face — `POST /v1/search`, `GET /v1/read`, `GET /v1/nav`, `GET /v1/rg` (each
+prefixed `/e/<name>` at a door) — and the one write route, `PUT
+/v1/propose/<id>` (`PUT /e/<name>/v1/propose/<id>` at a door): the proposal
+upsert. Propose needs the endpoint to declare the capability, and a scoped
+key must carry that endpoint at `rw` (`ro` keys reach the read face only —
+see Scoped keys below).
+
 ## Via SSH (two personal machines — zero extra components, zero ceremony)
 
 The `ssh://` URL scheme makes the transport transparent AND wakes the door
@@ -276,6 +287,13 @@ Pitfalls the verification run caught:
   a command). Stop the door first, edit, then restart.
 - `rg` on the host is the host's business — no ripgrep installed means
   the remote `rg` capability reports unavailable (everything else works).
+
+`ukp diagnose --door` is the read-only health check for this resident form:
+for every door it reports the task state, the wscript->cmd->bun process tree,
+the port (and who holds it), and the door.log tail — and exits 1 when a door
+is down (a host with no doors is healthy). Each finding names its repair;
+removal and restart moves live in the `ukp serve --print-task` §5 checklist
+(the three-level teardown below) and the pitfalls above.
 
 To remove the door — the inverse of steps 4–0, in three levels (stopping
 is not disabling, and disabling is not erasing; `ukp serve --print-task`

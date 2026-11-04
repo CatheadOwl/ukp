@@ -18,7 +18,7 @@ import { dirname } from "node:path";
  * - Scopes are required per line, Docker-registry-grammar
  *   `name:access,name:access` with `*` as the explicit full-power name.
  *
- * Evidence SSOT: workunits/ukp_remote/knowledge/api-key-file-patterns.md. */
+ * Evidence SSOT: the ukp_remote line's api-key-file-patterns research note. */
 
 /** Column grammar: `<label> <id> sha256$<hex> <scopes>`, whitespace-run
  * separated. `#`-prefixed lines and blanks are comments/spacers (revocation

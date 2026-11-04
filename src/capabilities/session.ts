@@ -1,5 +1,5 @@
-// ukp_session W1→W2/G3 (line spec: workunits/ukp_session/spec/session-command.md;
-// ADR-SESSION-001/002/003; extraction ruling w2-extraction-ruling.md X4):
+// ukp_session W1→W2/G3 (line spec: session-command; ADR-SESSION-001/002/003;
+// W2 extraction ruling X4):
 // the session capability core in WRAPPER form. UKP owns naming and relay
 // only (core-idea D-1): conversation history lives in the agent's own
 // global space, so this module persists the host-scoped address book and
