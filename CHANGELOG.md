@@ -4,6 +4,14 @@ All notable public changes to UKP will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- The manifest declaration reference ships in the package:
+  `skills/ukp/reference/manifest.md` is the normative grammar for
+  `.ukp/service.toml` (every legal key, constraints, loadable examples),
+  kept in lockstep with the loader's schema by an anchor test;
+  `ukp guide manifest` routes there.
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

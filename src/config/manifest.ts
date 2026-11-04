@@ -16,16 +16,16 @@ export const ENDPOINT_NAME = /^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // `provider` is optional at the schema level: file-native capabilities
 // (see file-native.ts, ADR 0016) default to `"file"` at load; every other
 // capability fails fast with a declaration error when `provider` is missing.
-const capabilitySchema = z.object({
+export const capabilitySchema = z.object({
   provider: z.string().min(1).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
 const endpointNameSchema = z.string().regex(ENDPOINT_NAME);
 
-const dependencyKindSchema = z.enum(["authority", "context", "implementation", "evidence"]);
+export const dependencyKindSchema = z.enum(["authority", "context", "implementation", "evidence"]);
 
-const dependencySchema = z.object({
+export const dependencySchema = z.object({
   endpoint: endpointNameSchema,
   kind: dependencyKindSchema,
   reason: z.string().min(1).optional(),
@@ -46,7 +46,7 @@ const dependenciesSchema = z.array(dependencySchema).min(1).superRefine((value, 
   }
 });
 
-const manifestSchema = z.object({
+export const manifestSchema = z.object({
   name: z.string().optional(),
   description: z.string().min(1).optional(),
   dependencies: dependenciesSchema.optional(),

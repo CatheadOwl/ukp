@@ -26,7 +26,7 @@ import { executeUseCommand, USE_SPEC } from "./commands/use.ts";
 export { renderSearchHelp } from "./commands/search.ts";
 export { renderDiagnoseHelp } from "./commands/diagnose.ts";
 export { renderReadHelp } from "./commands/read.ts";
-export { renderGuideHelp, renderServiceGuide, renderServiceQmdGuide, renderClientGuide, renderRgGuide, renderRemoteGuide, renderProposeGuide } from "./commands/guide.ts";
+export { renderGuideHelp, renderServiceGuide, renderServiceQmdGuide, renderClientGuide, renderRgGuide, renderRemoteGuide, renderProposeGuide, renderManifestGuide } from "./commands/guide.ts";
 export { renderInitHelp, renderInitServiceHelp } from "./commands/init.ts";
 export { renderInspectHelp } from "./commands/inspect.ts";
 export { renderUpdateHelp } from "./commands/update.ts";

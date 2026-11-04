@@ -2,7 +2,7 @@
 
 - 发布面rules
   
-  - package.json `files` 白名单定义公开件——`skills/ukp/SKILL.md` 已入 `files`，npm tarball 机械事实（非模仿）；内层其余文件（含 owner 另用的 package.json）不在白名单即不发布
+  - 公开白名单 = `[SKILL.md, reference/manifest.md]` 两件（外层 `ukp/package.json` `files` 精确收，npm tarball 与公共仓机械事实）；`reference/manifest.md` 是 manifest 声明语法的 normative 正本（发布面说明书），meta 层 spec 引用它；内层其余文件（含 owner 另用的 package.json）不在白名单即不发布
   
   - 英文、产品介绍体
   

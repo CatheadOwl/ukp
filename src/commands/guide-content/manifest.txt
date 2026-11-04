@@ -1,0 +1,20 @@
+UKP guide manifest — the Service manifest declaration reference
+
+The manifest (.ukp/service.toml) is the one file you author by hand. The
+full reference — every legal key, the grammar, and loadable examples — ships
+inside the package at skills/ukp/reference/manifest.md (same path in the
+public repository). An anchor test keeps that page in lockstep with the
+loader's schema.
+
+Cheat sheet:
+- [capabilities] is required; an empty table is the valid read-only endpoint
+  (derived read/nav only).
+- read and nav are derived on every local Service - no declaration needed;
+  propose and search are not derived and must be declared.
+- File-native capabilities (propose, nav) and rg accept a bare declaration;
+  every other capability (search today) must declare a non-empty provider.
+- [[dependencies]] entries take endpoint + kind (authority | context |
+  implementation | evidence) + optional reason; the same endpoint twice is
+  refused.
+- name and description are optional; the schema is strict - unknown keys are
+  refused, not ignored.

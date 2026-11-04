@@ -22,6 +22,7 @@ import {
   renderRgGuide,
   renderRemoteGuide,
   renderProposeGuide,
+  renderManifestGuide,
   renderProposeHelp,
   renderNavHelp,
   renderRgHelp,
@@ -962,7 +963,17 @@ describe("CLI bootstrap", () => {
   });
 
   test("guide help lists the topics and subtopics", () => {
-    expect(renderGuideHelp().replace(/\s+/g, " ")).toContain("guide topic: service | service qmd | client | rg | remote | propose");
+    expect(renderGuideHelp().replace(/\s+/g, " ")).toContain("guide topic: service | service qmd | client | rg | remote | propose | manifest");
+  });
+
+  // The manifest topic is a thin pointer: the normative grammar lives in the
+  // published reference (skills/ukp/reference/manifest.md), anchored to the
+  // zod schema by manifest-reference.test.ts — the guide just routes there.
+  test("guide manifest points at the published declaration reference", () => {
+    const guide = renderManifestGuide().replace(/\s+/g, " ");
+    expect(guide).toContain("skills/ukp/reference/manifest.md");
+    expect(guide).toContain("[capabilities] is required");
+    expect(guide).toContain("authority | context | implementation | evidence");
   });
 
   // ADR-RG-005 design condition 4: rg stops being the only command without

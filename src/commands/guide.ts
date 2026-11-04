@@ -27,6 +27,7 @@ export const GUIDE_TOPICS: ReadonlyArray<readonly [string, string]> = [
   ["rg", "lexical search and file enumeration: modes, glob semantics, visibility tiers"],
   ["remote", "serve and consume remote endpoints with a host door, ssh, or TLS"],
   ["propose", "submit idempotent change proposals to a Service"],
+  ["manifest", "the .ukp/service.toml declaration reference — every legal key, grammar, and example"],
 ];
 
 /** Single-source command spec (ADR 0024): summary feeds the root help via
@@ -39,7 +40,7 @@ export const GUIDE_SPEC: UkpCommandSpec = {
   description: "Show short operational guides.",
   usage: "<topic> [subtopic]",
   arguments: [
-    { name: "topic", required: true, help: "guide topic: service | service qmd | client | rg | remote | propose" },
+    { name: "topic", required: true, help: "guide topic: service | service qmd | client | rg | remote | propose | manifest" },
     { name: "subtopic", help: "provider subtopic for a topic, e.g. 'qmd' as in 'ukp guide service qmd'" },
   ],
   strictArguments: true,
@@ -73,7 +74,7 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
       return { exitCode: 0, stdout: renderServiceGuide(), stderr: "" };
     }
     if (subtopic) {
-      throw new KitUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client, rg, remote, propose`);
+      throw new KitUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client, rg, remote, propose, manifest`);
     }
     switch (topic) {
       case "client":
@@ -84,8 +85,10 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
         return { exitCode: 0, stdout: renderRemoteGuide(), stderr: "" };
       case "propose":
         return { exitCode: 0, stdout: renderProposeGuide(), stderr: "" };
+      case "manifest":
+        return { exitCode: 0, stdout: renderManifestGuide(), stderr: "" };
       default:
-        throw new KitUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client, rg, remote, propose`);
+        throw new KitUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client, rg, remote, propose, manifest`);
     }
   } catch (error) {
     if (error instanceof HelpRequestError) {
@@ -128,6 +131,10 @@ export function renderRemoteGuide(): string {
 
 export function renderProposeGuide(): string {
   return readGuideContent("propose.txt");
+}
+
+export function renderManifestGuide(): string {
+  return readGuideContent("manifest.txt");
 }
 
 export function renderGuideUsageError(message: string): string {
