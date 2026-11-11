@@ -231,7 +231,8 @@ ukp serve token list                          # labels, key ids, scopes
 ukp serve token revoke liku                   # next request is a 401
 ```
 
-Scopes are `name:ro|rw` comma-separated (full power is the explicit `*:rw`);
+Scopes are `name:ro|rw` comma-separated (full power is the explicit `*:rw`;
+a read-only scope has no propose route);
 the file stores hashes only, and the door re-reads it on every request —
 deleting a line revokes without a restart. A scoped key sees only its own
 endpoints: out-of-scope names answer exactly like nonexistent ones. While

@@ -949,6 +949,7 @@ describe("CLI bootstrap", () => {
   test("guide propose is a short CLI-accessible propose-path guide", () => {
     const output: string[] = [];
     expect(renderProposeGuide()).toContain("UKP propose quickstart");
+    expect(renderProposeGuide()).toContain("Remote submitters also need the key's rw scope - a read-only scope has no propose route (see ukp guide remote)");
     expect(runCli(["guide", "propose"], (message) => output.push(message))).toBe(0);
     const guide = output.join("\n");
     expect(guide).toContain("three outcomes: created (new, revision 1), unchanged (identical content, no write), updated (replaced, revision +1)");

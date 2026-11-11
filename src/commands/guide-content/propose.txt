@@ -15,6 +15,7 @@ Model:
    provider = "file"
    The provider line is optional (a bare [capabilities.propose] means the file provider).
    Optional [capabilities.propose.config] folder = "inbox" (default) sets where proposals land.
+   Remote submitters also need the key's rw scope - a read-only scope has no propose route (see ukp guide remote).
 
 2. Submit a proposal
    ukp propose --endpoint <name> --file draft.md
