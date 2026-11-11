@@ -1684,9 +1684,10 @@ describe("CLI bootstrap", () => {
     capabilities: string[] | null;
     base_tier: string[] | null;
     available: boolean | null;
+    token_residence: "os-store" | "inline" | "none" | null;
     warning: string | null;
   }
-  const SNAPSHOT_FIELDS = ["available", "base_tier", "capabilities", "declared_name", "kind", "location", "name", "warning"];
+  const SNAPSHOT_FIELDS = ["available", "base_tier", "capabilities", "declared_name", "kind", "location", "name", "token_residence", "warning"];
 
   function parseSnapshotEnvelope(lines: readonly string[]): { schema: string; command: string; endpoints: SnapshotRow[] } {
     return JSON.parse(lines.join("\n"));
@@ -1735,6 +1736,7 @@ describe("CLI bootstrap", () => {
       capabilities: ["search", "update"],
       base_tier: ["nav", "read", "rg"],
       available: true,
+      token_residence: null,
       warning: null,
     });
     const degraded = envelope.endpoints.find((row) => row.name === "bare")!;
@@ -1752,6 +1754,7 @@ describe("CLI bootstrap", () => {
       capabilities: null,
       base_tier: null,
       available: null,
+      token_residence: "none",
       warning: null,
     });
     // The offline promise, pinned structurally: with a remote binding

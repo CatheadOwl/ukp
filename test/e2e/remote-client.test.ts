@@ -13,6 +13,7 @@ import {
 } from "../../src/registry.ts";
 import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../../src/server.ts";
 import { executeListCommand, executeRegisterCommand } from "../../src/commands/inventory.ts";
+import { inMemoryCredentialStore, unavailableCredentialStore } from "../../src/credential-store.ts";
 import {
   classifyWakeFailure,
   fetchDiscoveryDocumentAt,
@@ -240,6 +241,7 @@ describe("W4 transparent transport + stored token (D-078)", () => {
     const result = await asResult(executeRegisterCommand(["--url", info.url, "--token", "stored-token"], {
       currentDirectory: root,
       registryPath,
+      credentialStore: unavailableCredentialStore(),
     }));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("token stored in registry binding");
@@ -254,6 +256,27 @@ describe("W4 transparent transport + stored token (D-078)", () => {
     }));
     expect(search.exitCode).toBe(0);
     expect(search.stdout).toContain("read: ukp read ukp://serve-fixture/documents/cad-notes.md#L1");
+  });
+
+  test("register --token prefers the OS credential store (ADR-REM-013 / W14)", async () => {
+    const { resolveRemoteToken } = await import("../../src/capabilities/remote-client.ts");
+    const { info } = startRemote({ tokens: ["stored-token"] });
+    const storeMap = new Map<string, string>();
+    const result = await asResult(executeRegisterCommand(["--url", info.url, "--token", "stored-token"], {
+      currentDirectory: root,
+      registryPath,
+      credentialStore: inMemoryCredentialStore(storeMap),
+    }));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("auth: token stored in the OS credential store");
+    const binding = readRegistry(registryPath).find((b) => b.name === "serve-fixture");
+    // The binding carries the pointer, never the secret — and resolution
+    // reads through it (env > store > inline).
+    expect(binding?.token).toBeUndefined();
+    expect(binding?.token_ref).toBe("os-store");
+    expect(storeMap.get("serve-fixture")).toBe("stored-token");
+    expect(resolveRemoteToken(binding!, inMemoryCredentialStore(storeMap))).toBe("stored-token");
+    expect(resolveRemoteToken(binding!, unavailableCredentialStore())).toBeUndefined();
   });
 
   test("openRemoteTransport returns the url base directly for http bindings", async () => {
@@ -915,7 +938,7 @@ describe("remote TLS identity (W5' / D-079)", () => {
       expect(first.info.url.startsWith("https://")).toBe(true);
       const registered = await asResult(executeRegisterCommand(
         ["--url", first.info.url, "--token", token],
-        { currentDirectory: root, registryPath },
+        { currentDirectory: root, registryPath, credentialStore: unavailableCredentialStore() },
       ));
       expect(registered.exitCode).toBe(0);
       expect(registered.stdout).toContain("tls: pinned sha256/");
@@ -987,7 +1010,7 @@ describe("remote TLS identity (W5' / D-079)", () => {
 
       const refreshed = await asResult(executeRegisterCommand(
         ["--url", first.info.url, "--token", token],
-        { currentDirectory: root, registryPath },
+        { currentDirectory: root, registryPath, credentialStore: unavailableCredentialStore() },
       ));
       expect(refreshed.exitCode).toBe(0);
       const searchAfter = await asResult(executeSearchCommand(

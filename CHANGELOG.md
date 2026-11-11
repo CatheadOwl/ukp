@@ -6,6 +6,15 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- Consumer-side tokens now register into the OS credential store by
+  default (ADR-REM-013): Windows DPAPI (via the spawn-relay carrier),
+  macOS Keychain, or Linux Secret Service — the registry keeps only a
+  `token_ref` pointer and `resolveRemoteToken` reads env > store >
+  inline. When no store exists the register output says so loudly and
+  the plaintext registry entry (with its `.bak`) remains the fallback;
+  `ukp list --json` reports each remote binding's `token_residence`,
+  and unregister removes the stored secret with its binding.
+
 - The manifest declaration reference ships in the package:
   `skills/ukp/reference/manifest.md` is the normative grammar for
   `.ukp/service.toml` (every legal key, constraints, loadable examples),

@@ -20,6 +20,7 @@ import {
 } from "../registry.ts";
 import { spkiPinOf } from "./tls-identity.ts";
 import { toolRelayScript } from "../spawn-relay.ts";
+import { defaultCredentialStore, type CredentialStore } from "../credential-store.ts";
 import type { SearchEndpointOutcome } from "./search.ts";
 import type { NavEnvelope } from "./nav.ts";
 import type { ProposeResult, ProposeStatus } from "./propose.ts";
@@ -43,11 +44,17 @@ export function remoteTokenFor(endpointName: string): string | undefined {
   return process.env[`UKP_ENDPOINT_${endpointName.toUpperCase().replace(/-/g, "_")}_TOKEN`];
 }
 
-/** Credential resolution (D-078): env wins, the stored binding token is the
- * fallback — injected credentials (CI/agent env) never get shadowed by the
- * file, while the file keeps interactive use zero-ceremony. */
-export function resolveRemoteToken(binding: RegistryBinding): string | undefined {
-  return remoteTokenFor(binding.name) ?? binding.token;
+/** Credential resolution (D-078, residence widened by ADR-REM-013): env
+ * wins — injected credentials (CI/agent env) never get shadowed; then the
+ * OS credential store when the binding points at it (token_ref); the
+ * inline registry token remains the no-store fallback. */
+export function resolveRemoteToken(
+  binding: RegistryBinding,
+  store: CredentialStore = defaultCredentialStore(),
+): string | undefined {
+  return remoteTokenFor(binding.name)
+    ?? (binding.token_ref === "os-store" ? store.get(binding.name) : undefined)
+    ?? binding.token;
 }
 
 /** `UKP_REMOTE_TIMEOUT_MS` mirrors `UKP_PROVIDER_TIMEOUT_MS` (60s default). */

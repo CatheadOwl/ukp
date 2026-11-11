@@ -27,8 +27,13 @@ const bindingSchema = z.object({
   url: z.string().min(1).optional(),
   instance_uid: z.string().min(1).optional(),
   /** Client credential stored in the binding (D-078: plaintext, 0600 file —
-   * AWS credentials-file / netrc convention; env override wins at call time). */
+   * the NO-STORE FALLBACK residence since ADR-REM-013; env override wins at
+   * call time). Mutually exclusive with token_ref. */
   token: z.string().min(1).optional(),
+  /** Store pointer (ADR-REM-013 / W14): the secret lives in the OS
+   * credential store keyed by the binding handle; the raw value never
+   * touches the registry or its .bak. Mutually exclusive with token. */
+  token_ref: z.literal("os-store").optional(),
   /** Remote-declared endpoint name snapshotted at registration
    * (ADR-REM-007 / D-086): provenance and expected-assertion target. The
    * binding's `name` is the consumer-chosen handle (defaults to the declared
@@ -77,8 +82,12 @@ export interface RegistryBinding {
   instance_uid?: string;
   /** Remote-declared name snapshot (ADR-REM-007 / D-086); see bindingSchema. */
   declared_name?: string;
-  /** Remote-only stored credential (plaintext; env takes precedence). */
+  /** Remote-only stored credential (the no-store fallback residence since
+   * ADR-REM-013; env takes precedence). Mutually exclusive with token_ref. */
   token?: string;
+  /** Store pointer (ADR-REM-013): the secret lives in the OS credential
+   * store keyed by this binding's handle. */
+  token_ref?: "os-store";
   /** Remote-only TLS anchor (W5' / D-079); see bindingSchema. */
   tls_cert?: string;
   tls_pin?: string;
@@ -282,16 +291,22 @@ function validateBindings(endpoints: readonly RegistryBinding[]): RegistryBindin
       if ((endpoint.tls_cert !== undefined) !== (endpoint.tls_pin !== undefined)) {
         throw new RegistryError(`remote binding '${endpoint.name}' must carry tls_cert and tls_pin together`);
       }
+      if (endpoint.token !== undefined && endpoint.token_ref !== undefined) {
+        throw new RegistryError(
+          `remote binding '${endpoint.name}' carries both token and token_ref — inline and store residences are mutually exclusive (ADR-REM-013)`,
+        );
+      }
       assertRemoteUrlAllowed(endpoint.url);
       if (urls.has(endpoint.url)) throw new RegistryError(`duplicate remote endpoint url '${endpoint.url}'`);
       urls.add(endpoint.url);
     } else {
       if (
         endpoint.url !== undefined || endpoint.instance_uid !== undefined || endpoint.token !== undefined
+        || endpoint.token_ref !== undefined
         || endpoint.declared_name !== undefined
         || endpoint.tls_cert !== undefined || endpoint.tls_pin !== undefined
       ) {
-        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid/token/declared_name/tls)`);
+        throw new RegistryError(`local binding '${endpoint.name}' must not carry remote fields (url/instance_uid/token/token_ref/declared_name/tls)`);
       }
       if (endpoint.path === undefined || !isAbsolute(endpoint.path)) {
         throw new RegistryError(`registry path must be absolute: ${endpoint.path ?? "(missing)"}`);
@@ -368,6 +383,7 @@ function toSerializableBinding(binding: RegistryBinding): Record<string, string>
       url: binding.url!,
       ...(binding.declared_name !== undefined ? { declared_name: binding.declared_name } : {}),
       ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
+      ...(binding.token_ref !== undefined ? { token_ref: binding.token_ref } : {}),
       ...(binding.token !== undefined ? { token: binding.token } : {}),
       ...(binding.tls_cert !== undefined ? { tls_cert: binding.tls_cert } : {}),
       ...(binding.tls_pin !== undefined ? { tls_pin: binding.tls_pin } : {}),
@@ -448,6 +464,7 @@ export function registerRemoteBinding(
     url: binding.url!,
     ...(binding.declared_name !== undefined ? { declared_name: binding.declared_name } : {}),
     ...(binding.instance_uid !== undefined ? { instance_uid: binding.instance_uid } : {}),
+    ...(binding.token_ref !== undefined ? { token_ref: binding.token_ref } : {}),
     ...(binding.token !== undefined ? { token: binding.token } : {}),
     ...(binding.tls_cert !== undefined ? { tls_cert: binding.tls_cert } : {}),
     ...(binding.tls_pin !== undefined ? { tls_pin: binding.tls_pin } : {}),
@@ -573,6 +590,7 @@ export function registerRemoteAt(
     declared_name?: string;
     instance_uid?: string;
     token?: string;
+    token_ref?: "os-store";
     tls_cert?: string;
     tls_pin?: string;
   },

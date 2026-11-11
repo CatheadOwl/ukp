@@ -18,6 +18,7 @@ import {
   executeListCommand,
   executeRegisterCommand,
 } from "../../src/commands/inventory.ts";
+import { inMemoryCredentialStore, unavailableCredentialStore } from "../../src/credential-store.ts";
 import { executeSearchCommand } from "../../src/commands/search.ts";
 import { executeReadCommand } from "../../src/commands/read.ts";
 import { executeRgCommand } from "../../src/commands/rg.ts";
@@ -154,11 +155,28 @@ describe("ukp register --url <door> (W7 import)", () => {
 
   test("registering a door with --token discloses the consumer-side secret residence", async () => {
     const { info } = startDoor();
-    const result = await asResult(executeRegisterCommand(["--url", info.url, "--token", "door-key"], context));
+    const result = await asResult(executeRegisterCommand(
+      ["--url", info.url, "--token", "door-key"],
+      { ...context, credentialStore: unavailableCredentialStore() },
+    ));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain(
-      "auth: token stored in every imported binding (plaintext, 0600 registry file; treat it as a secret)",
+      "auth: token stored in every imported binding (plaintext fallback - no OS credential store available; 0600 registry file; treat it as a secret)",
     );
+  });
+
+  test("a door import with --token lands store pointers when a store exists (ADR-REM-013)", async () => {
+    const { info } = startDoor();
+    const storeMap = new Map<string, string>();
+    const result = await asResult(executeRegisterCommand(
+      ["--url", info.url, "--token", "door-key"],
+      { ...context, credentialStore: inMemoryCredentialStore(storeMap) },
+    ));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("auth: token stored in the OS credential store (keyed per endpoint handle)");
+    const bindings = readRegistry(registryPath);
+    expect(bindings.every((binding) => binding.token === undefined && binding.token_ref === "os-store")).toBe(true);
+    expect([...storeMap.keys()].sort()).toEqual(["archive", "notes"]);
   });
 
   test("a path segment imports exactly that endpoint through the door", async () => {

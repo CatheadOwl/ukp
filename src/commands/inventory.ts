@@ -31,6 +31,7 @@ import {
   resolveRemoteToken,
   type RemoteTransportPool,
 } from "../capabilities/remote-client.ts";
+import { defaultCredentialStore, type CredentialStore } from "../credential-store.ts";
 import {
   KitUsageError,
   parseKitArgs,
@@ -46,6 +47,11 @@ export interface InventoryCommandContext {
   resolveProvider?: ProviderResolver;
   /** Test injection point for the ssh binary behind ssh:// transports. */
   sshCommand?: readonly string[];
+  /** Credential-store injection (ADR-REM-013 / W14): absent = the default
+   * OS store (win32 DPAPI / mac security / linux secret-tool); tests pin
+   * both register paths deterministically with the in-memory and
+   * unavailable stubs. */
+  credentialStore?: CredentialStore;
   /** Streaming seam (ukp_list W2 / ADR 0026 rule 3): when present, the
    * remote-mixed branch delivers stdout line-by-line through it — the header
    * and every local row flush synchronously before any network work starts,
@@ -204,6 +210,11 @@ export interface ListEndpointSnapshot {
   /** Local rows: the Service Manifest loaded (true) or the row degraded
    * (false). Remote rows: null — remote liveness is not an offline fact. */
   available: boolean | null;
+  /** Remote rows: where the binding's bearer secret resides
+   * (ADR-REM-013) — "os-store" (token_ref), "inline" (plaintext registry
+   * fallback), or "none" (no stored credential; env-only). Local rows:
+   * null — locals carry no credentials (INV-11). */
+  token_residence: "os-store" | "inline" | "none" | null;
   /** The same one-line degradation headline the text face emits on
    * stderr; null when the row is not degraded. */
   warning: string | null;
@@ -313,6 +324,7 @@ function localSnapshotRow(endpoint: { name: string; path: string }): ListEndpoin
     capabilities: facts.capabilities,
     base_tier: facts.baseTier,
     available: facts.available,
+    token_residence: null,
     warning: facts.warning,
   };
 }
@@ -331,6 +343,9 @@ function remoteSnapshotRow(endpoint: RegistryBinding): ListEndpointSnapshot {
     capabilities: null,
     base_tier: null,
     available: null,
+    token_residence: endpoint.token_ref === "os-store"
+      ? "os-store"
+      : endpoint.token !== undefined ? "inline" : "none",
     warning: null,
   };
 }
@@ -486,6 +501,23 @@ function importDoorEndpoints(
   const existing = readRegistry(context.registryPath);
   const lines = [`door ${origin}: ${door.endpoints.length} endpoint(s)`];
   let landed = 0;
+  // ADR-REM-013 / W14: with a token in hand, the OS credential store is the
+  // default residence; a failed put falls back inline for THAT handle, and
+  // the summary line at the end states which form landed — never a silent
+  // downgrade.
+  const store = context.credentialStore ?? defaultCredentialStore();
+  const storeMode = credentials.token !== undefined && store.available();
+  let storedHandles = 0;
+  let inlineHandles = 0;
+  const tokenField = (handle: string): { token_ref?: "os-store"; token?: string } => {
+    if (credentials.token === undefined) return {};
+    if (storeMode && store.put(handle, credentials.token)) {
+      storedHandles += 1;
+      return { token_ref: "os-store" };
+    }
+    inlineHandles += 1;
+    return { token: credentials.token };
+  };
   for (const target of targets) {
     // N-5 (ADR-REM-007): the url path segment stays the door-declared name —
     // the door routes by it; only the local handle may differ.
@@ -513,7 +545,7 @@ function importDoorEndpoints(
         declared_name: target.name,
         url,
         instance_uid: target.instance_uid,
-        ...(credentials.token !== undefined ? { token: credentials.token } : {}),
+        ...tokenField(sameUrl.name),
         ...(credentials.tls_cert !== undefined && credentials.tls_pin !== undefined
           ? { tls_cert: credentials.tls_cert, tls_pin: credentials.tls_pin }
           : {}),
@@ -535,7 +567,7 @@ function importDoorEndpoints(
       declared_name: target.name,
       url,
       instance_uid: target.instance_uid,
-      ...(credentials.token !== undefined ? { token: credentials.token } : {}),
+      ...tokenField(handle),
       ...(credentials.tls_cert !== undefined && credentials.tls_pin !== undefined
         ? { tls_cert: credentials.tls_cert, tls_pin: credentials.tls_pin }
         : {}),
@@ -545,6 +577,13 @@ function importDoorEndpoints(
       handle !== target.name
         ? `imported: ${handle}  (declares ${target.name}; ${declaredCapabilitySummary(target.capabilities)})`
         : `imported: ${handle}  (${declaredCapabilitySummary(target.capabilities)})`,
+    );
+  }
+  if (credentials.token !== undefined) {
+    lines.push(
+      storedHandles > 0 && inlineHandles === 0
+        ? "auth: token stored in the OS credential store (keyed per endpoint handle)"
+        : `auth: token stored in every imported binding (plaintext fallback${storeMode ? " - an OS store write failed" : " - no OS credential store available"}; 0600 registry file; treat it as a secret)`,
     );
   }
   return {
@@ -661,15 +700,9 @@ async function executeRegisterRemote(
       const nameHint = wellKnown.door.bearerRequired && token === undefined
         ? [`note: this door requires a bearer token; pass --token or set UKP_ENDPOINT_<NAME>_TOKEN per endpoint`]
         : [];
-      // Consumer-side secret disclosure (2026-11-11 walkthrough finding 1a):
-      // the raw key lands in plaintext bindings the moment they are written —
-      // say so where the secret is created, not only in the README.
-      const secretHint = token !== undefined
-        ? ["auth: token stored in every imported binding (plaintext, 0600 registry file; treat it as a secret)"]
-        : [];
       return {
         ...result,
-        stdout: [...result.stdout.split("\n"), ...nameHint, ...secretHint].join("\n"),
+        stdout: [...result.stdout.split("\n"), ...nameHint].join("\n"),
       };
     }
 
@@ -714,12 +747,27 @@ async function executeRegisterRemote(
       && requestedHandle === declaredName
       ? tracked.name
       : requestedHandle;
+    // ADR-REM-013 / W14 residence decision (single-endpoint form): the OS
+    // credential store is the default; the inline registry token is the
+    // loud fallback when no store exists or the write fails.
+    const credentialStore = context.credentialStore ?? defaultCredentialStore();
+    let tokenFields: { token_ref?: "os-store"; token?: string } = {};
+    let authLine: string | undefined;
+    if (token !== undefined) {
+      if (credentialStore.available() && credentialStore.put(handle, token)) {
+        tokenFields = { token_ref: "os-store" };
+        authLine = `auth: token stored in the OS credential store; env UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN overrides`;
+      } else {
+        tokenFields = { token };
+        authLine = `auth: token stored in registry binding (plaintext fallback${credentialStore.available() ? " - an OS store write failed" : " - no OS credential store available"}; treat it as a secret; env UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN overrides)`;
+      }
+    }
     registerRemoteAt(context.registryPath, {
       name: handle,
       declared_name: declaredName,
       url,
       instance_uid: wellKnown.discovery.doc.instance_uid,
-      ...(token !== undefined ? { token } : {}),
+      ...tokenFields,
       ...(pinSelfSigned && tlsProbe !== undefined
         ? { tls_cert: tlsProbe.certPem, tls_pin: tlsProbe.spkiPin }
         : {}),
@@ -734,8 +782,8 @@ async function executeRegisterRemote(
         ? [`tls: pinned ${tlsProbe.spkiPin} (self-signed; compare with the serve banner out-of-band on untrusted networks)`]
         : []),
       ...(wellKnown.discovery.doc.description !== undefined ? [`description: ${wellKnown.discovery.doc.description}`] : []),
-      ...(token !== undefined
-        ? [`auth: token stored in registry binding (plaintext; treat it as a secret; env UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN overrides)`]
+      ...(authLine !== undefined
+        ? [authLine]
         : wellKnown.discovery.bearerRequired && envToken === undefined
           ? [`note: this endpoint requires a bearer token; pass --token or set UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN`]
           : []),
@@ -993,7 +1041,11 @@ async function renderRemoteListRow(
   const name = remoteRowName(endpoint);
   try {
     const transport = await pool.acquire(endpoint);
-    const discovery = await fetchDiscoveryDocument(endpoint, transport, resolveRemoteToken(endpoint));
+    const discovery = await fetchDiscoveryDocument(
+      endpoint,
+      transport,
+      resolveRemoteToken(endpoint, defaultCredentialStore()),
+    );
     const extras = Object.entries(discovery.doc.capabilities)
       .filter(([, capability]) => capability.derived !== true)
       .map(([name]) => name)
@@ -1121,6 +1173,10 @@ export function executeUnregisterCommand(
       throw new KitUsageError("unregister requires a valid endpoint name via --endpoint <name>");
     }
     const previous = readRegistry(context.registryPath).find((binding) => binding.name === name);
+    // ADR-REM-013: a store-resident secret leaves with its binding.
+    if (previous?.token_ref === "os-store") {
+      (context.credentialStore ?? defaultCredentialStore()).remove(name);
+    }
     unregisterAt(context.registryPath, name);
     return {
       exitCode: 0,

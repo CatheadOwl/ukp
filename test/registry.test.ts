@@ -55,6 +55,37 @@ describe("Registry", () => {
     expect(encoded.trimEnd().endsWith('tls_pin = "sha256/AAAA"')).toBe(true);
   });
 
+  test("token_ref is the store-pointer residence (ADR-REM-013): serializes, round-trips, stays exclusive", () => {
+    const encoded = serializeRegistry([{
+      name: "notes",
+      kind: "remote",
+      url: "https://ali.example",
+      instance_uid: "6f1c2b3a-1111-4000-8000-000000000001",
+      token_ref: "os-store",
+    }]);
+    expect(encoded).toContain('token_ref = "os-store"');
+    const back = parseRegistry(encoded);
+    expect(back[0]!.token_ref).toBe("os-store");
+    expect(back[0]!.token).toBeUndefined();
+    // inline and store residences are mutually exclusive (INV-11)
+    expect(() => serializeRegistry([{
+      name: "notes",
+      kind: "remote",
+      url: "https://ali.example",
+      instance_uid: "6f1c2b3a-1111-4000-8000-000000000002",
+      token: "t0",
+      token_ref: "os-store",
+    }])).toThrow("mutually exclusive");
+    // locals must not carry the pointer either (field-bleed, INV-11)
+    const localSource = `
+[[endpoints]]
+name = "cad"
+path = "${resolve("/cad").replaceAll("\\", "\\\\")}"
+token_ref = "os-store"
+`;
+    expect(() => parseRegistry(localSource)).toThrow("must not carry remote fields");
+  });
+
   test("register is idempotent and rejects both conflict dimensions", () => {
     const { registry, service } = tempRegistry();
     const first = registerAt(registry, "cad", service);

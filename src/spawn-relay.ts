@@ -30,8 +30,21 @@
 export const TOOL_NOT_FOUND_EXIT = 127;
 
 /** PS single-quote literal: the only escape is doubling inner single quotes. */
-function psSingleQuoted(arg: string): string {
+export function psSingleQuoted(arg: string): string {
   return `'${arg.replaceAll("'", "''")}'`;
+}
+
+/** General powershell carrier for a custom script (W14 / ADR-REM-013): same
+ * -EncodedCommand mechanism as toolRelayArgv, minus the tool-exec template —
+ * the credential store's DPAPI scripts ride this so the bun→powershell edge
+ * stays behind the one-level intermediary that escapes the Defender tax. */
+export function encodedPowershell(script: string): string[] {
+  return [
+    "powershell",
+    "-NoProfile",
+    "-EncodedCommand",
+    Buffer.from(script, "utf16le").toString("base64"),
+  ];
 }
 
 /** The relay script. `notFoundGuard` adds a Get-Command pre-check that exits

@@ -281,9 +281,11 @@ probing an endpoint it cannot touch gets a route denial (`no route for
 a read-only scope, an absent scope, and an undeclared write route.
 
 Accepted tradeoffs, disclosed rather than hidden: tokens are long-lived
-static bearer secrets stored client-side in the 0600 registry file (a
-crash-safety `.bak` copy can persist beside it — treat both as secrets)
-or an environment variable (the same tradeoff as `~/.aws/credentials`); the
+static bearer secrets stored client-side — in the OS credential store by
+default (Windows DPAPI, macOS Keychain, Linux Secret Service; the registry
+keeps only a `token_ref` pointer), or in the 0600 registry file with its
+crash-safety `.bak` copy when no store exists (the register output says
+so — never a silent downgrade), or in an environment variable; the
 Windows door generator (`ukp serve --print-task`) embeds the token in a
 0600 `start-door.cmd` it never prints; identity pinning is
 trust-on-first-use (an SSH-style first-connect window). Hardening
