@@ -24,6 +24,12 @@
       "prompt": "我在一个条目里看到跨仓引用 `ls-gates:write-time/simple-readme/fixer-prompt-v1.md`，帮我打开看看内容。",
       "expected_output": "面触发：ukp list 查名——在注册表即 ukp read --endpoint 开（基径 = 注册根）；不在则让位或先 register，不硬凑",
       "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "我想把这台机器上的两个知识 endpoint 分享给另一台机器（liku）上的 agent 用，但不想给对方任何 ssh 进我这台机器的能力，怎么办？",
+      "expected_output": "http 门路线：ukp serve --select <要分享的> --tls 开门 → ukp serve token add liku \"a:ro,b:ro\" 发打标签作用域 key → 对端 ukp register --url + --token 消费；不签发 ssh 凭据，撤销 = ukp serve token revoke",
+      "files": []
     }
   ]
 }

@@ -44,7 +44,11 @@ export function resolveScope(input: ScopeInput): ResolvedScope {
   if (explicit !== undefined) {
     const bindings = explicit.map((name) => {
       const binding = byName.get(name);
-      if (!binding) throw new ScopeError(`unknown endpoint '${name}'`);
+      if (!binding) {
+        throw new ScopeError(
+          `unknown endpoint '${name}'; run 'ukp list' to inspect registrations, or 'ukp register --url <url>' to consume a remote endpoint`,
+        );
+      }
       return binding;
     });
     return { source: "explicit", bindings, dangling: [], warnings: [] };
@@ -72,7 +76,9 @@ export function resolveScope(input: ScopeInput): ResolvedScope {
     }
   });
   if (bindings.length === 0) {
-    throw new ScopeError("Client Config does not resolve to any registered endpoint");
+    throw new ScopeError(
+      "Client Config does not resolve to any registered endpoint; run 'ukp register' to add one, or 'ukp use' to edit the default set",
+    );
   }
   return { source: "client-config", bindings, dangling, warnings, configPath };
 }

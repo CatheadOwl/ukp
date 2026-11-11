@@ -86,4 +86,16 @@ describe("Client scope resolution", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("scope failure errors carry recovery gestures", () => {
+    const root = workspace("default_endpoints = [\"gone\"]\n");
+    try {
+      expect(() => resolveScope({ currentDirectory: join(root, "workspace"), registry, explicitEndpoints: ["gone"] }))
+        .toThrow("unknown endpoint 'gone'; run 'ukp list' to inspect registrations, or 'ukp register --url <url>' to consume a remote endpoint");
+      expect(() => resolveScope({ currentDirectory: join(root, "workspace"), registry }))
+        .toThrow("Client Config does not resolve to any registered endpoint; run 'ukp register' to add one, or 'ukp use' to edit the default set");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

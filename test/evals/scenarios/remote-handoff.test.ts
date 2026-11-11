@@ -13,7 +13,9 @@ import { buildServedTopology, freePort, waitServeReady } from "../harness/scenar
  * registration via `--url` lands the endpoint under the declared name, and
  * every handoff the remote search output offers — the human-mode `read:` hint
  * and the printed `ukp://` uri — replays verbatim into a successful read over
- * the wire.
+ * the wire. The cold-client pair brackets the loop: an unregistered `ukp://`
+ * miss must teach the recovery gestures, and the once-failed read replays
+ * after the taught `register --url` runs.
  */
 
 const fixtureCopy = createQmdFixtureCopy("evals-remote-handoff");
@@ -38,6 +40,25 @@ afterAll(() => {
 });
 
 describe("scenario: remote-handoff (register --url → remote search → read)", () => {
+  test(
+    "an unknown-endpoint miss on a cold client teaches the recovery gestures",
+    () => {
+      // The stranger's first moment on a fresh machine: a handed-over
+      // ukp:// uri names an endpoint this registry does not have. The
+      // failure must teach — name the inspection command and the one-shot
+      // remote consume gesture — and the taught `ukp list` must itself run.
+      const missed = topology.clientRun(["read", "ukp://fixture-qmd/documents/cad-notes.md"]);
+      expect(missed.exitCode).toBe(1);
+      expect(missed.stderr).toContain("unknown endpoint 'fixture-qmd'");
+      expect(missed.stderr).toContain("'ukp list'");
+      expect(missed.stderr).toContain("'ukp register --url <url>'");
+
+      const listed = topology.clientRun(["list"]);
+      expect(listed.exitCode).toBe(0);
+    },
+    30_000,
+  );
+
   test(
     "register --url lands the declared endpoint name with the token stored",
     () => {
@@ -125,6 +146,19 @@ describe("scenario: remote-handoff (register --url → remote search → read)",
       expect(envelope.schema).toMatch(/^ukp\.search\./);
       expect(envelope.endpoints[0]).toMatchObject({ name: "fixture-qmd", status: "succeeded" });
       expect(envelope.warnings).toEqual([]);
+    },
+    30_000,
+  );
+
+  test(
+    "following the taught gesture recovers the once-failed read",
+    () => {
+      // The same read that failed on the cold client replays exit 0 once
+      // the taught register --url gesture has been followed (the earlier
+      // test performed the registration).
+      const recovered = topology.clientRun(["read", "ukp://fixture-qmd/documents/cad-notes.md"]);
+      expect(recovered.exitCode).toBe(0);
+      expect(recovered.stdout).toContain(expectedPhrase);
     },
     30_000,
   );
