@@ -392,7 +392,7 @@ export function readSubmissionFile(
     return {
       failure: {
         errorClass: "submission-file-unreadable",
-        message: `cannot read --file '${file}': ${detail}`,
+        message: `cannot read --file '${file}': ${detail} (resolved from the current directory: ${filePath})`,
       },
     };
   }

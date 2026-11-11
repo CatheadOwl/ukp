@@ -701,7 +701,17 @@ function startServeListener(
   const scheme = options.tlsMaterial !== undefined ? "https" : "http";
 
   if (options.systemdSocket !== true) {
-    const server = Bun.serve({ hostname: options.host, port: options.port ?? 8570, ...tls, fetch });
+    let server: ReturnType<typeof Bun.serve>;
+    try {
+      server = Bun.serve({ hostname: options.host, port: options.port ?? 8570, ...tls, fetch });
+    } catch (error) {
+      // Startup failures are usually a taken port (Bun's own message names
+      // it) — teach the escape hatch the walkthrough agent had to recall
+      // from --help (2026-11-11 finding 4). Other causes keep the raw
+      // reason verbatim.
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new ServeSetupError(/port|in use|EADDRINUSE/i.test(reason) ? `${reason} - pass --port <n> (or --port 0) to listen elsewhere` : reason);
+    }
     idle?.bind(() => server.stop(true));
     const port = server.port ?? (options.port ?? 8570);
     return { server, stopAll: () => server.stop(true), publicUrl: `${scheme}://${options.host}:${port}`, port };
@@ -883,8 +893,10 @@ function bearerGate(
 /** Per-request roster admission from the matched key's scopes (rehearsal
  * point E): read routes demand `ro`, the propose route demands `rw`. A
  * `ro`-scoped endpoint is therefore absent from the write face's effective
- * set the same way an unselected name is absent from a subset door — same
- * roster-404 shape, no new refusal class. Env credentials and anonymous
+ * set — and since 2026-11-11 that absence answers as a route denial (the
+ * door publicly declares the name, so denying its existence would be a
+ * lie), while select-excluded names keep the existence-shaped 404 —
+ * still no 403 class either way. Env credentials and anonymous
  * serving return undefined (the door's own width applies). */
 function scopeAdmit(
   credential: GateCredential | undefined,
@@ -901,9 +913,14 @@ function scopeAdmit(
  * single-mode discovery fetch does. A subset door (ADR-REM-010) routes an
  * excluded name into the SAME roster-404 branch as an unknown one — the
  * response is byte-identical either way, so the roster is the only name
- * list any response ever carries. W13 scopes ride the same branch: an
- * out-of-scope name for the matched key is indistinguishable from an
- * unknown one, and the roster it sees is the key's own effective set
+ * list any response ever carries. W13 scopes split the refusal into two
+ * tiers (2026-11-11 owner ruling, superseding rehearsal E's single shape):
+ * a name the door roster does not carry stays indistinguishable from an
+ * unknown one; a name the door publicly declares but the matched key
+ * cannot touch gets a route denial — honest about the endpoint's public
+ * existence, uniform across ro-scope / absent-scope / undeclared-write-
+ * route, so the difference never leaks whether anyone else could write
+ * it. The roster either tier carries is the key's own effective set
  * (`admit` = scope ∩ select ∩ registry), never the wider door. */
 function resolveDoorRoute(
   registryPath: string,
@@ -922,12 +939,25 @@ function resolveDoorRoute(
     binding === undefined
     || binding.kind === "remote"
     || (select !== undefined && !select.includes(name))
-    || (admit !== undefined && !admit(name))
   ) {
     const roster = listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name).join(", ");
     return {
       response: jsonResponse(
         errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
+        404,
+      ),
+    };
+  }
+  if (admit !== undefined && !admit(name)) {
+    // Tier 2 (2026-11-11): the door declares this endpoint but the matched
+    // key's effective set does not include it — a route denial, never an
+    // existence denial. Roster membership is public discovery, and the
+    // uniform shape (ro scope, absent scope, undeclared write route alike)
+    // keeps writability-for-others unreadable.
+    const roster = listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name).join(", ");
+    return {
+      response: jsonResponse(
+        errorBody("not-found", `no route for '${name}' under your key on this host door (available: ${roster})`),
         404,
       ),
     };

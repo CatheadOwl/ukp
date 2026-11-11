@@ -475,6 +475,7 @@ describe("ukp propose command", () => {
       );
       expect(missingFile.exitCode).toBe(1);
       expect(missingFile.stderr).toContain("cannot read --file 'nope.md'");
+      expect(missingFile.stderr).toContain("(resolved from the current directory:");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -661,9 +661,15 @@ async function executeRegisterRemote(
       const nameHint = wellKnown.door.bearerRequired && token === undefined
         ? [`note: this door requires a bearer token; pass --token or set UKP_ENDPOINT_<NAME>_TOKEN per endpoint`]
         : [];
+      // Consumer-side secret disclosure (2026-11-11 walkthrough finding 1a):
+      // the raw key lands in plaintext bindings the moment they are written —
+      // say so where the secret is created, not only in the README.
+      const secretHint = token !== undefined
+        ? ["auth: token stored in every imported binding (plaintext, 0600 registry file; treat it as a secret)"]
+        : [];
       return {
         ...result,
-        stdout: [...result.stdout.split("\n"), ...nameHint].join("\n"),
+        stdout: [...result.stdout.split("\n"), ...nameHint, ...secretHint].join("\n"),
       };
     }
 
@@ -729,7 +735,7 @@ async function executeRegisterRemote(
         : []),
       ...(wellKnown.discovery.doc.description !== undefined ? [`description: ${wellKnown.discovery.doc.description}`] : []),
       ...(token !== undefined
-        ? [`auth: token stored in registry binding (plaintext; env UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN overrides)`]
+        ? [`auth: token stored in registry binding (plaintext; treat it as a secret; env UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN overrides)`]
         : wellKnown.discovery.bearerRequired && envToken === undefined
           ? [`note: this endpoint requires a bearer token; pass --token or set UKP_ENDPOINT_${handle.toUpperCase().replace(/-/g, "_")}_TOKEN`]
           : []),

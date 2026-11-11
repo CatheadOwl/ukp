@@ -1275,3 +1275,25 @@ describe("serve --systemd-socket (W10 / ADR-REM-006)", () => {
     expect(result.stderr).toContain("set UKP_SERVE_TOKEN");
   });
 });
+
+describe("serve startup: a taken port teaches the --port escape", () => {
+  test("a busy-port startup failure appends the --port hint", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-serve-portbusy-"));
+    try {
+      const registryPath = join(root, "registry.toml");
+      const service = join(root, "svc");
+      mkdirSync(join(service, ".ukp"), { recursive: true });
+      writeFileSync(join(service, ".ukp", "service.toml"), 'name = "busy"\n\n[capabilities]\n');
+      registerAt(registryPath, "busy", service);
+      const blocker = netCreateServer();
+      await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", () => resolve()));
+      const takenPort = (blocker.address() as { port: number }).port;
+      expect(() =>
+        startUkpServer({ endpointName: "busy", currentDirectory: root, registryPath, port: takenPort }),
+      ).toThrow(/--port/);
+      blocker.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

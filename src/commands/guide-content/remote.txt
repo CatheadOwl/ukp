@@ -55,8 +55,13 @@ Scoped keys for a second machine or an agent (instead of sharing the env token):
 
 3. On the consuming machine, register with the raw key as the token
    ukp register --url https://<ip>:8570 --token <raw-key>
-   A scoped key only sees its own endpoints: out-of-scope names answer exactly
-   like nonexistent ones; a read-only scope has no propose route.
+   The raw key lands in the consuming machine's ~/.ukp/registry.toml in
+   plaintext (a crash-safety .bak copy can persist beside it) - treat both
+   files as secrets; UKP_ENDPOINT_<NAME>_TOKEN overrides at call time.
+   A scoped key only sees its own endpoints: a name the door declares but
+   your key cannot touch answers 'no route under your key' (a read-only
+   scope has no propose route); names the door does not declare answer
+   exactly like nonexistent ones.
 
 4. Revoke on the host (effective on the next request - no restart)
    ukp serve token list

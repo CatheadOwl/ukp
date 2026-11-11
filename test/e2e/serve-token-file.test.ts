@@ -168,33 +168,52 @@ describe("serve token file: gate mechanics (fresh read, revocation, uniform 401)
   });
 });
 
-describe("serve token file: scoped overreach (rehearsal point E — same-shape 404)", () => {
-  test("out-of-scope name answers byte-identically to a select-excluded name; rosters stay scoped", async () => {
+describe("serve token file: scoped overreach (two refusal tiers — 2026-11-11 ruling)", () => {
+  test("roster-present names answer route denials uniform across causes; roster-absent names stay existence-shaped", async () => {
     const path = tokenFileOf([{ label: "liku", scopes: "notes:ro" }]);
     const key = issueInto(path, "liku-live", "notes:ro");
     const door = startDoor({ tokenFilePath: path });
+    // Tier 2 (2026-11-11): 'cad' is on the door's public roster, but this
+    // key's effective set is notes-only — an honest route denial, never an
+    // existence denial. The roster carried is still the key's own set.
     const outOfScope = await read(door.info, "cad", key);
     expect(outOfScope.status).toBe(404);
-    // The roster the scoped 404 carries is the key's own set — 'notes'
-    // only, never the wider door.
     const outOfScopeText = await outOfScope.text();
-    const body = JSON.parse(outOfScopeText) as { error: { message: string } };
+    const body = JSON.parse(outOfScopeText) as { error: { class: string; message: string } };
+    expect(body.error.class).toBe("not-found");
+    expect(body.error.message).toContain("no route for 'cad' under your key");
     expect(body.error.message).toMatch(/\(available: notes\)$/);
     expect(body.error.message).not.toMatch(/\(available: [^)]*\bcad\b/);
-    // Same-shape anchor (rehearsal point E): an over-scope name is
-    // byte-identical to a subset-door exclusion of the same name — the
-    // ADR-REM-010 roster-404 mechanism reused verbatim, no 403 class, no
-    // way to tell scope-exclusion from door-width-exclusion apart.
+    // Cross-cause uniformity (the E-prime anchor): an ro-scoped write
+    // attempt and an absent-scope write attempt on the same name produce
+    // byte-identical denials — the message never reveals which cause
+    // applies, nor whether any other key could write.
+    const roWriteKey = issueInto(path, "ro-writer", "writer:ro");
+    const absentWriteKey = issueInto(path, "absent-writer", "notes:ro");
+    const propose = (k: string) =>
+      fetch(`${door.info.url}/e/writer/v1/propose/x`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${k}`, "content-type": "text/plain" },
+        body: "proposal text",
+      });
+    const roWrite = await propose(roWriteKey);
+    const absentWrite = await propose(absentWriteKey);
+    expect(roWrite.status).toBe(404);
+    const roWriteText = await roWrite.text();
+    expect(roWriteText).toBe(await absentWrite.text());
+    expect((JSON.parse(roWriteText) as { error: { message: string } }).error.message)
+      .toContain("no route for 'writer' under your key");
+    // Tier 1 is unchanged: on a subset door, a select-excluded name and an
+    // unknown name differ only in the echoed name (ADR-REM-010 / INV-07).
     const subsetDoor = startDoor({ tokens: ["env-secret"], select: ["notes"] });
     const selectExcluded = await read(subsetDoor.info, "cad", "env-secret");
     expect(selectExcluded.status).toBe(404);
-    expect(outOfScopeText).toBe(await selectExcluded.text());
-    // An unknown name differs only in the echoed name the client sent.
-    const unknown = await read(door.info, "never-registered", key);
+    const selectExcludedText = await selectExcluded.text();
+    expect((JSON.parse(selectExcludedText) as { error: { message: string } }).error.message)
+      .toContain("no such endpoint 'cad'");
+    const unknown = await read(subsetDoor.info, "never-registered", "env-secret");
     expect(unknown.status).toBe(404);
-    const unknownBody = JSON.parse(await unknown.text()) as { error: { class: string; message: string } };
-    expect(unknownBody.error.class).toBe("not-found");
-    expect(unknownBody.error.message).toBe(body.error.message.replace("'cad'", "'never-registered'"));
+    expect(await unknown.text()).toBe(selectExcludedText.replace("'cad'", "'never-registered'"));
   });
 
   test("a subset door narrows the key further (select ∩ scope ∩ registry)", async () => {
@@ -209,7 +228,7 @@ describe("serve token file: scoped overreach (rehearsal point E — same-shape 4
     expect(((await excluded.json()) as { error: { message: string } }).error.message).toContain("(available: cad)");
   });
 
-  test("the rw bit gates the write face: ro keys see roster 404s on propose, rw keys may write", async () => {
+  test("the rw bit gates the write face: ro keys see route-denial 404s on propose, rw keys may write", async () => {
     const path = tokenFileOf([{ label: "reader", scopes: "writer:ro" }]);
     const roKey = issueInto(path, "reader", "writer:ro");
     const rwKey = issueInto(path, "writer-client", "writer:rw");
@@ -220,7 +239,10 @@ describe("serve token file: scoped overreach (rehearsal point E — same-shape 4
       body: "proposal text",
     });
     expect(roRefused.status).toBe(404);
-    expect(((await roRefused.json()) as { error: { message: string } }).error.message).toContain("(available: )");
+    const roRefusedText = await roRefused.text();
+    expect((JSON.parse(roRefusedText) as { error: { message: string } }).error.message)
+      .toContain("no route for 'writer' under your key");
+    expect((JSON.parse(roRefusedText) as { error: { message: string } }).error.message).toContain("(available: )");
     const rwAccepted = await fetch(`${door.info.url}/e/writer/v1/propose/test-prop`, {
       method: "PUT",
       headers: { authorization: `Bearer ${rwKey}`, "content-type": "text/plain" },

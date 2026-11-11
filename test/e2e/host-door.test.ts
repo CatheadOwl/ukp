@@ -152,6 +152,15 @@ describe("ukp register --url <door> (W7 import)", () => {
     }
   });
 
+  test("registering a door with --token discloses the consumer-side secret residence", async () => {
+    const { info } = startDoor();
+    const result = await asResult(executeRegisterCommand(["--url", info.url, "--token", "door-key"], context));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "auth: token stored in every imported binding (plaintext, 0600 registry file; treat it as a secret)",
+    );
+  });
+
   test("a path segment imports exactly that endpoint through the door", async () => {
     const { info } = startDoor();
     const result = await asResult(executeRegisterCommand(["--url", `${info.url}/notes`], context));

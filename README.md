@@ -235,7 +235,10 @@ Scopes are `name:ro|rw` comma-separated (full power is the explicit `*:rw`;
 a read-only scope has no propose route);
 the file stores hashes only, and the door re-reads it on every request —
 deleting a line revokes without a restart. A scoped key sees only its own
-endpoints: out-of-scope names answer exactly like nonexistent ones. While
+endpoints: a name the door declares but the key cannot touch answers
+`no route for '<name>' under your key` — uniform whether the scope is
+read-only, absent, or the write route is undeclared, never 403 — while
+names the door does not declare answer exactly like nonexistent ones. While
 `UKP_SERVE_TOKEN` is set it takes precedence and the file is not consulted.
 
 NAT/EIP cloud host (public IP on no NIC)? Name it with
@@ -272,12 +275,15 @@ automatically at registration (a certificate that renews on the same key
 re-pins silently; a different key hard-blocks with both fingerprints), or
 `ssh://`, where SSH carries both encryption and authentication. A
 `--select` door neither routes, declares, nor lists unselected endpoints —
-excluded and unknown names return byte-identical 404s, and a scoped key's
-out-of-scope endpoints answer the same way.
+excluded and unknown names return byte-identical 404s, and a scoped key
+probing an endpoint it cannot touch gets a route denial (`no route for
+'<name>' under your key`) — still 404-shaped, never 403, and uniform across
+a read-only scope, an absent scope, and an undeclared write route.
 
 Accepted tradeoffs, disclosed rather than hidden: tokens are long-lived
-static bearer secrets stored client-side in the 0600 registry file or an
-environment variable (the same tradeoff as `~/.aws/credentials`); the
+static bearer secrets stored client-side in the 0600 registry file (a
+crash-safety `.bak` copy can persist beside it — treat both as secrets)
+or an environment variable (the same tradeoff as `~/.aws/credentials`); the
 Windows door generator (`ukp serve --print-task`) embeds the token in a
 0600 `start-door.cmd` it never prints; identity pinning is
 trust-on-first-use (an SSH-style first-connect window). Hardening
