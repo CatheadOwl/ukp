@@ -186,6 +186,7 @@ describe("ukp serve share (W16 / ADR-REM-015)", () => {
     // teaching must point at the stop/re-save/start sequence.
     expect(result.stderr).toContain("make the widen durable");
     expect(result.stderr).toContain("'ukp serve --print-task' Notes carry the kill command");
+    expect(result.stderr).toContain("move the current pair aside first - --write never overwrites");
     expect(result.stderr).toContain("the next logon re-launches it");
     // No key was minted for a name the door will not route.
     expect(parseTokenFileText(readFileSync(path, "utf8"))).toEqual(before);

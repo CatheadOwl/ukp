@@ -494,7 +494,7 @@ async function executeServeShareCommand(
         `rebuild the door with it, then share again:`,
         `  ukp serve ${flags.join(" ")}`,
         `(reconstructed from the live roster and this probe - re-add any flags you originally set, such as --tls-san or --tls-cert; the restart keeps registered endpoints serving)`,
-        `(for a task-managed resident door, make the widen durable: stop the door first ('ukp serve --print-task' Notes carry the kill command), re-save its files with the wider --select, then start the task - a foreground rebuild alone leaves the saved cmd narrower, and the next logon re-launches it)`,
+        `(for a task-managed resident door, make the widen durable: stop the door first ('ukp serve --print-task' Notes carry the kill command), re-save its files with the wider --select (move the current pair aside first - --write never overwrites), then start the task - a foreground rebuild alone leaves the saved cmd narrower, and the next logon re-launches it)`,
         "",
       ].join("\n"),
     };

@@ -124,6 +124,11 @@ describe("serve --print-task rendering (W12)", () => {
     expect(hostDoorSelfSigned).toContain("retries into EADDRINUSE");
     expect(hostDoorSelfSigned).toContain("<orphan-pid>");
     expect(hostDoorSelfSigned).toContain("Name='bun.exe'");
+    // The orphan must be PICKABLE: the listing pre-filters to ukp door
+    // processes (a dev machine runs other bun processes) and the
+    // EADDRINUSE line's port disambiguates multi-door hosts.
+    expect(hostDoorSelfSigned).toContain("Where-Object CommandLine -match 'ukp'");
+    expect(hostDoorSelfSigned).toContain("the port in the EADDRINUSE line picks");
     expect(hostDoorSelfSigned).toContain("next retry binds and the door heals");
   });
 
@@ -137,6 +142,9 @@ describe("serve --print-task rendering (W12)", () => {
     expect(hostDoorSelfSigned).toContain("can lag the live door");
     expect(hostDoorSelfSigned).toContain("The live roster is the truth");
     expect(hostDoorSelfSigned).toContain("yours to re-supply");
+    // The regenerate note itself names the overwrite refusal and the
+    // move-aside step (--write's red line makes delete-first mandatory).
+    expect(hostDoorSelfSigned).toContain("--write never overwrites: move the current start-door.cmd");
     expect(hostDoorSelfSigned).toContain("Re-save to bring the file back");
   });
 
