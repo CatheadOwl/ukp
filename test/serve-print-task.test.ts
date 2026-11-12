@@ -111,6 +111,35 @@ describe("serve --print-task rendering (W12)", () => {
     expect(hostDoorSelfSigned).toContain("logged on means no door");
   });
 
+  test("orphan-recovery note (2026-11-12 field finding): End-Task strands bun, retry-window self-heal", () => {
+    // Field evidence 2026-11-12: a scheduler End-Task reported SUCCESS,
+    // the vbs died, but the bun door survived holding the port - the
+    // freshly started launcher retried 3x30s into EADDRINUSE until the
+    // orphan was killed; its next retry then bound by itself (roster 6,
+    // verified live). The Notes must teach that recovery state: the kill
+    // target there is the ORPHANED bun pid - the live wscript is the NEW
+    // launcher mid-retry, so the normal restart's <wscript-pid> anchor
+    // gives the wrong process for this state.
+    expect(hostDoorSelfSigned).toContain("survives orphaned");
+    expect(hostDoorSelfSigned).toContain("retries into EADDRINUSE");
+    expect(hostDoorSelfSigned).toContain("<orphan-pid>");
+    expect(hostDoorSelfSigned).toContain("Name='bun.exe'");
+    expect(hostDoorSelfSigned).toContain("next retry binds and the door heals");
+  });
+
+  test("regenerate note warns the saved cmd can lag the live door (flag drift, 2026-11-12)", () => {
+    // Field finding: a widen that restarted without re-saving left the
+    // on-disk start-door.cmd narrower than the live door. --write never
+    // overwrites, so the drift heals only by the operator re-saving; the
+    // note names the live roster as the truth (NOT this printout - it
+    // prints the flags you pass now) and the door-invisible flags as the
+    // owner's to re-supply.
+    expect(hostDoorSelfSigned).toContain("can lag the live door");
+    expect(hostDoorSelfSigned).toContain("The live roster is the truth");
+    expect(hostDoorSelfSigned).toContain("yours to re-supply");
+    expect(hostDoorSelfSigned).toContain("Re-save to bring the file back");
+  });
+
   test("resident-door Notes: 72h trap named, Git Bash conversion noted, one task recipe only", () => {
     // The Task Scheduler default execution limit (72h) would silently
     // stop the door; the Notes must say why the recipe pins PT0S.

@@ -180,6 +180,13 @@ describe("ukp serve share (W16 / ADR-REM-015)", () => {
       `ukp serve --select cad,notes --host 127.0.0.1 --port ${doorPort(door)}`,
     );
     expect(result.stderr).toContain("re-add any flags you originally set, such as --tls-san or --tls-cert");
+    // The durable widen for a task-managed door: the quick foreground
+    // rebuild alone leaves the saved start-door.cmd narrower (flag drift,
+    // 2026-11-12 field finding) and the next logon re-launches it - the
+    // teaching must point at the stop/re-save/start sequence.
+    expect(result.stderr).toContain("make the widen durable");
+    expect(result.stderr).toContain("'ukp serve --print-task' Notes carry the kill command");
+    expect(result.stderr).toContain("the next logon re-launches it");
     // No key was minted for a name the door will not route.
     expect(parseTokenFileText(readFileSync(path, "utf8"))).toEqual(before);
   });

@@ -6,6 +6,21 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp serve --print-task` Notes gain an orphan-recovery recipe (field
+  finding 2026-11-12): a scheduler End-Task strands the bun door process
+  still holding the port while the freshly started launcher retries into
+  EADDRINUSE — the note teaches killing the orphaned bun pid
+  (`Get-CimInstance Name='bun.exe'` to list), after which the next
+  retry in the 3x30s window binds by itself; the normal restart's
+  `<wscript-pid>` anchor names the wrong process in this state (the live
+  wscript is the new launcher). The regenerate note also now warns that
+  a saved start-door.cmd can lag the live door (a widen that restarted
+  without re-saving leaves the narrower --select on disk) — the live
+  roster is the truth; flags the door cannot show are yours to re-supply.
+- `ukp serve share` widen teaching points task-managed doors at the
+  durable sequence — stop the door, re-save the print-task files with
+  the wider --select, start the task — because a bare foreground rebuild
+  leaves the saved cmd narrower and the next logon re-launches it.
 - `ukp guide manifest full` reads the full normative manifest reference from
   the package (rendered verbatim from the bundled
   `skills/ukp/reference/manifest.md`): the cheat sheet's pointer to that
