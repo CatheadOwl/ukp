@@ -8,11 +8,12 @@ import {
   type KitParsed,
   type UkpCommandSpec,
 } from "./kit.ts";
-import { readRegistry } from "../registry.ts";
+import { parseRemoteUrl, readRegistry } from "../registry.ts";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { mkdirSync } from "node:fs";
-import { normalizeTlsSanEntry } from "../capabilities/tls-identity.ts";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { certSanOf, normalizeTlsSanEntry, spkiPinOf } from "../capabilities/tls-identity.ts";
+import { fetchDoorDocument } from "../capabilities/remote-client.ts";
 import { DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
 import { printTaskPreflightError, renderServeTaskArtifacts, writeServeTaskArtifacts, type ServeTaskTls } from "./serve-task.ts";
 import { acquireLock, releaseLock, LockBusyError } from "../fslock.ts";
@@ -222,6 +223,321 @@ function executeServeTokenCommand(
   throw new KitUsageError(`unknown serve token verb '${verb}' (${usage})`);
 }
 
+// W16 / ADR-REM-015: the owner-side door faces. `status` is the read-only
+// self-description the four-step ceremony lacked — the door's own well-known
+// document is the authority for what it serves right now, the machine home
+// answers for the token file, the TLS identity, and the task-vs-manual
+// deployment shape; process command lines are deliberately NOT productized
+// here. `share` validates a name against the live roster, mints the
+// exactly-aligned key through the same mint path `token add` uses, and emits
+// the consumer's paste-ready register command with the raw key embedded
+// (shown once — the same disclosure face as token add; share never sends
+// anything anywhere itself).
+
+/** The door's self-signed identity, as persisted in the machine home at
+ * serve time (door mode resolves the same `<registry dir>/tls/` path).
+ * Present = the door (when up) speaks https and this cert is the anchor a
+ * registering client pins. */
+function doorIdentityCert(registryPath: string): string | undefined {
+  const certPath = join(dirname(registryPath), "tls", "cert.pem");
+  return existsSync(certPath) ? readFileSync(certPath, "utf8") : undefined;
+}
+
+type DoorProbe =
+  | { state: "up"; origin: string; scheme: "http" | "https"; roster: string[]; bearerRequired: boolean }
+  | { state: "down"; origin: string; scheme: "http" | "https"; reason: string }
+  | { state: "single-endpoint"; origin: string };
+
+/** One well-known fetch against a door origin: the live roster's only
+ * authority. `scheme` is the caller's stated scheme; a persisted self-signed
+ * identity in the machine home anchors https the same TOFU way registration
+ * does (an operator-certificate door validates normally without it). */
+async function probeDoorOrigin(input: {
+  origin: string;
+  scheme: "http" | "https";
+  registryPath: string;
+}): Promise<DoorProbe> {
+  const cert = doorIdentityCert(input.registryPath);
+  try {
+    const door = await fetchDoorDocument(input.origin, {
+      displayUrl: input.origin,
+      ...(input.scheme === "https" && cert !== undefined ? { tlsAnchor: { ca: cert } } : {}),
+    });
+    return {
+      state: "up",
+      origin: input.origin,
+      scheme: input.scheme,
+      roster: door.doc.endpoints.map((endpoint) => endpoint.name),
+      bearerRequired: door.bearerRequired,
+    };
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+    if (message.includes("is not a host door")) return { state: "single-endpoint", origin: input.origin };
+    return { state: "down", origin: input.origin, scheme: input.scheme, reason: message };
+  }
+}
+
+/** `--host/--port/--tls`, the probe's knobs (status and share share them). */
+function parseDoorProbeArgs(args: readonly string[], usage: string): { host: string; port: number; forceTls: boolean } {
+  let host = "127.0.0.1";
+  let port = 8570;
+  let forceTls = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--tls") {
+      forceTls = true;
+    } else if (arg === "--host") {
+      host = args[index + 1] ?? "";
+      index += 1;
+    } else if (arg === "--port") {
+      port = Number(args[index + 1]);
+      index += 1;
+    } else {
+      throw new KitUsageError(`unexpected argument '${arg}' (${usage})`);
+    }
+  }
+  if (host.length === 0) throw new KitUsageError("--host requires an address");
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new KitUsageError("--port must be an integer between 1 and 65535");
+  }
+  return { host, port, forceTls };
+}
+
+function localRegistryNames(registryPath: string): string[] | undefined {
+  try {
+    return readRegistry(registryPath)
+      .filter((binding) => binding.kind !== "remote")
+      .map((binding) => binding.name);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Token-file summary for status: labels and count, never a secret (the
+ * detail face stays `ukp serve token list`). */
+function tokenFileSummary(path: string): string {
+  const loaded = loadTokenFile(path);
+  if ("missing" in loaded) {
+    return `tokens: no token file at ${path} - issue a key with 'ukp serve token add <label> <scopes>'`;
+  }
+  if ("error" in loaded) return `tokens: ${path} is unreadable: ${loaded.error}`;
+  const parsed = parseTokenFileText(loaded.text);
+  if ("error" in parsed) return `tokens: ${path} line ${parsed.error.line}: ${parsed.error.message}`;
+  if (parsed.entries.length === 0) {
+    return `tokens: ${path} holds no keys (only comments)`;
+  }
+  const labels = [...new Set(parsed.entries.map((entry) => entry.label))];
+  return `tokens: ${parsed.entries.length} key(s) at ${path} - labels: ${labels.join(", ")} ('ukp serve token list' for key ids and scopes)`;
+}
+
+/** `ukp serve status` (W16): exit 0 whether the door is up or down — it is a
+ * report, and a down door is a state the report must be able to name. */
+async function executeServeStatusCommand(
+  args: readonly string[],
+  context: ServeCommandContext,
+): Promise<KitCommandResult> {
+  const usage = "usage: ukp serve status [--host <addr>] [--port <n>] [--tls]";
+  const probe = parseDoorProbeArgs(args, usage);
+  const home = context.homeDir ?? homedir();
+  const lines: string[] = ["host door status"];
+
+  const cert = doorIdentityCert(context.registryPath);
+  const scheme: "http" | "https" = probe.forceTls || cert !== undefined ? "https" : "http";
+  const result = await probeDoorOrigin({
+    origin: `${scheme}://${probe.host}:${probe.port}`,
+    scheme,
+    registryPath: context.registryPath,
+  });
+  if (result.state === "up") {
+    lines.push(
+      `  door: up at ${result.origin} - ${result.roster.length} endpoint(s) on the roster: ${
+        result.roster.join(", ") || "(none)"
+      }`,
+    );
+    const locals = localRegistryNames(context.registryPath);
+    if (locals !== undefined) {
+      const hidden = locals.filter((name) => !result.roster.includes(name));
+      lines.push(hidden.length > 0
+        ? `  select: the roster hides ${hidden.length} registered endpoint(s): ${hidden.join(", ")} (a subset door's whitelist is fixed at start - restart to change it)`
+        : `  select: the roster serves every registered endpoint (${locals.length}) - no hidden names`);
+    }
+  } else if (result.state === "single-endpoint") {
+    lines.push(
+      `  door: ${result.origin} is serving a single endpoint, not a host door (status covers door mode)`,
+    );
+  } else {
+    lines.push(
+      `  door: not answering at ${result.origin} (${result.reason}) - start it, or correct --host/--port`,
+    );
+  }
+
+  if (cert !== undefined) {
+    lines.push(`  tls: self-signed door identity ${spkiPinOf(cert)} (SAN: ${certSanOf(cert)})`);
+  } else if (result.state === "up" && result.scheme === "https") {
+    lines.push("  tls: answering over https with no self-signed identity in the machine home (an operator certificate)");
+  }
+  lines.push(tokenFileSummary(serveTokenFilePath(context)));
+  const taskManaged = existsSync(join(home, ".ukp", "start-door.cmd"));
+  lines.push(taskManaged
+    ? `  deployment: task-managed (start-door.cmd present in ${join(home, ".ukp")} - 'ukp serve --print-task' prints the teardown playbook)`
+    : `  deployment: manual (no print-task artifacts in ${join(home, ".ukp")})`);
+  lines.push("");
+  return { exitCode: 0, stdout: lines.join("\n"), stderr: "" };
+}
+
+/** `ukp serve share <endpoint> --to <label> --at <url> [--rw]` (W16): the
+ * combined hand-over gesture. `--at` is required and explicit — the
+ * consumer-facing origin is the owner's to state (a loopback probe address
+ * would mint a paste-ready command that points at the wrong machine). */
+async function executeServeShareCommand(
+  args: readonly string[],
+  context: ServeCommandContext,
+): Promise<KitCommandResult> {
+  const usage =
+    "usage: ukp serve share <endpoint> --to <label> --at <consumer-url> [--rw] (e.g. ukp serve share notes --to liku --at https://192.168.1.10:8570 - the door is probed through --at, the address the consumer will use)";
+  const positional: string[] = [];
+  let label: string | undefined;
+  let at: string | undefined;
+  let rw = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--rw") rw = true;
+    else if (arg === "--to") {
+      label = args[index + 1];
+      index += 1;
+    } else if (arg === "--at") {
+      at = args[index + 1];
+      index += 1;
+    } else positional.push(arg);
+  }
+  const endpoint = positional[0];
+  if (positional.length !== 1 || endpoint === undefined) {
+    throw new KitUsageError(`serve share takes one <endpoint> (${usage})`);
+  }
+  if (label === undefined) throw new KitUsageError(`--to <label> is required (${usage})`);
+  if (at === undefined) {
+    throw new KitUsageError(
+      `--at <consumer-url> is required - it is the origin the consumer will use, e.g. --at https://192.168.1.10:8570 (${usage})`,
+    );
+  }
+  const atParts = parseRemoteUrl(at);
+  if (atParts === undefined || (atParts.scheme !== "http" && atParts.scheme !== "https")) {
+    throw new KitUsageError(
+      `--at must be an http(s) origin the consumer can reach, e.g. --at https://192.168.1.10:8570 (plain http is loopback-only - share an https door for other hosts) (${usage})`,
+    );
+  }
+  if (atParts.endpointName !== undefined) {
+    throw new KitUsageError(`--at is the door origin; share derives the endpoint path itself (got '${at}')`);
+  }
+
+  // The probe rides the consumer-facing origin itself: if the address the
+  // consumer will use does not answer, the handover would be dead on
+  // arrival — share catches that here, before minting anything.
+  const door = await probeDoorOrigin({
+    origin: atParts.origin,
+    scheme: atParts.scheme,
+    registryPath: context.registryPath,
+  });
+  if (door.state === "down") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp serve: the door is not answering at ${door.origin} (${door.reason}) - start it, check 'ukp serve status', then share\n`,
+    };
+  }
+  if (door.state === "single-endpoint") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp serve: ${door.origin} is serving a single endpoint, not a host door (share works through a host door)\n`,
+    };
+  }
+  if (!door.roster.includes(endpoint)) {
+    const locals = localRegistryNames(context.registryPath);
+    if (locals === undefined) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp serve: '${endpoint}' is not on the door's roster and the Host Registry is not readable\n`,
+      };
+    }
+    if (!locals.includes(endpoint)) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp serve: '${endpoint}' is not registered on this host - register its folder first ('ukp register <folder>'), then share again\n`,
+      };
+    }
+    // Registered but hidden: teach the widen-restart (ADR-REM-010 keeps the
+    // whitelist startup-fixed). The rebuild is reconstructed from the live
+    // roster plus the probe — flags we cannot see (extra --tls-san entries,
+    // --tls-cert paths) are named as the owner's to re-add.
+    const widened = [...new Set([...door.roster, endpoint])].sort();
+    const flags = [
+      "--select",
+      widened.join(","),
+      "--host",
+      atParts.host,
+      "--port",
+      String(atParts.port),
+      ...(door.scheme === "https" ? ["--tls"] : []),
+    ];
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        `ukp serve: '${endpoint}' is registered on this host but the door's roster does not carry it (a subset door's whitelist is fixed at start).`,
+        `rebuild the door with it, then share again:`,
+        `  ukp serve ${flags.join(" ")}`,
+        `(reconstructed from the live roster and this probe - re-add any flags you originally set, such as --tls-san or --tls-cert; the restart keeps registered endpoints serving)`,
+        "",
+      ].join("\n"),
+    };
+  }
+  if (!door.bearerRequired) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp serve: the door at ${door.origin} admits anonymous requests - its gate is not armed, so a key would change nothing. Start it with the token file ('ukp serve token add'), or hand over an ssh:// door instead\n`,
+    };
+  }
+
+  // Mint through the token add path verbatim: same lock, same file, same
+  // zero-downtime rotation semantics for a repeated label.
+  const scopes = `${endpoint}:${rw ? "rw" : "ro"}`;
+  let minted;
+  try {
+    minted = mintTokenFileKey(label, scopes);
+  } catch (error) {
+    if (error instanceof TokenFileUsageError) throw new KitUsageError(error.message);
+    throw error;
+  }
+  const path = serveTokenFilePath(context);
+  const { sameLabel } = withTokenFileLock(path, () => {
+    const current = loadManagedTokenText(path);
+    const sameLabel = current.entries.filter((entry) => entry.label === label).length;
+    storeTokenFile(path, appendTokenLine(current.text, minted.line));
+    return { sameLabel };
+  });
+  const registerUrl = `${atParts.origin}/${endpoint}`;
+  return {
+    exitCode: 0,
+    stdout: [
+      `shared '${endpoint}' with '${label}' (scope ${scopes}) - door at ${door.origin}`,
+      "",
+      "on the consuming machine, paste this one line:",
+      `  ukp register --url ${registerUrl} --token ${minted.token}`,
+      "",
+      `the line embeds the raw key - shown ONCE, stored hash-only at ${path} (0600).`,
+      `revoke with 'ukp serve token revoke ${label}'`
+        + `${sameLabel > 0 ? ` (the label already held ${sameLabel} active key(s) - both stay valid until revoked)` : ""}.`,
+      "if this door gates on UKP_SERVE_TOKEN instead of the file, the key is inert - run the door on the token file to hand out keys.",
+      "",
+    ].join("\n"),
+    stderr: "",
+  };
+}
+
 /** Cross-process read-modify-write discipline for the token file (the same
  * fslock propose uses): two concurrent `token add` runs must not lose a
  * line to a last-writer-wins rename. Serving itself never takes the lock —
@@ -260,7 +576,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
   group: "operations",
   description:
     "Expose a registered endpoint over HTTP using the ukp-remote wire, or - without --endpoint - serve local endpoints as one host door routed by name: all of them, or just the ones --select names.",
-  usage: "[--endpoint <name>] [--select <names>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task [--write]] | token add <label> <scopes> | token list | token revoke <label>",
+  usage: "[--endpoint <name>] [--select <names>] [--host <addr>] [--port <n>] [--tls [--tls-san <ip|dns>]... | --tls-cert <pem> --tls-key <pem>] [--max-idle <seconds>] [--systemd-socket] [--print-task [--write]] | token add <label> <scopes> | token list | token revoke <label> | status | share <endpoint> --to <label> --at <consumer-url> [--rw]",
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve a host door (/e/<name>/ routing, one port) instead" },
     { flags: "--select <names>", help: "host door serving ONLY the named endpoints (comma-separated): one port, /e/<name>/ routing, and a door document that declares just this subset - unselected local endpoints are not served, routed, or declared; mutually exclusive with --endpoint" },
@@ -316,6 +632,17 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "    ukp serve token add <label> <scopes>   issue a key (raw shown once)",
     "    ukp serve token list                   labels, key ids, scopes",
     "    ukp serve token revoke <label>         revoke every key of a label",
+    "",
+    "  Door owner faces:",
+    "    ukp serve status                       one-screen door self-description",
+    "    ukp serve share <name> --to <label> --at <url> [--rw]",
+    "  status reads the live door document (roster, and which registered",
+    "  endpoints the roster hides) plus the machine home (token summary, TLS",
+    "  identity, task vs manual deployment). share validates <name> is on the",
+    "  live roster (or teaches the --select rebuild command), mints a key",
+    "  scoped to exactly that name, and prints the consumer's paste-ready",
+    "  register command with the raw key embedded (shown once). --at is the",
+    "  origin the CONSUMER will use, e.g. --at https://192.168.1.10:8570.",
     "  Scopes are Docker-registry style, required per key: notes:ro,cad:rw",
     "  ('*' is the explicit full-power name: '*:rw'). The file lives at",
     "  ~/.ukp/tokens (0600, hash-only rows) and is re-read on every request",
@@ -537,8 +864,8 @@ export function executeServeCommand(
 ): KitCommandResult {
   // W13: `ukp serve token …` is the issuance subcommand family — dispatched
   // ahead of the flag parser (SERVE_SPEC declares no positionals), with the
-  // same error contract executeKitCommand applies (usage errors exit 2 with
-  // the usage line, operational failures exit 1 naming the command). Help
+  // same error contract executeKitCommand applies (usage errors exit 2 with the
+  // usage line, operational failures exit 1 naming the command). Help
   // requests route to the same rendered help (which teaches the family).
   if (args[0] === "token") {
     if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
@@ -703,6 +1030,36 @@ export function executeServeCommand(
     // process alive until the signal handler stops it.
     return { exitCode: 0, stdout: renderServeBanner(info), stderr: "" };
   });
+}
+
+/** The full serve routing face (W16): the door-owner subcommands dispatch
+ * ahead of `executeServeCommand` the same way the token family does — both
+ * probe the live door, so this entry may return a promise (the bin entry
+ * awaits it through runCli's maybe-async path; direct callers of the sync
+ * shapes — serving, print-task, the token family — are unchanged). */
+export function runServeCommand(
+  args: readonly string[],
+  context: ServeCommandContext,
+): KitCommandResult | Promise<KitCommandResult> {
+  if (args[0] === "status" || args[0] === "share") {
+    if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
+      return { exitCode: 0, stdout: renderKitHelp(SERVE_SPEC), stderr: "" };
+    }
+    const run = args[0] === "status"
+      ? executeServeStatusCommand(args.slice(1), context)
+      : executeServeShareCommand(args.slice(1), context);
+    return run.catch((error) => {
+      if (error instanceof KitUsageError) {
+        return { exitCode: 2, stdout: "", stderr: renderKitUsageError(SERVE_SPEC, error.message) };
+      }
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp serve: ${error instanceof Error ? error.message : String(error)}\n`,
+      };
+    });
+  }
+  return executeServeCommand(args, context);
 }
 
 export function renderServeHelp(): string {

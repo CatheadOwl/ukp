@@ -6,6 +6,19 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- Handing an endpoint to another machine collapses into one gesture
+  (ADR-REM-015): `ukp serve status` self-describes the door (live roster,
+  which registered endpoints the roster hides, token summary, TLS identity
+  pin, task vs manual deployment — no process introspection), and
+  `ukp serve share <name> --to <label> --at <url> [--rw]` probes the door
+  through the consumer-facing `--at` origin, validates the name against
+  the live roster (teaching the `--select` rebuild command or
+  `ukp register` first when it is not), mints a key scoped to exactly
+  that name, and prints the consumer's paste-ready `ukp register` command
+  with the raw key embedded (shown once — the token-add disclosure face;
+  the door's `--select` width stays startup-fixed, widening still
+  restarts).
+
 - A scoped consumer now learns its own admission at register and list
   time (ADR-REM-014): when the door's public document is fetched with a
   valid file key it additionally answers with that key's `admitted`

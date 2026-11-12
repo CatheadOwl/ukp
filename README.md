@@ -185,7 +185,7 @@ Operations commands:
 | `ukp diagnose` | Checks a Service folder or endpoint scope for wiring problems. |
 | `ukp inspect` | Explains current scope, bindings, manifest capabilities, and provider availability. |
 | `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared (local endpoints today). |
-| `ukp serve` | Serves one endpoint — or, without `--endpoint`, local bindings as a **host door** (every one of them, or just the ones `--select` names — unselected endpoints are not served, routed, or declared) — over HTTP (a discovery document plus the five command routes; loopback by default). |
+| `ukp serve` | Serves one endpoint — or, without `--endpoint`, local bindings as a **host door** (every one of them, or just the ones `--select` names — unselected endpoints are not served, routed, or declared) — over HTTP (a discovery document plus the five command routes; loopback by default). `ukp serve token add|list|revoke` issues scoped door keys; `ukp serve status` self-describes the door (live roster, hidden names, token summary, TLS identity, task vs manual); `ukp serve share <name> --to <label> --at <url> [--rw]` hands one endpoint over — validates it is on the live roster (or teaches the `--select` rebuild), mints the exactly-scoped key, and prints the consumer's paste-ready register command. |
 
 Help commands:
 

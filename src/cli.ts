@@ -19,7 +19,7 @@ import { executeListCommand, executeRegisterCommand, executeUnregisterCommand, L
 import { executeNavCommand, NAV_SPEC } from "./commands/nav.ts";
 import { executeProposeCommand, PROPOSE_SPEC } from "./commands/propose.ts";
 import { executeUpdateCommand, UPDATE_SPEC } from "./commands/update.ts";
-import { executeServeCommand, SERVE_SPEC } from "./commands/serve.ts";
+import { runServeCommand, SERVE_SPEC } from "./commands/serve.ts";
 import { executeSearchCommand, SEARCH_SPEC } from "./commands/search.ts";
 import { executeUseCommand, USE_SPEC } from "./commands/use.ts";
 
@@ -378,7 +378,9 @@ export function runCli(
   }
 
   if (command === "serve") {
-    return writeCommandResult(executeServeCommand(args.slice(1), {
+    // W16: `serve status|share` probe the live door — the same async path
+    // register's remote branch uses; every other serve shape stays sync.
+    return writeCommandResultMaybeAsync(runServeCommand(args.slice(1), {
       currentDirectory,
       registryPath,
       qmdCommand: context.qmdCommand,

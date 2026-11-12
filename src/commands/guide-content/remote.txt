@@ -42,8 +42,16 @@ LAN HTTPS path:
    ukp rg "keyword" --endpoint <name>
 
 Scoped keys for a second machine or an agent (instead of sharing the env token):
-1. On the host, issue a labeled key (run WITHOUT UKP_SERVE_TOKEN set - while the
-   env token is set it takes precedence and the key file is not consulted)
+1. Hand an endpoint over in one gesture (the door must be up; --at is the
+   origin the consumer will use, and share probes the door through it)
+   ukp serve status                                  # door width at a glance
+   ukp serve share notes --to liku --at https://192.168.1.10:8570
+   share validates 'notes' is on the live roster (a name hidden by --select
+   gets the rebuilt 'ukp serve --select ...' widen command instead - restart
+   required, that is by design), mints a key scoped to exactly 'notes'
+   (add --rw for the propose route), and prints the consumer's paste-ready
+   'ukp register --url .../notes --token <key>' line with the raw key shown
+   ONCE. Manual form, e.g. for broader scopes:
    ukp serve token add liku "notes:ro,cad:rw"    # prints the raw key ONCE
    The key lands in ~/.ukp/tokens (0600, hash-only); scopes are name:ro|rw,
    comma-separated (full power is the explicit '*:rw'); several keys may share
