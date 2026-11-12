@@ -25,6 +25,7 @@ import { executeRgCommand } from "../../src/commands/rg.ts";
 import { createQmdFixtureCopy } from "../helpers/qmd-fixture.ts";
 import { binAvailable } from "../helpers/bin-probe.ts";
 import { openRemoteTransport, fetchDiscoveryDocument } from "../../src/capabilities/remote-client.ts";
+import { appendTokenLine, mintTokenFileKey, storeTokenFile } from "../../src/plumbing/token-file.ts";
 
 // ukp_remote W7 client-side tests: host door access (ADR-REM-004). The
 // "remote" is a real door-mode server on loopback http (admissible by the
@@ -535,6 +536,80 @@ describe("door drift notes (view dynamic, ledger static)", () => {
     expect(list.exitCode).toBe(0);
     expect(list.stderr).toContain(`door ${info.url}: 1 unimported endpoint(s): archive`);
     expect(list.stderr).not.toContain("unimported endpoint(s): notes");
+  });
+});
+
+describe("key-echo consumption (ADR-REM-014 / W15): register and list speak for the key", () => {
+  // Private server registry + scoped file key per test, so the shared
+  // two-endpoint door above stays untouched by echo fixtures.
+  function scopedDoor(names: readonly string[], scopes: string): { door: StartedServe; key: string } {
+    const serverRegistry = join(root, `w15-server-${Math.random().toString(36).slice(2)}.toml`);
+    names.forEach((name, index) => {
+      registerAt(serverRegistry, name, createService(`w15-${name}-${index}`, name));
+    });
+    const minted = mintTokenFileKey("liku", scopes);
+    const tokenFile = join(root, `w15-tokens-${Math.random().toString(36).slice(2)}`);
+    storeTokenFile(tokenFile, appendTokenLine("", minted.line));
+    return { door: startDoor({ registryPath: serverRegistry, tokenFilePath: tokenFile }), key: minted.token };
+  }
+  const inlineContext = { ...context, credentialStore: unavailableCredentialStore() };
+
+  test("register annotates blind imports on the spot (no more silently-ready dead bindings)", async () => {
+    const { door, key } = scopedDoor(["notes", "archive"], "notes:ro");
+    const result = await asResult(executeRegisterCommand(["--url", door.info.url, "--token", key], inlineContext));
+    expect(result.exitCode).toBe(0);
+    // The roster imports both names (it is public); only the key's blind
+    // side is marked — closing the probe's "register succeeded silently"
+    // finding.
+    const notesLine = result.stdout.split("\n").find((line) => line.startsWith("imported: notes"));
+    expect(notesLine).toBeDefined();
+    expect(notesLine!).not.toContain("no scope");
+    expect(result.stdout).toContain("your key has no scope for it)");
+    expect(result.stdout).toContain("note: 1 imported endpoint(s) are outside this key's scope");
+  });
+
+  test("a fully-admitted import stays quiet (no marker noise)", async () => {
+    const { door, key } = scopedDoor(["notes", "archive"], "notes:ro,archive:ro");
+    const result = await asResult(executeRegisterCommand(["--url", door.info.url, "--token", key], inlineContext));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("imported: notes");
+    expect(result.stdout).toContain("imported: archive");
+    expect(result.stdout).not.toContain("no scope");
+    expect(result.stdout).not.toContain("outside this key's scope");
+  });
+
+  test("list drift becomes the key's view: an out-of-scope binding is named with its first-call verdict", async () => {
+    const { door, key } = scopedDoor(["notes", "archive"], "notes:ro");
+    // Import everything with the scoped key: archive lands blind.
+    const registered = await asResult(executeRegisterCommand(["--url", door.info.url, "--token", key], inlineContext));
+    expect(registered.exitCode).toBe(0);
+    const list = await asResult(executeListCommand([], inlineContext));
+    expect(list.exitCode).toBe(0);
+    // The drift check spends the anchor member's token and reports per key.
+    expect(list.stderr).toContain("'archive' is outside this key's scope (calls answer 'no route under your key')");
+    expect(list.stderr).not.toContain("'notes' is outside this key's scope");
+    // Nothing unimported on this private roster: the marker is the note.
+    expect(list.stderr).not.toContain("unimported endpoint(s)");
+  });
+
+  test("unimported names get the per-key marker; a tokenless consumer keeps the objective view", async () => {
+    const { door, key } = scopedDoor(["notes", "archive"], "notes:ro");
+    const registered = await asResult(executeRegisterCommand(
+      ["--url", door.info.url, "--select", "notes", "--token", key],
+      inlineContext,
+    ));
+    expect(registered.exitCode).toBe(0);
+    const list = await asResult(executeListCommand([], inlineContext));
+    expect(list.exitCode).toBe(0);
+    expect(list.stderr).toContain("unimported endpoint(s): archive (not under your key)");
+    // Same shape without a token: no echo, no markers — byte-compatible
+    // with the pre-echo drift line.
+    unregisterAt(registryPath, "notes");
+    const plain = await asResult(executeRegisterCommand(["--url", door.info.url, "--select", "notes"], context));
+    expect(plain.exitCode).toBe(0);
+    const plainList = await asResult(executeListCommand([], context));
+    expect(plainList.stderr).toContain("unimported endpoint(s): archive -");
+    expect(plainList.stderr).not.toContain("not under your key");
   });
 });
 

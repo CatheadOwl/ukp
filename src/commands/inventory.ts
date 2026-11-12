@@ -492,7 +492,13 @@ function declaredCapabilitySummary(capabilities: Record<string, unknown>): strin
  * all-skipped exits 1. */
 function importDoorEndpoints(
   origin: string,
-  door: { endpoints: ReadonlyArray<{ name: string; instance_uid: string; capabilities: Record<string, unknown> }> },
+  door: {
+    endpoints: ReadonlyArray<{ name: string; instance_uid: string; capabilities: Record<string, unknown> }>;
+    /** Key-echo (ADR-REM-014): the presented key's admitted names, when the
+     * door answered the registration fetch with one — undefined for an
+     * anonymous fetch or a pre-echo door, and then nothing below changes. */
+    admitted?: readonly string[];
+  },
   targets: ReadonlyArray<{ name: string; instance_uid: string; capabilities: Record<string, unknown> }>,
   credentials: { token?: string; tls_cert?: string; tls_pin?: string },
   context: InventoryCommandContext,
@@ -501,6 +507,15 @@ function importDoorEndpoints(
   const existing = readRegistry(context.registryPath);
   const lines = [`door ${origin}: ${door.endpoints.length} endpoint(s)`];
   let landed = 0;
+  // Key-echo blind-import count (ADR-REM-014): bindings that land outside
+  // the presented key's admission — annotated per line, totaled in a note,
+  // never silently "ready" (the blank-agent probe found exactly that).
+  let outOfScope = 0;
+  const blindImport = (name: string): boolean => {
+    const blind = door.admitted !== undefined && !door.admitted.includes(name);
+    if (blind) outOfScope += 1;
+    return blind;
+  };
   // ADR-REM-013 / W14: with a token in hand, the OS credential store is the
   // default residence; a failed put falls back inline for THAT handle, and
   // the summary line at the end states which form landed — never a silent
@@ -551,7 +566,9 @@ function importDoorEndpoints(
           : {}),
       });
       landed += 1;
-      lines.push(`refreshed: ${sameUrl.name}  (TOFU pin/credentials refreshed)`);
+      lines.push(
+        `refreshed: ${sameUrl.name}  (TOFU pin/credentials refreshed${blindImport(target.name) ? "; your key has no scope for it" : ""})`,
+      );
       continue;
     }
     const sameName = existing.find((endpoint) => endpoint.name === handle);
@@ -573,10 +590,11 @@ function importDoorEndpoints(
         : {}),
     });
     landed += 1;
+    const noScope = blindImport(target.name) ? "; your key has no scope for it" : "";
     lines.push(
       handle !== target.name
-        ? `imported: ${handle}  (declares ${target.name}; ${declaredCapabilitySummary(target.capabilities)})`
-        : `imported: ${handle}  (${declaredCapabilitySummary(target.capabilities)})`,
+        ? `imported: ${handle}  (declares ${target.name}; ${declaredCapabilitySummary(target.capabilities)}${noScope})`
+        : `imported: ${handle}  (${declaredCapabilitySummary(target.capabilities)}${noScope})`,
     );
   }
   if (credentials.token !== undefined) {
@@ -584,6 +602,11 @@ function importDoorEndpoints(
       storedHandles > 0 && inlineHandles === 0
         ? "auth: token stored in the OS credential store (keyed per endpoint handle)"
         : `auth: token stored in every imported binding (plaintext fallback${storeMode ? " - an OS store write failed" : " - no OS credential store available"}; 0600 registry file; treat it as a secret)`,
+    );
+  }
+  if (outOfScope > 0) {
+    lines.push(
+      `note: ${outOfScope} imported endpoint(s) are outside this key's scope (calling them will answer 'no route under your key')`,
     );
   }
   return {
@@ -686,7 +709,10 @@ async function executeRegisterRemote(
       }
       const result = importDoorEndpoints(
         parts.origin,
-        { endpoints: roster },
+        // The registration fetch already carried the token (above), so a
+        // key-echo-aware door hands its per-key admission along with the
+        // roster (ADR-REM-014); pre-echo doors leave it undefined.
+        { endpoints: roster, admitted: wellKnown.door.doc.admitted },
         targets,
         {
           ...(token !== undefined ? { token } : {}),
@@ -931,7 +957,7 @@ export function executeListCommand(
         // shorter update) would leave stale tail cells on a real terminal.
         drawProgress(`fetching ${remotes.length} remote endpoint(s)...`);
         const remoteRows = remotes.map((endpoint) => renderRemoteListRow(endpoint, pool));
-        const drift = collectDoorDriftNotes(endpoints, pool);
+        const drift = collectDoorDriftNotes(endpoints, pool, context.credentialStore ?? defaultCredentialStore());
 
         const warnings = localRows.flatMap((row) => (row.warning !== undefined ? [row.warning] : []));
         let done = 0;
@@ -1096,6 +1122,7 @@ function collectSameInstanceNotes(endpoints: readonly RegistryBinding[]): string
 async function collectDoorDriftNotes(
   endpoints: readonly RegistryBinding[],
   pool: RemoteTransportPool,
+  store: CredentialStore,
 ): Promise<string[]> {
   const origins = new Map<string, { members: RegistryBinding[]; imported: Set<string> }>();
   for (const endpoint of endpoints) {
@@ -1115,9 +1142,15 @@ async function collectDoorDriftNotes(
   const notes: string[] = [];
   for (const [origin, group] of [...origins.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
     // Anchor TLS on a member binding (https doors: same certificate serves
-    // the door and its endpoints); the door document itself is public, so no
-    // credential is spent on the check.
+    // the door and its endpoints). Since the key-echo ruling (ADR-REM-014)
+    // the check also spends the anchor member's token: a valid file key
+    // earns the door's `admitted` echo, and the drift note becomes that
+    // key's view (which unimported names it could actually address, which
+    // imported bindings will hit 'no route under your key'). A member with
+    // no resolvable token — or a pre-echo door — keeps the objective door
+    // view, byte-identical to before.
     const anchor = group.members[0]!;
+    const anchorToken = resolveRemoteToken(anchor, store);
     try {
       const transport = await pool.acquire({
         name: anchor.name,
@@ -1127,12 +1160,28 @@ async function collectDoorDriftNotes(
       });
       const door = await fetchDoorDocument(transport.base, {
         displayUrl: transport.displayUrl,
+        ...(anchorToken !== undefined ? { token: anchorToken } : {}),
         // ISSUE-017: the anchor hangs on the transport handle only — the
         // fetch must carry it onward (same hand-off as fetchDiscoveryDocument),
         // or a self-signed TOFU door rejects the well-known fetch and the
         // drift note dies silently for its primary deployment shape.
         ...(transport.tls !== undefined ? { tlsAnchor: transport.tls } : {}),
       });
+      const admitted = door.doc.admitted;
+      // The echo speaks for the key that earned it: a member binding under a
+      // DIFFERENT token is not this echo's to judge — skip it.
+      const echoesMember = (member: RegistryBinding): boolean =>
+        resolveRemoteToken(member, store) === anchorToken;
+      if (admitted !== undefined) {
+        for (const member of group.members) {
+          if (!echoesMember(member)) continue;
+          const declaredName = member.declared_name ?? member.name;
+          if (admitted.includes(declaredName)) continue;
+          notes.push(
+            `door ${origin}: '${member.name}' is outside this key's scope (calls answer 'no route under your key')`,
+          );
+        }
+      }
       const unimported = door.doc.endpoints
         .map((endpoint) => endpoint.name)
         .filter((name) => !group.imported.has(name));
@@ -1141,16 +1190,18 @@ async function collectDoorDriftNotes(
       // held by another binding, and the plain import remedy would skip it
       // again. Those names get the single-endpoint --name remedy instead
       // (W11 / ADR-REM-007).
+      const outsideKey = (name: string): string =>
+        admitted !== undefined && !admitted.includes(name) ? " (not under your key)" : "";
       const free = unimported.filter((name) => !endpoints.some((binding) => binding.name === name));
       const taken = unimported.filter((name) => endpoints.some((binding) => binding.name === name));
       if (free.length > 0) {
         notes.push(
-          `door ${origin}: ${free.length} unimported endpoint(s): ${free.join(", ")} - run 'ukp register --url ${origin}' to import`,
+          `door ${origin}: ${free.length} unimported endpoint(s): ${free.map((name) => name + outsideKey(name)).join(", ")} - run 'ukp register --url ${origin}' to import`,
         );
       }
       if (taken.length > 0) {
         notes.push(
-          `door ${origin}: name(s) taken: ${taken.join(", ")} - import under another handle: 'ukp register --url ${origin}/<name> --name <handle>'`,
+          `door ${origin}: name(s) taken: ${taken.map((name) => name + outsideKey(name)).join(", ")} - import under another handle: 'ukp register --url ${origin}/<name> --name <handle>'`,
         );
       }
     } catch {

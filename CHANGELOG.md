@@ -6,6 +6,15 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- A scoped consumer now learns its own admission at register and list
+  time (ADR-REM-014): when the door's public document is fetched with a
+  valid file key it additionally answers with that key's `admitted`
+  names — the same roster a route denial prints — so `register --token`
+  marks blind imports on the spot (`your key has no scope for it`) and
+  `ukp list` marks unimported names and bindings outside the key.
+  Anonymous, invalid, and env-token fetches keep the public document
+  byte-identical (INV-23).
+
 - Consumer-side tokens now register into the OS credential store by
   default (ADR-REM-013): Windows DPAPI (via the spawn-relay carrier),
   macOS Keychain, or Linux Secret Service — the registry keeps only a

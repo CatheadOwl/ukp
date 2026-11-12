@@ -177,6 +177,12 @@ export interface DoorDocument {
   scope: "host";
   endpoints: DoorEndpointSummary[];
   security: { schemes: string[] };
+  /** Key-echo (ADR-REM-014 / INV-23): present iff this fetch presented a
+   * valid file key — the `endpoints[]` names that key may address (its
+   * scope ∩ select ∩ registry, read tier; the same roster a tier-2 route
+   * denial prints as `available:`). Anonymous, invalid, and env-credential
+   * fetches omit the field and keep the public document byte-identical. */
+  admitted?: string[];
 }
 
 export interface ServeInfo {
@@ -372,10 +378,14 @@ function listWriteEndpoints(registryPath: string, select?: readonly string[]): s
  * endpoint document carries (name, instance_uid, capabilities). Endpoints
  * whose manifest is unreadable or whose name drifted from the binding
  * (RQ-14) are omitted from the roster with a serve-side stderr note — a
- * broken Service must not take the whole door document down. */
+ * broken Service must not take the whole door document down. `admitted`
+ * (ADR-REM-014 / INV-23) is the caller's key-echo: omitted entirely for
+ * anonymous, invalid, and env-credential fetches, so those responses stay
+ * byte-identical to the pre-echo document. */
 function buildDoorDocument(
   endpoints: ReadonlyArray<{ name: string; folder: string }>,
   bearerRequired: boolean,
+  admitted?: readonly string[],
 ): DoorDocument {
   const summaries: DoorEndpointSummary[] = [];
   for (const endpoint of endpoints) {
@@ -403,6 +413,7 @@ function buildDoorDocument(
     scope: "host",
     endpoints: summaries,
     security: { schemes: bearerRequired ? ["bearer"] : [] },
+    ...(admitted !== undefined ? { admitted: [...admitted] } : {}),
   };
 }
 
@@ -862,6 +873,31 @@ function gateArmed(config: ServeConfig): boolean {
   return (config.tokens?.length ?? 0) > 0 || config.tokenFilePath !== undefined;
 }
 
+/** The file-source half of the gate as a pure credential lookup (no 401):
+ * a valid presented key yields its entry; every other shape — no gate
+ * armed, env tokens configured (that branch owns verification), missing
+ * header, non-Bearer scheme, unknown key, wrong secret, unreadable or
+ * malformed file — yields undefined. Shared by the gate (which turns
+ * undefined into the uniform 401) and the key-echo (which turns undefined
+ * into the anonymous public door document, ADR-REM-014 / INV-23). */
+function fileGateCredential(
+  request: Request,
+  config: ServeConfig,
+): { kind: "file"; entry: TokenFileEntry } | undefined {
+  if (!gateArmed(config) || (config.tokens?.length ?? 0) > 0) return undefined;
+  const loaded = loadTokenFile(config.tokenFilePath!);
+  if (!("text" in loaded)) return undefined;
+  const parsed = parseTokenFileText(loaded.text);
+  if ("error" in parsed) return undefined;
+  const authorization = request.headers.get("authorization");
+  // Scheme shape is part of the uniform failure path: a non-Bearer header
+  // fails exactly like a missing one.
+  const match = /^Bearer (.+)$/.exec(authorization ?? "");
+  if (match === null) return undefined;
+  const entry = authenticateBearerKey(match[1]!, parsed.entries);
+  return entry !== undefined ? { kind: "file", entry } : undefined;
+}
+
 /** The door gate, both sources (W13): env tokens compare through the
  * CHK-01 digest path unchanged; a token file is fresh-read per request
  * (missing/unreadable/unparseable file ⇒ no key can pass — fail closed)
@@ -877,17 +913,8 @@ function bearerGate(
       ? { credential: { kind: "env" } }
       : { response: authFailureResponse() };
   }
-  const loaded = loadTokenFile(config.tokenFilePath!);
-  if (!("text" in loaded)) return { response: authFailureResponse() };
-  const parsed = parseTokenFileText(loaded.text);
-  if ("error" in parsed) return { response: authFailureResponse() };
-  const authorization = request.headers.get("authorization");
-  // Scheme shape is part of the uniform failure path: a non-Bearer header
-  // fails exactly like a missing one (single 401, no early distinctions).
-  const match = /^Bearer (.+)$/.exec(authorization ?? "");
-  if (match === null) return { response: authFailureResponse() };
-  const entry = authenticateBearerKey(match[1]!, parsed.entries);
-  return entry !== undefined ? { credential: { kind: "file", entry } } : { response: authFailureResponse() };
+  const credential = fileGateCredential(request, config);
+  return credential !== undefined ? { credential } : { response: authFailureResponse() };
 }
 
 /** Per-request roster admission from the matched key's scopes (rehearsal
@@ -1034,7 +1061,19 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
       try {
         // Public door document (ADR-REM-003): no key presented, no scope
         // narrowing — the door's own width is what the roster declares.
-        return jsonResponse(buildDoorDocument(listDoorEndpoints(config.registryPath, select), gateArmed(config)));
+        // Key-echo (ADR-REM-014 / INV-23): a VALID file key additionally
+        // earns its own admission roster — the same scope ∩ select ∩
+        // registry set the tier-2 route denial prints as `available:` (the
+        // echo aggregates a disclosure that already exists, it opens no new
+        // face) — while anonymous, invalid, and env-credential fetches keep
+        // the public document byte-identical: no echo, no credential oracle.
+        const echo = fileGateCredential(request, config);
+        const admitted = echo !== undefined
+          ? listDoorEndpoints(config.registryPath, select, scopeAdmit(echo, "ro")).map((endpoint) => endpoint.name)
+          : undefined;
+        return jsonResponse(
+          buildDoorDocument(listDoorEndpoints(config.registryPath, select), gateArmed(config), admitted),
+        );
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         return jsonResponse(errorBody("provider-unavailable", `Host Registry is not readable: ${reason}`), 503);

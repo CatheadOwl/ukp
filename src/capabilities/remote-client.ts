@@ -1079,6 +1079,15 @@ export interface DoorFetch {
   bearerRequired: boolean;
 }
 
+/** Key-echo normalization (ADR-REM-014): `admitted` rides the raw record —
+ * keep it only as a plain string array. An older door omits the field; a
+ * malformed one must not poison the register/list annotations downstream. */
+function doorAdmittedOf(record: Record<string, unknown>): string[] | undefined {
+  const raw = record.admitted;
+  if (!Array.isArray(raw) || raw.some((name) => typeof name !== "string")) return undefined;
+  return raw as string[];
+}
+
 /** Fetch + validate a host door document (ADR-REM-004 / O-1): requires
  * `scope:"host"` and a well-formed `endpoints[]` roster. Per-endpoint TOFU
  * happens on the per-endpoint documents at import/call time — the door
@@ -1098,9 +1107,19 @@ export async function fetchDoorDocument(
     throw new RemoteTransportError(`service at ${display} is not a host door (scope: ${String(record.scope)}); register it directly with 'ukp register --url ${display}'`);
   }
   return {
-    doc: { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, display) },
+    doc: doorDocumentOf(record, display),
     bearerRequired,
   };
+}
+
+/** Build the validated DoorDocument: `endpoints[]` checked per O-1, the
+ * key-echo `admitted` normalized (or stripped when malformed). */
+function doorDocumentOf(record: Record<string, unknown>, display: string): DoorDocument {
+  const doc: DoorDocument = { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, display) };
+  const admitted = doorAdmittedOf(record);
+  if (admitted === undefined) delete doc.admitted;
+  else doc.admitted = admitted;
+  return doc;
 }
 
 /** Registration-time well-known fetch with scope discrimination (O-1): the
@@ -1126,7 +1145,7 @@ export async function fetchRegistrationDocument(
     return {
       kind: "door",
       door: {
-        doc: { ...(record as unknown as DoorDocument), endpoints: parseDoorEndpoints(record, display) },
+        doc: doorDocumentOf(record, display),
         bearerRequired,
       },
     };

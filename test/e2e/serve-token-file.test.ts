@@ -265,6 +265,65 @@ describe("serve token file: scoped overreach (two refusal tiers — 2026-11-11 r
   });
 });
 
+describe("door key-echo (ADR-REM-014 / INV-23): the well-known document admits its own key", () => {
+  test("a valid file key earns its admission roster; anonymous, invalid, and env fetches stay byte-identical public", async () => {
+    const path = tokenFileOf([{ label: "liku", scopes: "notes:ro,cad:ro" }]);
+    const key = issueInto(path, "liku-live", "notes:ro,cad:ro");
+    const door = startDoor({ tokenFilePath: path });
+    // The echo: this key's own effective set (scope ∩ select ∩ registry,
+    // read tier). 'writer' stays on the PUBLIC roster — its existence is
+    // discovery knowledge — while the echo speaks only for this key.
+    const echoed = await fetch(`${door.info.url}${DISCOVERY_PATH}`, { headers: { authorization: `Bearer ${key}` } });
+    expect(echoed.status).toBe(200);
+    const echoDoc = await echoed.json() as { endpoints: Array<{ name: string }>; admitted?: string[] };
+    expect(echoDoc.endpoints.map((endpoint) => endpoint.name).sort()).toEqual(["cad", "notes", "writer"]);
+    expect([...echoDoc.admitted ?? []].sort()).toEqual(["cad", "notes"]);
+    // INV-23, three-state uniformity: anonymous and invalid-credential
+    // fetches keep the PUBLIC document byte-identical — no echo, and the
+    // difference never becomes a credential oracle.
+    const anonymous = await fetch(`${door.info.url}${DISCOVERY_PATH}`);
+    const invalid = await fetch(`${door.info.url}${DISCOVERY_PATH}`, {
+      headers: { authorization: "Bearer not-a-valid-key" },
+    });
+    const anonymousText = await anonymous.text();
+    expect(await invalid.text()).toBe(anonymousText);
+    expect(anonymousText).not.toContain("admitted");
+    // Same source, same function: the echo equals the roster the tier-2
+    // route denial prints as `available:` for the same key (the ADR's
+    // "disclosure already in the field" claim, as a mechanical anchor).
+    const denial = await read(door.info, "writer", key);
+    expect(denial.status).toBe(404);
+    const denialBody = JSON.parse(await denial.text()) as { error: { message: string } };
+    const available = /\(available: (.*)\)$/.exec(denialBody.error.message)?.[1]?.split(", ").sort() ?? [];
+    expect(available).toEqual([...echoDoc.admitted!].sort());
+    // Env credentials never earn an echo (scopeAdmit's undefined = the
+    // door's own width): a valid env bearer and an anonymous fetch of the
+    // same door answer byte-identically.
+    const envDoor = startDoor({ tokens: ["env-secret"] });
+    const envEcho = await fetch(`${envDoor.info.url}${DISCOVERY_PATH}`, {
+      headers: { authorization: "Bearer env-secret" },
+    });
+    const envText = await envEcho.text();
+    expect(envText).toBe(await (await fetch(`${envDoor.info.url}${DISCOVERY_PATH}`)).text());
+    expect(envText).not.toContain("admitted");
+  });
+
+  test("the echo stays inside the public roster: select-excluded names never surface (INV-23 bound)", async () => {
+    const path = tokenFileOf([{ label: "broad", scopes: "*:ro" }]);
+    const key = issueInto(path, "broad-live", "*:ro");
+    const door = startDoor({ tokenFilePath: path, select: ["notes"] });
+    const doc = await (await fetch(`${door.info.url}${DISCOVERY_PATH}`, {
+      headers: { authorization: `Bearer ${key}` },
+    })).json() as { endpoints: Array<{ name: string }>; admitted?: string[] };
+    // The public roster is the select ∩ registry set; the echo is a subset
+    // of it even though this key's scopes cover the whole registry — a
+    // select-excluded name stays indistinguishable from an unknown one
+    // (INV-07 / INV-22 tier-1, untouched by the echo).
+    expect(doc.endpoints.map((endpoint) => endpoint.name)).toEqual(["notes"]);
+    expect(doc.admitted).toEqual(["notes"]);
+  });
+});
+
 describe("serve token file: single-endpoint mode scopes", () => {
   test("out-of-scope and ro-on-write keys are uniform 401s on this gate", async () => {
     const path = tokenFileOf([{ label: "cad-client", scopes: "cad:rw" }]);

@@ -172,7 +172,7 @@ Registry commands:
 | `ukp init service` | Creates a minimal `.ukp/service.toml`. The `.ukp/.gitignore` it drops ignores machine-local state only (the instance identity; the serve TLS identity lives in `~/.ukp/tls/`) — `service.toml` and `client.toml` are pure declarations and committable by design (a fresh clone re-registers in one `ukp register`). |
 | `ukp use <endpoint> [endpoint...]` | One-step consumer gesture: sets this workspace's `default_endpoints` (`.ukp/client.toml`, explicit replace, idempotent — every name must be registered) and keeps the config version-visible in the same step. `ukp inspect` confirms the active scope. |
 | `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings — local folders and remote endpoints alike (`ukp register --url`, see Remote in 60 seconds). `--name <handle>` disambiguates collisions: `notes` vs `ali-notes`. A folder that moved re-binds in one step: `ukp register --rebind` from the new location (local bindings). |
-| `ukp list` | Lists endpoint bindings and capabilities under the **workspace scope** by default (nearest `.ukp/client.toml`; every registered endpoint when there is none); `-g` lists the full Host Registry without reading the client config. `--json` emits the offline machine snapshot (`ukp.list.v1`) riding the same scope — stable field names, the same data core as the text listing, zero network (remote bindings are registry facts only, so their capability fields are `null`); pin `-g` for the full snapshot. New endpoints on a host door show as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture. |
+| `ukp list` | Lists endpoint bindings and capabilities under the **workspace scope** by default (nearest `.ukp/client.toml`; every registered endpoint when there is none); `-g` lists the full Host Registry without reading the client config. `--json` emits the offline machine snapshot (`ukp.list.v1`) riding the same scope — stable field names, the same data core as the text listing, zero network (remote bindings are registry facts only, so their capability fields are `null`); pin `-g` for the full snapshot. New endpoints on a host door show as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture; when the note-owning binding carries a token, the door answers the check with the key's own admission, marking unimported names outside your key `(not under your key)` and naming bindings your key cannot touch. |
 
 A legacy `.ukp/.gitignore` (the retired `*` self-ignore template) migrates
 to this posture in passing whenever `ukp register` (local folders) or
@@ -238,8 +238,13 @@ deleting a line revokes without a restart. A scoped key sees only its own
 endpoints: a name the door declares but the key cannot touch answers
 `no route for '<name>' under your key` — uniform whether the scope is
 read-only, absent, or the write route is undeclared, never 403 — while
-names the door does not declare answer exactly like nonexistent ones. While
-`UKP_SERVE_TOKEN` is set it takes precedence and the file is not consulted.
+names the door does not declare answer exactly like nonexistent ones. That
+boundary is visible before the first call, too: `register --token` marks
+blind imports on the spot (`your key has no scope for it`), because the
+door's public document answers an authenticated fetch with the key's own
+admitted names. While `UKP_SERVE_TOKEN` is set it takes precedence and the
+file is not consulted (env tokens never earn an echo — the door's own width
+applies).
 
 NAT/EIP cloud host (public IP on no NIC)? Name it with
 `ukp serve --tls --tls-san <public-ip>` — the persisted certificate re-signs

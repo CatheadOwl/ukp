@@ -64,7 +64,11 @@ Scoped keys for a second machine or an agent (instead of sharing the env token):
    A scoped key only sees its own endpoints: a name the door declares but
    your key cannot touch answers 'no route under your key' (a read-only
    scope has no propose route); names the door does not declare answer
-   exactly like nonexistent ones.
+   exactly like nonexistent ones. You do NOT have to hit that wall blind:
+   registering with the key already tells you - imports outside your key's
+   scope are marked on the spot ("your key has no scope for it") and
+   'ukp list' keeps flagging them, because the door's public document
+   answers the authenticated fetch with the key's own admitted names.
 
 4. Revoke on the host (effective on the next request - no restart)
    ukp serve token list
