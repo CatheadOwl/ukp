@@ -42,26 +42,29 @@ LAN HTTPS path:
    ukp rg "keyword" --endpoint <name>
 
 Scoped keys for a second machine or an agent (instead of sharing the env token):
-1. Hand an endpoint over in one gesture (the door must be up; --at is the
-   origin the consumer will use, and share probes the door through it)
-   ukp serve status                                  # door width at a glance
+1. Cold start, once per machine: mint the FIRST key (this also arms the
+   door's gate - an empty token file serves nothing), run WITHOUT
+   UKP_SERVE_TOKEN set (while the env token is set the key file is not
+   consulted), then start the door and keep it under your process manager
+   ukp serve token add liku "notes:ro"         # prints the raw key ONCE
+   ukp serve --host 0.0.0.0 --tls --select notes
+2. Hand an endpoint over in one gesture (--at is the origin the consumer
+   will use, and share probes the door through it)
+   ukp serve status [--port <n>]                # door width at a glance
    ukp serve share notes --to liku --at https://192.168.1.10:8570
    share validates 'notes' is on the live roster (a name hidden by --select
    gets the rebuilt 'ukp serve --select ...' widen command instead - restart
    required, that is by design), mints a key scoped to exactly 'notes'
    (add --rw for the propose route), and prints the consumer's paste-ready
    'ukp register --url .../notes --token <key>' line with the raw key shown
-   ONCE. Manual form, e.g. for broader scopes:
-   ukp serve token add liku "notes:ro,cad:rw"    # prints the raw key ONCE
-   The key lands in ~/.ukp/tokens (0600, hash-only); scopes are name:ro|rw,
+   ONCE.
+   The keys land in ~/.ukp/tokens (0600, hash-only); scopes are name:ro|rw,
    comma-separated (full power is the explicit '*:rw'); several keys may share
-   a label for zero-downtime rotation.
+   a label for zero-downtime rotation. Manual form for broader scopes is the
+   same mint command, e.g. ukp serve token add liku "notes:ro,cad:rw".
 
-2. Serve the door with no env token (the file arms the gate; it is re-read on
-   every request)
-   ukp serve --host 0.0.0.0 --tls
-
-3. On the consuming machine, register with the raw key as the token
+2. On the consuming machine, register with the raw key as the token
+   (the share gesture above prints this exact line, scoped to one endpoint)
    ukp register --url https://<ip>:8570 --token <raw-key>
    With an OS credential store present the raw key goes there (Windows
    DPAPI / macOS Keychain / Linux secret-tool) and the registry keeps only
@@ -78,7 +81,7 @@ Scoped keys for a second machine or an agent (instead of sharing the env token):
    'ukp list' keeps flagging them, because the door's public document
    answers the authenticated fetch with the key's own admitted names.
 
-4. Revoke on the host (effective on the next request - no restart)
+3. Revoke on the host (effective on the next request - no restart)
    ukp serve token list
    ukp serve token revoke liku
 
