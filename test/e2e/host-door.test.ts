@@ -23,6 +23,7 @@ import { executeSearchCommand } from "../../src/commands/search.ts";
 import { executeReadCommand } from "../../src/commands/read.ts";
 import { executeRgCommand } from "../../src/commands/rg.ts";
 import { createQmdFixtureCopy } from "../helpers/qmd-fixture.ts";
+import { binAvailable } from "../helpers/bin-probe.ts";
 import { openRemoteTransport, fetchDiscoveryDocument } from "../../src/capabilities/remote-client.ts";
 
 // ukp_remote W7 client-side tests: host door access (ADR-REM-004). The
@@ -38,6 +39,7 @@ const serverRegistryPath = join(root, "server-registry.toml");
 const registryPath = join(root, "client-registry.toml");
 const fixture = createQmdFixtureCopy("host-door");
 const qmdCommand = [nodeExecutable, join(fixture, "qmd-fixture.mjs")];
+const opensslAvailable = binAvailable("openssl", ["version"]);
 
 function createService(folderName: string, endpointName: string): string {
   const folder = join(root, folderName);
@@ -509,6 +511,30 @@ describe("door drift notes (view dynamic, ledger static)", () => {
     // No drift note — only the per-row (unavailable) degradation.
     expect(list.stderr).not.toContain("unimported");
     expect(list.stdout).toContain("(unavailable)");
+  });
+
+  test.skipIf(!opensslAvailable)("the drift fetch carries the TOFU anchor: a self-signed https door still reports drift (ISSUE-017)", async () => {
+    // Own server-side registry: sibling tests grow the shared one.
+    const tlsServerRegistry = join(root, "tls-drift-server-registry.toml");
+    registerAt(tlsServerRegistry, "notes", createService("tls-drift-notes-svc", "notes"));
+    registerAt(tlsServerRegistry, "archive", createService("tls-drift-archive-svc", "archive"));
+    const { info } = startDoor({ registryPath: tlsServerRegistry, tls: { mode: "self-signed" } });
+    // Real-world registration shape: the TOFU probe pins the self-signed
+    // identity into the binding — exactly the anchor the drift fetch must
+    // carry onward. Pre-fix that hand-off was dropped: the self-signed door
+    // rejected the well-known fetch (DEPTH_ZERO_SELF_SIGNED_CERT) and the
+    // catch-all swallowed it, so no note ever printed for any https door.
+    const reg = await asResult(executeRegisterCommand(["--url", `${info.url}/notes`, "--name", "tls-notes"], context));
+    expect(reg.exitCode).toBe(0);
+    expect(reg.stdout).toContain("imported: tls-notes");
+    const binding = readRegistry(registryPath).find((candidate) => candidate.name === "tls-notes");
+    expect(binding?.tls_cert).toBeDefined();
+    expect(binding?.tls_pin).toBeDefined();
+
+    const list = await asResult(executeListCommand([], context));
+    expect(list.exitCode).toBe(0);
+    expect(list.stderr).toContain(`door ${info.url}: 1 unimported endpoint(s): archive`);
+    expect(list.stderr).not.toContain("unimported endpoint(s): notes");
   });
 });
 

@@ -1125,7 +1125,14 @@ async function collectDoorDriftNotes(
         url: origin,
         ...(anchor.tls_cert !== undefined ? { tls_cert: anchor.tls_cert, tls_pin: anchor.tls_pin } : {}),
       });
-      const door = await fetchDoorDocument(transport.base, { displayUrl: transport.displayUrl });
+      const door = await fetchDoorDocument(transport.base, {
+        displayUrl: transport.displayUrl,
+        // ISSUE-017: the anchor hangs on the transport handle only — the
+        // fetch must carry it onward (same hand-off as fetchDiscoveryDocument),
+        // or a self-signed TOFU door rejects the well-known fetch and the
+        // drift note dies silently for its primary deployment shape.
+        ...(transport.tls !== undefined ? { tlsAnchor: transport.tls } : {}),
+      });
       const unimported = door.doc.endpoints
         .map((endpoint) => endpoint.name)
         .filter((name) => !group.imported.has(name));
