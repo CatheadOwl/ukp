@@ -36,7 +36,9 @@ export const INIT_SPEC: UkpCommandSpec = {
     "",
     "Run 'ukp init service' to create a Service Manifest",
     "('.ukp/service.toml') in the current folder; 'service' is currently",
-    "the only target.",
+    "the only target. Its options (--name, --description, --dependency)",
+    "are listed by 'ukp init service --help' — this parent help routes",
+    "there instead of duplicating subcommand flags.",
     "",
   ].join("\n"),
 };

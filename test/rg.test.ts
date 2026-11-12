@@ -9,7 +9,7 @@ import {
   splitRgPassthrough,
   type RgCommandResult,
 } from "../src/commands/rg.ts";
-import { RgUsageError, validateRgPassthrough } from "../src/capabilities/rg.ts";
+import { RgUsageError, runRg, validateRgPassthrough } from "../src/capabilities/rg.ts";
 import { KitUsageError } from "../src/commands/kit.ts";
 import type { RgContext } from "../src/capabilities/rg.ts";
 import { registerAt } from "../src/registry.ts";
@@ -239,7 +239,67 @@ describe("ukp rg command surface", () => {
       };
       const result = executeRgCommand(["--endpoint", "kb", "needle"], context);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("rg executable is not available");
+      expect(result.stderr).toContain("rg executable not found in PATH on this machine");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // 2026-11-12 walkthrough F4: a spawnSync timeout sets error.code =
+  // ETIMEDOUT, and the previous error-first classification read it as a
+  // missing executable — the first cold spawn (win32 Defender tax) taught
+  // the remedy for an absent binary. The timeout must fail as a timeout.
+  test("a timed-out spawn fails as a timeout, not a missing tool (walkthrough F4)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-timeout-"));
+    const previousTimeout = process.env.UKP_RG_TIMEOUT_MS;
+    process.env.UKP_RG_TIMEOUT_MS = "500";
+    try {
+      const service = createService(root, "kb");
+      writeFiles(service, [{ path: "a.md", content: "needle\n" }]);
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "kb", service);
+      // A script file (not `-e`): runRg appends rg's own tool args after the
+      // injected command, and node would parse those as ITS options.
+      const sleeper = join(root, "rg-sleep.mjs");
+      writeFileSync(sleeper, "setTimeout(() => {}, 10_000);\n");
+      const context: RgContext = {
+        currentDirectory: root,
+        registryPath,
+        rgCommand: [nodeExecutable, sleeper],
+      };
+      const result = executeRgCommand(["--endpoint", "kb", "needle"], context);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("rg timed out after 0.5s on this machine");
+      expect(result.stderr).not.toContain("not found in PATH");
+    } finally {
+      if (previousTimeout === undefined) delete process.env.UKP_RG_TIMEOUT_MS;
+      else process.env.UKP_RG_TIMEOUT_MS = previousTimeout;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The remote path relays the executing side's message verbatim (W6), so
+  // the door-side context must name the door host — the consumer reading
+  // "not found in PATH" learns WHICH machine lacks the binary.
+  test("the door side names itself in the missing-tool message (walkthrough F4)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ukp-rg-doorside-"));
+    try {
+      const service = createService(root, "kb");
+      writeFiles(service, [{ path: "a.md", content: "needle\n" }]);
+      const registryPath = join(root, "registry.toml");
+      registerAt(registryPath, "kb", service);
+      const result = runRg(
+        {
+          request: { query: "needle", limit: 50 },
+          options: { global: false, explicitEndpoints: ["kb"], passthrough: [] },
+          warnings: [],
+        },
+        { currentDirectory: root, registryPath, rgCommand: ["ukp-rg-definitely-missing-executable"], executionSide: "door" },
+      );
+      expect(result.endpoints[0]!.status).toBe("skipped");
+      expect(result.endpoints[0]!.message).toBe("rg executable not found in PATH on the door host");
+      expect(result.warnings[0]).toContain("rg unavailable: rg executable not found in PATH on the door host");
+      expect(result.aggregate).toBe("no-success");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1017,8 +1017,12 @@ function renderListOutput(
 function listHeaderLine(): string {
   // The parenthetical is plain-language by probe verdict (20260921-list-wording):
   // blank readers parsed "(built-in, from the folder itself)" directly, while
-  // "(derived file-native)" read as undefined jargon.
-  return `capabilities on every endpoint: ${DEFAULT_CAPABILITIES.join(", ")} (built-in, from the folder itself); additional declared capabilities per endpoint:`;
+  // "(derived file-native)" read as undefined jargon. Reworded 2026-11-12
+  // (walkthrough F6): "from the folder itself" is false on a consumer
+  // machine, where a remote row's capabilities arrive from the door's
+  // discovery document — "(no declaration needed)" keeps the plain-language
+  // bar while staying true for both local and remote rows.
+  return `capabilities on every endpoint: ${DEFAULT_CAPABILITIES.join(", ")} (built-in, no declaration needed); additional declared capabilities per endpoint:`;
 }
 
 /** Space-padded columns: each cell pads to the widest same-column cell plus

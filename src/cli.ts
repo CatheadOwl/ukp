@@ -218,7 +218,7 @@ export function renderHelp(): string {
     "A Service is a folder with a manifest (a name plus optional declared capabilities); registering it binds that name as an endpoint you address with --endpoint. The scope is which endpoints commands use when no --endpoint is given; -g widens a command to every registered endpoint; 'ukp guide client' shows how to set the workspace default.",
     "",
     "Guides:",
-    ...GUIDE_TOPICS.map(([topic, summary]) => `  ukp ${`guide ${topic}`.padEnd(17)} ${summary}`),
+    ...GUIDE_TOPICS.map(([topic, summary]) => `  ukp ${`guide ${topic}`.padEnd(19)} ${summary}`),
     "",
     "Options:",
     "  -h, --help     show this help",

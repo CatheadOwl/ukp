@@ -1469,6 +1469,10 @@ function handleRg(url: URL, request: Request, config: ServeConfig, endpointName:
   const result = runRg(parsed.parsed, {
     currentDirectory: config.currentDirectory,
     registryPath: config.registryPath,
+    // The door is the executing side: its rg-degradation messages relay to
+    // the consumer verbatim, so they must name the door host (walkthrough
+    // F4 — "rg executable is not available" did not say whose PATH).
+    executionSide: "door",
   });
   return jsonResponse(projectRgEnvelope(result));
 }

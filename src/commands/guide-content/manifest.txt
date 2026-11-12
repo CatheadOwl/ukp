@@ -1,10 +1,11 @@
 UKP guide manifest — the Service manifest declaration reference
 
 The manifest (.ukp/service.toml) is the one file you author by hand. The
-full reference — every legal key, the grammar, and loadable examples — ships
-inside the package at skills/ukp/reference/manifest.md (same path in the
-public repository). An anchor test keeps that page in lockstep with the
-loader's schema.
+full reference — every legal key, the grammar, and loadable examples —
+travels inside the package: run 'ukp guide manifest full' to read it (the
+same file sits at skills/ukp/reference/manifest.md in the public
+repository). An anchor test keeps that page in lockstep with the loader's
+schema.
 
 Cheat sheet:
 - [capabilities] is required; an empty table is the valid read-only endpoint

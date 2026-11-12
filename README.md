@@ -86,8 +86,8 @@ predictable scope, and a single command surface. Use UKP when:
 - Want a read-only endpoint? Declare zero capabilities — an empty
   `[capabilities]` table still registers one (derived `read`/`nav` only).
 - Writing a manifest by hand? Every legal key and its grammar ship in the
-  package — `skills/ukp/reference/manifest.md` (`ukp guide manifest` points
-  there).
+  package — read them with `ukp guide manifest full` (`ukp guide manifest`
+  is the five-line cheat sheet).
 - Give agents JSON output (`--json`; `ukp read` uses `--format json`),
   reference sidecars, docid handoff keys, and durable `ukp://` references
   when they need machine-readable results; every `ukp://` reference opens

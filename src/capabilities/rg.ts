@@ -53,6 +53,12 @@ export interface RgContext {
   rgCommand?: readonly string[];
   /** Test injection point for the ssh binary the wake transport spawns. */
   sshCommand?: readonly string[];
+  /** Which machine spawns rg — names the side in degraded/failed messages.
+   * The remote path relays the executing side's message verbatim to the
+   * consumer (W6), so without this a missing binary reads the same on both
+   * sides and the consumer cannot tell whose PATH lacks it (2026-11-12
+   * walkthrough F4). Defaults to the local client. */
+  executionSide?: "client" | "door";
 }
 
 /** ADR 0021 aggregate classification — the adapter maps it onto exit codes;
@@ -384,20 +390,41 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
       timeout: rgTimeoutMs(),
     });
 
-    if (result.error || result.status === TOOL_NOT_FOUND_EXIT) {
-      // ADR-RG-003/R-7: a missing base tool is a degradation, not a fault —
-      // skipped + warning, the run continues with other endpoints.
-      warnings.push(`endpoint '${endpoint.name}' rg unavailable: rg executable is not available`);
-      outcome.status = "skipped";
-      outcome.message = "rg executable is not available";
-      continue;
-    }
-    if (result.signal === "SIGTERM") {
+    // Classification precedes disposition (2026-11-12 walkthrough F4): a
+    // spawnSync timeout sets error.code = ETIMEDOUT (and kills with
+    // SIGTERM), so the timeout check must run BEFORE the missing-tool
+    // branch — the previous error-first order read a timed-out cold spawn
+    // (win32 Defender first-spawn tax) as "rg executable is not available"
+    // and taught the remedy for a missing binary.
+    const spawnError = result.error as NodeJS.ErrnoException | undefined;
+    const side = context.executionSide === "door" ? "the door host" : "this machine";
+    if (result.signal === "SIGTERM" || spawnError?.code === "ETIMEDOUT") {
       failed = true;
-      const message = `endpoint '${endpoint.name}' rg timed out after ${rgTimeoutMs() / 1000}s (set UKP_RG_TIMEOUT_MS to adjust)`;
+      const message = `endpoint '${endpoint.name}' rg timed out after ${rgTimeoutMs() / 1000}s on ${side} (set UKP_RG_TIMEOUT_MS to adjust)`;
       warnings.push(message);
       outcome.status = "failed";
-      outcome.message = `rg timed out after ${rgTimeoutMs() / 1000}s`;
+      outcome.message = `rg timed out after ${rgTimeoutMs() / 1000}s on ${side}`;
+      continue;
+    }
+    if (spawnError?.code === "ENOENT" || result.status === TOOL_NOT_FOUND_EXIT) {
+      // ADR-RG-003/R-7: a missing base tool is a degradation, not a fault —
+      // skipped + warning, the run continues with other endpoints. The side
+      // is named because the remote path relays this message verbatim: the
+      // consumer must learn WHICH machine's PATH lacks the executable.
+      warnings.push(`endpoint '${endpoint.name}' rg unavailable: rg executable not found in PATH on ${side}`);
+      outcome.status = "skipped";
+      outcome.message = `rg executable not found in PATH on ${side}`;
+      continue;
+    }
+    if (spawnError !== undefined) {
+      // Other launch failures (EACCES, EAGAIN, ...): the tool exists but
+      // did not start — a fault, not a degradation. The errno code is the
+      // safe detail (no argv, no paths).
+      failed = true;
+      const detail = spawnError.code ?? "spawn error";
+      warnings.push(`endpoint '${endpoint.name}' rg failed to start on ${side} (${detail})`);
+      outcome.status = "failed";
+      outcome.message = `rg failed to start on ${side} (${detail})`;
       continue;
     }
     if (result.signal === "SIGINT" || result.status === 130) {

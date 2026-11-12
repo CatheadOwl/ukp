@@ -37,7 +37,7 @@ import { PROPOSE_SPEC } from "../src/commands/propose.ts";
 import { RG_SPEC } from "../src/commands/rg.ts";
 import { READ_SPEC } from "../src/commands/read.ts";
 import { INIT_SPEC } from "../src/commands/init.ts";
-import { GUIDE_SPEC } from "../src/commands/guide.ts";
+import { executeGuideCommand, GUIDE_SPEC } from "../src/commands/guide.ts";
 import { LIST_SPEC, REGISTER_SPEC, UNREGISTER_SPEC, executeListCommand } from "../src/commands/inventory.ts";
 import { SERVE_SPEC } from "../src/commands/serve.ts";
 import { USE_SPEC } from "../src/commands/use.ts";
@@ -635,6 +635,12 @@ describe("CLI bootstrap", () => {
     const initOutput: string[] = [];
     const serviceOutput: string[] = [];
     expect(renderInitHelp()).toContain("Usage: ukp init <target>");
+    // Walkthrough F1 (2026-11-12): the parent help routes to the subcommand
+    // help for its flags instead of duplicating them — the walkthrough
+    // subject read `ukp init --help`, found only -h, and concluded the
+    // flags the guide teaches did not exist.
+    expect(renderInitHelp()).toContain("ukp init service --help");
+    expect(renderInitHelp()).not.toContain("--name <name>");
     expect(renderInitServiceHelp()).toContain("Usage: ukp init service");
     expect(runCli(["init", "--help"], (message) => initOutput.push(message))).toBe(0);
     expect(runCli(["init", "service", "--help"], (message) => serviceOutput.push(message))).toBe(0);
@@ -965,16 +971,31 @@ describe("CLI bootstrap", () => {
 
   test("guide help lists the topics and subtopics", () => {
     expect(renderGuideHelp().replace(/\s+/g, " ")).toContain("guide topic: service | service qmd | client | rg | remote | propose | manifest");
+    expect(renderGuideHelp().replace(/\s+/g, " ")).toContain("'full' as in 'ukp guide manifest full'");
   });
 
   // The manifest topic is a thin pointer: the normative grammar lives in the
   // published reference (skills/ukp/reference/manifest.md), anchored to the
-  // zod schema by manifest-reference.test.ts — the guide just routes there.
+  // zod schema by manifest-reference.test.ts — the guide routes there, and
+  // since walkthrough F8 (2026-11-12) the route is a resolvable command:
+  // `ukp guide manifest full` reads the reference that travels inside the
+  // package (the repo path stays as provenance, not as the reading
+  // entrance — a global install cannot resolve a package-internal path).
   test("guide manifest points at the published declaration reference", () => {
     const guide = renderManifestGuide().replace(/\s+/g, " ");
+    expect(guide).toContain("ukp guide manifest full");
     expect(guide).toContain("skills/ukp/reference/manifest.md");
     expect(guide).toContain("[capabilities] is required");
     expect(guide).toContain("authority | context | implementation | evidence");
+  });
+
+  test("guide manifest full renders the bundled normative reference verbatim (walkthrough F8)", () => {
+    const result = executeGuideCommand(["manifest", "full"]);
+    expect(result.exitCode).toBe(0);
+    const reference = readFileSync(new URL("../skills/ukp/reference/manifest.md", import.meta.url), "utf8");
+    expect(result.stdout).toBe(reference);
+    expect(result.stdout).toContain("[capabilities]");
+    expect(executeGuideCommand(["manifest", "definitely-not-full"]).exitCode).toBe(2);
   });
 
   // ADR-RG-005 design condition 4: rg stops being the only command without
@@ -1576,7 +1597,7 @@ describe("CLI bootstrap", () => {
     expect(output.join("\n")).toContain("fixture-qmd");
     expect(output.join("\n")).toContain("description: Deterministic QMD-compatible search fixture");
     expect(output.join("\n")).toContain(
-      "capabilities on every endpoint: nav, read (built-in, from the folder itself); additional declared capabilities per endpoint:",
+      "capabilities on every endpoint: nav, read (built-in, no declaration needed); additional declared capabilities per endpoint:",
     );
     // Column-aligned rows: two-space gutters, no tab dependence (the single
     // row pads to its own widths, so name and location end in exactly two

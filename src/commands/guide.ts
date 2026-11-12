@@ -16,6 +16,14 @@ export interface GuideCommandResult {
 
 const GUIDE_CONTENT_URL = new URL("./guide-content/", import.meta.url);
 
+/** The normative manifest reference rides the package (files whitelist:
+ * skills/ukp/SKILL.md + skills/ukp/reference/manifest.md). Resolved
+ * package-relative so a global install reads its own copy — the repo path
+ * is provenance, not the reading entrance (2026-11-12 walkthrough F8: the
+ * guide pointed at a package-internal path a global-install user cannot
+ * resolve). */
+const MANIFEST_REFERENCE_URL = new URL("../../skills/ukp/reference/manifest.md", import.meta.url);
+
 /** Single source for guide topic one-liners — root help and
  * `ukp guide --help` render the same summaries (blank-agent sweep 2026-09-11:
  * the inversion of root help describing guides better than guide's own help
@@ -27,7 +35,8 @@ export const GUIDE_TOPICS: ReadonlyArray<readonly [string, string]> = [
   ["rg", "lexical search and file enumeration: modes, glob semantics, visibility tiers"],
   ["remote", "serve and consume remote endpoints with a host door, ssh, or TLS"],
   ["propose", "submit idempotent change proposals to a Service"],
-  ["manifest", "the .ukp/service.toml declaration reference — every legal key, grammar, and example"],
+  ["manifest", "the .ukp/service.toml declaration cheat sheet and the full reference entry"],
+  ["manifest full", "the full normative manifest reference — every legal key, grammar, and example"],
 ];
 
 /** Single-source command spec (ADR 0024): summary feeds the root help via
@@ -41,13 +50,13 @@ export const GUIDE_SPEC: UkpCommandSpec = {
   usage: "<topic> [subtopic]",
   arguments: [
     { name: "topic", required: true, help: "guide topic: service | service qmd | client | rg | remote | propose | manifest" },
-    { name: "subtopic", help: "provider subtopic for a topic, e.g. 'qmd' as in 'ukp guide service qmd'" },
+    { name: "subtopic", help: "topic subtopic: 'qmd' as in 'ukp guide service qmd', or 'full' as in 'ukp guide manifest full'" },
   ],
   strictArguments: true,
   helpSuffix: [
     "",
     "Topics:",
-    ...GUIDE_TOPICS.map(([topic, summary]) => `  ${topic.padEnd(12)} ${summary}`),
+    ...GUIDE_TOPICS.map(([topic, summary]) => `  ${topic.padEnd(14)} ${summary}`),
     "",
   ].join("\n"),
 };
@@ -73,8 +82,11 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
       }
       return { exitCode: 0, stdout: renderServiceGuide(), stderr: "" };
     }
+    if (topic === "manifest" && subtopic === "full") {
+      return { exitCode: 0, stdout: renderManifestFullReference(), stderr: "" };
+    }
     if (subtopic) {
-      throw new KitUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client, rg, remote, propose, manifest`);
+      throw new KitUsageError(`unknown guide topic '${topic} ${subtopic}'. Available topics: service, service qmd, client, rg, remote, propose, manifest, manifest full`);
     }
     switch (topic) {
       case "client":
@@ -88,7 +100,7 @@ export function executeGuideCommand(args: readonly string[]): GuideCommandResult
       case "manifest":
         return { exitCode: 0, stdout: renderManifestGuide(), stderr: "" };
       default:
-        throw new KitUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client, rg, remote, propose, manifest`);
+        throw new KitUsageError(`unknown guide topic '${topic}'. Available topics: service, service qmd, client, rg, remote, propose, manifest, manifest full`);
     }
   } catch (error) {
     if (error instanceof HelpRequestError) {
@@ -135,6 +147,13 @@ export function renderProposeGuide(): string {
 
 export function renderManifestGuide(): string {
   return readGuideContent("manifest.txt");
+}
+
+/** `ukp guide manifest full`: the bundled normative reference, verbatim —
+ * the resolvable reading entrance for an installed package (the file is
+ * shipped, so no repo checkout is needed to read the full grammar). */
+export function renderManifestFullReference(): string {
+  return readFileSync(MANIFEST_REFERENCE_URL, "utf8");
 }
 
 export function renderGuideUsageError(message: string): string {

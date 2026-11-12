@@ -103,7 +103,10 @@ describe("ukp serve status (W16 / ADR-REM-015)", () => {
     const result = await runServeCommand(["status", "--port", port], context);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain(`door: not answering at http://127.0.0.1:${port}`);
-    expect(result.stdout).toContain("start it, or correct --host/--port");
+    // Walkthrough F2: the down line is address-scoped and names the default
+    // probe + same-port retry (a custom-port door is alive elsewhere).
+    expect(result.stdout).toContain("this address did not answer");
+    expect(result.stdout).toContain("retry status with the same value (the default probe is 8570)");
     expect(result.stdout).toContain(`tokens: 1 key(s) at ${path}`);
   });
 

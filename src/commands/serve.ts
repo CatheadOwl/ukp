@@ -366,8 +366,12 @@ async function executeServeStatusCommand(
       `  door: ${result.origin} is serving a single endpoint, not a host door (status covers door mode)`,
     );
   } else {
+    // Address-scoped, not machine-scoped (2026-11-12 walkthrough F2): a
+    // down probe at the default 8570 must not read as "no door on this
+    // machine" — a door started with a custom --port is alive elsewhere,
+    // so the remedy names the default and the same-port retry.
     lines.push(
-      `  door: not answering at ${result.origin} (${result.reason}) - start it, or correct --host/--port`,
+      `  door: not answering at ${result.origin} (${result.reason}) - this address did not answer; if the door runs on a custom --port, retry status with the same value (the default probe is 8570)`,
     );
   }
 

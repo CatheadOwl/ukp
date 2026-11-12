@@ -59,15 +59,21 @@ function describeScopeSource(scope: ResolvedScope, context: InspectCommandContex
   return scope.configPath ? `Client Config (${scope.configPath})` : "Client Config";
 }
 
+/** Discriminated inspection result: `local-only` is the remote-binding
+ * state — a by-design limitation, not a failure (2026-11-12 walkthrough
+ * F5: the render used to print it as `status: failed` after a
+ * `binding: <name> -> undefined` line, reading like a JS field miss). */
+type BindingInspection =
+  | { status: "ok" | "unavailable"; report: DiagnoseReport }
+  | { status: "local-only" }
+  | { status: "failed"; message: string };
+
 function inspectBinding(
   binding: RegistryBinding,
   resolveProvider: ProviderResolver | undefined,
-): { status: "ok" | "unavailable"; report: DiagnoseReport } | { status: "failed"; message: string } {
+): BindingInspection {
   if (isRemoteBinding(binding)) {
-    return {
-      status: "failed",
-      message: `remote endpoint '${binding.name}' (${binding.url}): inspect deep-dive is local-only for remote endpoints; capabilities show in 'ukp list'`,
-    };
+    return { status: "local-only" };
   }
   try {
     const service = loadManifest(localPathOf(binding));
@@ -90,11 +96,18 @@ function inspectBinding(
   }
 }
 
-function renderEndpointInspection(binding: RegistryBinding, result: ReturnType<typeof inspectBinding>): string {
+function renderEndpointInspection(binding: RegistryBinding, result: BindingInspection): string {
+  // Remote bindings carry a url, not a folder path — `binding.path` is
+  // undefined for them and printed literally (walkthrough F5).
+  const target = isRemoteBinding(binding) ? binding.url : binding.path;
   const lines = [
     `== ${binding.name} ==`,
-    `binding: ${binding.name} -> ${binding.path}`,
+    `binding: ${binding.name} -> ${target}`,
   ];
+  if (result.status === "local-only") {
+    lines.push("status: local-only (inspect deep-dive reads the Service folder on this machine; remote capabilities show in 'ukp list')");
+    return lines.join("\n");
+  }
   if (result.status === "failed") {
     lines.push("status: failed");
     lines.push(`error: ${result.message}`);
@@ -142,8 +155,12 @@ export function executeInspectCommand(
 
     for (const binding of scope.bindings) {
       const result = inspectBinding(binding, context.resolveProvider);
-      if (result.status === "failed" || result.status === "unavailable") failed = true;
-      if (result.status !== "failed") {
+      // Exit-code contract unchanged (walkthrough F5 reworded the render,
+      // not the code): a remote local-only binding keeps exit 1 — the
+      // requested deep-dive did not happen — it just stops being labeled
+      // "failed" in the text.
+      if (result.status !== "ok") failed = true;
+      if (result.status === "ok" || result.status === "unavailable") {
         warnings.push(...renderDependencyRegistryWarnings(result.report.service, registry));
       }
       output.push("");

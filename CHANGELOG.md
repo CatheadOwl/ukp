@@ -6,6 +6,38 @@ All notable public changes to UKP will be documented in this file.
 
 ### Added
 
+- `ukp guide manifest full` reads the full normative manifest reference from
+  the package (rendered verbatim from the bundled
+  `skills/ukp/reference/manifest.md`): the cheat sheet's pointer to that
+  package-internal path was unresolvable for a global install.
+
+### Fixed
+
+- rg spawn results classify by cause and name the executing side: a
+  timed-out spawn (the win32 first-spawn Defender tax could exceed the 60s
+  budget) previously printed `rg executable is not available` — it now
+  fails as `rg timed out after Ns on this machine|the door host`, a missing
+  binary reads `rg executable not found in PATH on <side>`, and other
+  launch failures (EACCES, ...) report the errno code. Remote runs relay
+  the door-side message verbatim, so the consumer learns which machine
+  lacks the tool.
+- `ukp serve status` scopes its down line to the address: `this address did
+  not answer` + a custom-port same-value retry naming the 8570 default
+  probe — a door started with `--port` is alive elsewhere and no longer
+  reads as "no door on this machine".
+- `ukp inspect` on a remote binding prints the registered url (the binding
+  line previously leaked a literal `undefined`) and `status: local-only`
+  pointing at `ukp list` — a by-design limitation is no longer labeled
+  `status: failed` (exit code unchanged at 1).
+- `ukp list`'s header parenthetical is local/remote neutral: `(built-in, no
+  declaration needed)` replaces `(built-in, from the folder itself)`, which
+  was false on a consumer machine where remote capabilities arrive from the
+  door's discovery document.
+- `ukp init --help` routes to `ukp init service --help` for the subcommand
+  flags (`--name`, `--description`, `--dependency`) instead of omitting
+  them — the walkthrough subject concluded the flags the guide teaches did
+  not exist.
+
 - Handing an endpoint to another machine collapses into one gesture
   (ADR-REM-015): `ukp serve status` self-describes the door (live roster,
   which registered endpoints the roster hides, token summary, TLS identity
