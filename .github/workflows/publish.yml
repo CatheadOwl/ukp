@@ -4,6 +4,7 @@ on:
   release:
     types:
       - published
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -11,7 +12,7 @@ permissions:
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'v')
+    if: startsWith(github.event.release.tag_name, 'v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -34,7 +35,17 @@ jobs:
       - run: bun run typecheck
       - run: npm pack --dry-run --json
 
+      - name: tag-version guard (the release tag must match the package version)
+        if: github.event_name == 'release'
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME}" != "${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package version ${version}"
+            exit 1
+          fi
+
       - name: Skip publish when the version is already on npm
+        if: github.event_name == 'release'
         id: published-check
         run: |
           VERSION=$(node -p "require('./package.json').version")
@@ -43,5 +54,39 @@ jobs:
           fi
 
       - name: Publish
-        if: steps.published-check.outputs.already-published != 'true'
+        if: github.event_name == 'release' && steps.published-check.outputs.already-published != 'true'
         run: npm publish --access public
+
+  # The release-body projection of the per-version changelog
+  # (changelogs/v<semver>.md is the single source: the tarball carries it,
+  # this job posts it verbatim as the GitHub Release body — no hand copy).
+  release-notes:
+    needs: publish
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: prepare release body
+        run: |
+          file="changelogs/v$(node -p "require('./package.json').version").md"
+          if [ ! -f "$file" ]; then
+            echo "::error::missing changelog file $file"
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+            const ls = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/);
+            if (ls[0] === "---") { const e = ls.indexOf("---", 1); if (e > 0) ls.splice(0, e + 1); }
+            while (ls.length && ls[0].trim() === "") ls.shift();
+            fs.writeFileSync("body.md", ls.join("\n") + "\n");
+          ' "$file"
+          head -5 body.md
+
+      - name: update release body
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --notes-file body.md
