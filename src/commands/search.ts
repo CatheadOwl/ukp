@@ -256,7 +256,10 @@ async function executeMixedSearch(
           );
         }
         if (!("search" in discovery.doc.capabilities)) {
-          const message = `endpoint '${binding.name}' declares no search capability`;
+          // The retreat is taught at the failure point (liku field feedback
+          // item 1, 2026-11-13): `ukp rg` is file-native and needs no
+          // capability declaration, so the lexical way out always exists.
+          const message = `endpoint '${binding.name}' declares no search capability; lexical search via 'ukp rg' needs no declaration`;
           // Local planned skips surface their reason as a warning (D-036 render
           // contract); the remote skip joins them so stderr stays informative.
           warnings.push(message);

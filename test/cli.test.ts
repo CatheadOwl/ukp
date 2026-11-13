@@ -1090,8 +1090,11 @@ describe("CLI bootstrap", () => {
         registryPath: join(root, "registry.toml"),
       })).toBe(1);
       const error = errors.join("\n");
-      expect(error).toContain("ukp diagnose: Service Manifest is not readable:");
+      expect(error).toContain("ukp diagnose: no Service manifest in this folder (not a ukp Service):");
       expect(error).toContain(join(root, ".ukp", "service.toml"));
+      // Absent and unreadable are distinct states (liku field feedback
+      // item 2): an empty folder is not "unreadable" — it is not a Service.
+      expect(error).not.toContain("Service Manifest is not readable");
       expect(error).toContain("Hint: 'ukp diagnose' checks the current folder as a Service.");
       expect(error).toContain("ukp guide service");
       expect(error).toContain("Use 'ukp diagnose -g' to validate every registered endpoint");
@@ -1121,7 +1124,7 @@ describe("CLI bootstrap", () => {
       // (`== name ==` block: status:/error: lines on stdout), not the
       // stderr channel prefix — field vocabulary stays as adjudicated (D-076
       // covers channel prefixes only).
-      expect(error).toContain("error: Service Manifest is not readable:");
+      expect(error).toContain("error: no Service manifest in this folder (not a ukp Service):");
       expect(error).toContain(join(endpointRoot, ".ukp", "service.toml"));
       expect(error).not.toContain("ManifestError:");
       expect(error).not.toContain("at loadManifest");

@@ -392,6 +392,10 @@ describe("remote search (mixed driver)", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("plain-endpoint");
     expect(result.stderr).toContain("declares no search capability");
+    // The failure point teaches the lexical retreat (liku field feedback
+    // item 1, 2026-11-13): `ukp rg` is file-native, no declaration needed.
+    expect(result.stderr).toContain("lexical search via 'ukp rg'");
+    expect(result.stderr).toContain("needs no declaration");
   });
 
   test("aggregates a failed remote endpoint with exit 1 and preserves other endpoints", async () => {

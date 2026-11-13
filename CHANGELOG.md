@@ -43,7 +43,10 @@ All notable public changes to UKP will be documented in this file.
 - `ukp inspect` on a remote binding prints the registered url (the binding
   line previously leaked a literal `undefined`) and `status: local-only`
   pointing at `ukp list` — a by-design limitation is no longer labeled
-  `status: failed` (exit code unchanged at 1).
+  `status: failed` (exit code unchanged at 1). Field-confirmed 2026-11-13:
+  a consumer machine on npm 0.3.0 quoted the old `failed: inspect deep-dive
+  is local-only for remote endpoints` line verbatim (liku field feedback) —
+  upgrading alone silences it.
 - `ukp list`'s header parenthetical is local/remote neutral: `(built-in, no
   declaration needed)` replaces `(built-in, from the folder itself)`, which
   was false on a consumer machine where remote capabilities arrive from the
@@ -57,7 +60,8 @@ All notable public changes to UKP will be documented in this file.
   same vocabulary inspect carries; exit code stays 1, aligned with inspect),
   and `ukp list --help`'s `--json` line now states the text/JSON asymmetry:
   the text listing fresh-fetches each remote row's discovery document, JSON
-  reads registry facts only.
+  reads registry facts only. Field-confirmed 2026-11-13 on a consumer
+  machine still quoting the 0.3.0 `failed:` wording (liku field feedback).
 - `ukp serve share`'s hidden-name widen teaching prints only the
   provably-correct delta — the wider `--select` set, merged into the door's
   own start command or saved task files with the owner's original
@@ -92,6 +96,19 @@ All notable public changes to UKP will be documented in this file.
   first credentials are never the owner's everyday credential across the
   surveyed systems (Vault/Jenkins/Rancher/K8s/Tailscale/GitLab et al.).
   The Scoped keys section's duplicate step numbering is fixed in passing.
+- `ukp search` on an endpoint that declares no search capability teaches
+  the lexical retreat at the failure point — the skip reason now ends
+  `lexical search via 'ukp rg' needs no declaration` (rg is file-native,
+  so the way out exists on every endpoint). Field-proven wording (liku
+  consumer machine, 2026-11-13: the user reached `ukp rg` only by prior
+  knowledge).
+- Manifest load failures split absent from unreadable: a folder with no
+  `.ukp/service.toml` reads `no Service manifest in this folder (not a ukp
+  Service): <path>` instead of the technically false `Service Manifest is
+  not readable` (a present-but-unreadable manifest keeps that wording);
+  consumers classify by error class (`ServiceManifestAbsentError`), and the
+  door's 503 provider-unavailable bodies render the loader's message
+  verbatim instead of nesting a second "not readable" prefix.
 
 - Handing an endpoint to another machine collapses into one gesture
   (ADR-REM-015): `ukp serve status` self-describes the door (live roster,

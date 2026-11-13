@@ -539,7 +539,7 @@ describe("search", () => {
         qmdCommand: [nodeExecutable, fixtureExecutable],
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).toContain("Service Manifest is not readable");
+      expect(result.stderr).toContain("no Service manifest in this folder (not a ukp Service)");
       expect(result.stderr).toContain("ukp inspect --endpoint stale");
       expect(result.stdout).toContain("== valid ==");
       expect(invocationCount(valid)).toBe(1);

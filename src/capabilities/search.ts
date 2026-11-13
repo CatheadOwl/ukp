@@ -16,6 +16,8 @@ import { createArtifactRun } from "../artifacts.ts";
 import {
   loadManifest,
   ManifestError,
+  ServiceFolderInaccessibleError,
+  ServiceManifestAbsentError,
   type LoadedManifest,
   type ManifestDependency,
 } from "../config/manifest.ts";
@@ -152,9 +154,12 @@ interface TraversalProvenance {
 }
 
 function isStaleServiceBinding(error: unknown): boolean {
-  if (!(error instanceof ManifestError)) return false;
-  return error.message.startsWith("Service folder is not accessible:")
-    || error.message.startsWith("Service Manifest is not readable:");
+  // Folder-level states classify structurally (config README: consumers
+  // branch on the class, not message text); an unreadable manifest keeps
+  // its message-form check until a consumer needs that distinction.
+  if (error instanceof ServiceFolderInaccessibleError) return true;
+  if (error instanceof ServiceManifestAbsentError) return true;
+  return error instanceof ManifestError && error.message.startsWith("Service Manifest is not readable:");
 }
 
 export interface SearchEndpointEnvelope {

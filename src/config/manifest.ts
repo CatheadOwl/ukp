@@ -78,6 +78,21 @@ export class ServiceFolderInaccessibleError extends ManifestError {
   }
 }
 
+/** Absent-manifest classification (liku field feedback item 2, 2026-11-13):
+ * the Service folder exists but holds no `.ukp/service.toml` — not a Service
+ * at all, a different state from a manifest that exists but cannot be read
+ * (ENOENT and EACCES used to collapse into one "not readable" line, which is
+ * technically false for the absent case). Subclasses ManifestError so broad
+ * `instanceof ManifestError` catches keep working; consumers that need the
+ * distinction branch on the class instead of matching message text (same
+ * pattern as ServiceFolderInaccessibleError). */
+export class ServiceManifestAbsentError extends ManifestError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ServiceManifestAbsentError";
+  }
+}
+
 export function assertRestrictedToml(value: unknown, path = "root"): void {
   if (value === null || value === undefined || value instanceof Date) {
     throw new ManifestError(`${path}: unsupported TOML value`);
@@ -150,6 +165,9 @@ export function loadManifest(serviceFolder: string): LoadedManifest {
   try {
     source = readFileSync(manifestPath, "utf8");
   } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      throw new ServiceManifestAbsentError(`no Service manifest in this folder (not a ukp Service): ${manifestPath}`, { cause: error });
+    }
     throw new ManifestError(`Service Manifest is not readable: ${manifestPath}`, { cause: error });
   }
 

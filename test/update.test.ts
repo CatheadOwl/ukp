@@ -204,7 +204,7 @@ describe("update", () => {
         "expected-name",
       ]), context(root, registryPath));
       expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("Service Manifest is not readable");
+      expect(result.stdout).toContain("no Service manifest in this folder (not a ukp Service)");
       expect(result.stdout).toContain("ukp inspect --endpoint stale");
       expect(result.stdout).toContain("ukp diagnose --endpoint stale");
       expect(result.stdout).toContain("no longer matches Service effective name 'actual-name'");

@@ -1010,8 +1010,11 @@ function resolveDoorRoute(
       };
     }
   } catch (error) {
+    // loadManifest messages are self-contained sentences (unreadable /
+    // absent / invalid-TOML wording); rendering them verbatim keeps the
+    // honest state instead of nesting a second "not readable" prefix.
     const reason = error instanceof Error ? error.message : String(error);
-    return { response: jsonResponse(errorBody("provider-unavailable", `Service Manifest is not readable: ${reason}`), 503) };
+    return { response: jsonResponse(errorBody("provider-unavailable", reason), 503) };
   }
   return { folder };
 }
@@ -1102,7 +1105,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
           );
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
-          return jsonResponse(errorBody("provider-unavailable", `Service Manifest is not readable: ${reason}`), 503);
+          return jsonResponse(errorBody("provider-unavailable", reason), 503);
         }
       }
       if (rest.startsWith("/v1/propose/")) {
@@ -1254,7 +1257,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
         );
       } catch (error) {
         return jsonResponse(
-          errorBody("provider-unavailable", `Service Manifest is not readable: ${error instanceof Error ? error.message : String(error)}`),
+          errorBody("provider-unavailable", error instanceof Error ? error.message : String(error)),
           503,
         );
       }
@@ -1529,7 +1532,7 @@ async function handlePropose(
     loaded = loadManifest(endpointFolder);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return jsonResponse(errorBody("provider-unavailable", `Service Manifest is not readable: ${reason}`), 503);
+    return jsonResponse(errorBody("provider-unavailable", reason), 503);
   }
   const resolved = resolveFileNativeCapability(loaded.manifest, "propose");
   if (!resolved) {
