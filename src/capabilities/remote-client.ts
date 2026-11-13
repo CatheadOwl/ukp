@@ -877,11 +877,45 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
+/** Connection-level failure phrasing (walkthrough N4, 2026-11-13): the raw
+ * runtime message leaked runtime-developer hints ("pass `verbose: true` in
+ * the second argument to fetch()"). Classified human wording carries the
+ * recovery direction; the errno short code rides along; the raw first line
+ * survives only as the fallback and never carries the fetch() hint.
+ * Exported for the anchor tests (pure classification, no I/O). */
+export function classifyUnreachableDetail(message: string, code: string | undefined): string {
+  const firstLine = (message.split("\n")[0] ?? "").trim();
+  // Cause (errno code) first, recovery advice second — the ruled shape
+  // (「连接被对端重置（ECONNRESET），请确认地址、端口和 HTTP/HTTPS 配置」).
+  const withCode = (cause: string, advice: string): string =>
+    `${cause}${code !== undefined && code !== "" ? ` (${code})` : ""} - ${advice}`;
+  if (code === "ECONNREFUSED" || /Connection refused/i.test(firstLine)) {
+    return withCode("connection refused", "nothing is listening on that address and port, or a firewall rejected it; check the address and port");
+  }
+  if (code === "ECONNRESET" || /socket connection was closed|connection was closed|connection reset/i.test(firstLine)) {
+    return withCode("connection reset by the peer", "check the address, the port, and the http/https scheme");
+  }
+  if (code === "ENOTFOUND" || /getaddrinfo|Could not resolve|resolve the host/i.test(firstLine)) {
+    return withCode("address does not resolve", "check the hostname");
+  }
+  if (code === "ETIMEDOUT" || /timed out|TimeoutError|AbortError/i.test(firstLine)) {
+    return withCode("connection timed out", "the host is unreachable or too slow to answer; check the address and network");
+  }
+  if (/certificate|TLS|SSL|self-signed|UNABLE_TO_VERIFY/i.test(firstLine)) {
+    return `TLS verification failed (${firstLine}) - if the door renewed its certificate, re-register this endpoint to refresh trust`;
+  }
+  const cleaned = firstLine
+    .replace(/For more information, pass `verbose: true` in the second argument to fetch\(\)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return `${cleaned}${code !== undefined && code !== "" ? ` [${code}]` : ""}`;
+}
+
 function unreachableError(displayUrl: string, error: unknown): RemoteTransportError {
   const code = (error as { code?: unknown }).code;
   const detail = error instanceof Error ? error.message : String(error);
   return new RemoteTransportError(
-    `remote endpoint unreachable: ${displayUrl} (${detail}${typeof code === "string" && code !== "" ? ` [${code}]` : ""})`,
+    `remote endpoint unreachable: ${displayUrl} (${classifyUnreachableDetail(detail, typeof code === "string" ? code : undefined)})`,
   );
 }
 

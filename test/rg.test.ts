@@ -270,6 +270,9 @@ describe("ukp rg command surface", () => {
       const result = executeRgCommand(["--endpoint", "kb", "needle"], context);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("rg timed out after 0.5s on this machine");
+      // Walkthrough N2 (2026-11-13 ruling): the hint teaches the retry that
+      // actually recovered the natural occurrence, before the env knob.
+      expect(result.stderr).toContain("retry the command once (a transient first call can succeed)");
       expect(result.stderr).not.toContain("not found in PATH");
     } finally {
       if (previousTimeout === undefined) delete process.env.UKP_RG_TIMEOUT_MS;

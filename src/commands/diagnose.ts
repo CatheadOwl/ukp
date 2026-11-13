@@ -291,12 +291,13 @@ function executeDoorDiagnose(context: DiagnoseCommandContext): DiagnoseCommandRe
 function diagnoseBinding(
   binding: RegistryBinding,
   resolveProvider: ProviderResolver | undefined,
-): { status: "ok"; report: DiagnoseReport } | { status: "failed"; message: string } {
+): { status: "ok"; report: DiagnoseReport } | { status: "local-only" } | { status: "failed"; message: string } {
   if (isRemoteBinding(binding)) {
-    return {
-      status: "failed",
-      message: `remote endpoint '${binding.name}' (${binding.url}): diagnose is local-only for remote endpoints; reachability shows in 'ukp list'`,
-    };
+    // Walkthrough N1 (2026-11-13): applicability, not health — a remote
+    // binding is not "failed" (the check does not apply), but neither is it
+    // "checked", so the exit aggregation still counts it as non-ok (aligned
+    // with inspect's local-only contract per the ruling).
+    return { status: "local-only" };
   }
   try {
     const report = diagnoseService(localPathOf(binding), resolveProvider);
@@ -379,6 +380,11 @@ export function executeDiagnoseCommand(
       if (result.status === "ok") {
         output.push(renderDiagnose(result.report, { includeSearchabilityHint: true }).trimEnd());
         warnings.push(...renderDependencyRegistryWarnings(result.report.service, registry));
+      } else if (result.status === "local-only") {
+        // Exit-code contract aligned with inspect (ruling): the requested
+        // check did not happen — non-zero without calling it a failure.
+        failed = true;
+        output.push("status: local-only (diagnose reads the Service folder on this machine; a remote binding's reachability shows in 'ukp list')");
       } else {
         failed = true;
         output.push("status: failed");

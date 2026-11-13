@@ -52,6 +52,37 @@ All notable public changes to UKP will be documented in this file.
   flags (`--name`, `--description`, `--dependency`) instead of omitting
   them — the walkthrough subject concluded the flags the guide teaches did
   not exist.
+- `ukp diagnose` on a remote binding prints `status: local-only` pointing at
+  `ukp list` instead of `status: failed` (applicability, not health — the
+  same vocabulary inspect carries; exit code stays 1, aligned with inspect),
+  and `ukp list --help`'s `--json` line now states the text/JSON asymmetry:
+  the text listing fresh-fetches each remote row's discovery document, JSON
+  reads registry facts only.
+- `ukp serve share`'s hidden-name widen teaching prints only the
+  provably-correct delta — the wider `--select` set, merged into the door's
+  own start command or saved task files with the owner's original
+  `--host/--port` and TLS flags — and no longer assembles a full paste-ready
+  rebuild line from the probe (a consumer-reachable probe origin is not the
+  listen host; a blind paste silently narrowed a `--host 0.0.0.0` door to
+  loopback). The task-managed durable sequence stays; ADR-REM-015 carries
+  the revision.
+- Connection-level probe failures classify into human wording with the
+  errno short code (refused / reset / timeout / resolve / TLS — each with
+  its recovery direction), and the runtime's developer hints ("pass
+  `verbose: true` in the second argument to fetch()") never surface. An
+  origin that answers but is not a ukp door is its own status/share state —
+  `something answered at <origin>, but it is not a ukp door` — never read
+  as "the address did not answer".
+- rg's timeout message teaches the retry first (`retry the command once — a
+  transient first call can succeed`) before the UKP_RG_TIMEOUT_MS knob: the
+  naturally observed first-call timeout recovered on an immediate retry. No
+  startup warmup, no auto-retry — the root cause stays under investigation.
+- `ukp serve share` on a repeated label states the resulting active-key
+  count and the revoke scope (`token revoke <label>` removes EVERY key
+  under the label — consumers holding an older key lose access too); the
+  guide's cold-start recipe now arms the gate with a non-person label
+  (`token add gate "notes:ro"`), so arming and per-person handovers no
+  longer stack two active keys under one label.
 
 - Handing an endpoint to another machine collapses into one gesture
   (ADR-REM-015): `ukp serve status` self-describes the door (live roster,

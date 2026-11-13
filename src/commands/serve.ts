@@ -246,6 +246,10 @@ function doorIdentityCert(registryPath: string): string | undefined {
 type DoorProbe =
   | { state: "up"; origin: string; scheme: "http" | "https"; roster: string[]; bearerRequired: boolean }
   | { state: "down"; origin: string; scheme: "http" | "https"; reason: string }
+  /** Something answered at the origin but it is not a ukp service — a
+   * different beast from a dead address (walkthrough N4, 2026-11-13: a
+   * non-door response must not read as "the address did not answer"). */
+  | { state: "not-a-door"; origin: string; scheme: "http" | "https"; reason: string }
   | { state: "single-endpoint"; origin: string };
 
 /** One well-known fetch against a door origin: the live roster's only
@@ -273,6 +277,9 @@ async function probeDoorOrigin(input: {
   } catch (error) {
     const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
     if (message.includes("is not a host door")) return { state: "single-endpoint", origin: input.origin };
+    if (message.includes("is not a ukp-remote service") || message.includes("returned a non-JSON body")) {
+      return { state: "not-a-door", origin: input.origin, scheme: input.scheme, reason: message };
+    }
     return { state: "down", origin: input.origin, scheme: input.scheme, reason: message };
   }
 }
@@ -365,6 +372,12 @@ async function executeServeStatusCommand(
     lines.push(
       `  door: ${result.origin} is serving a single endpoint, not a host door (status covers door mode)`,
     );
+  } else if (result.state === "not-a-door") {
+    // Walkthrough N4: an answering non-UKP service is not a dead address —
+    // the wording must not claim the address stayed silent.
+    lines.push(
+      `  door: something answered at ${result.origin}, but it is not a ukp door (${result.reason}) - check the address and port, and the http/https scheme`,
+    );
   } else {
     // Address-scoped, not machine-scoped (2026-11-12 walkthrough F2): a
     // down probe at the default 8570 must not read as "no door on this
@@ -456,6 +469,13 @@ async function executeServeShareCommand(
       stderr: `ukp serve: ${door.origin} is serving a single endpoint, not a host door (share works through a host door)\n`,
     };
   }
+  if (door.state === "not-a-door") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp serve: something answered at ${door.origin}, but it is not a ukp door (${door.reason}) - check the address and port, then share again\n`,
+    };
+  }
   if (!door.roster.includes(endpoint)) {
     const locals = localRegistryNames(context.registryPath);
     if (locals === undefined) {
@@ -473,27 +493,21 @@ async function executeServeShareCommand(
       };
     }
     // Registered but hidden: teach the widen-restart (ADR-REM-010 keeps the
-    // whitelist startup-fixed). The rebuild is reconstructed from the live
-    // roster plus the probe — flags we cannot see (extra --tls-san entries,
-    // --tls-cert paths) are named as the owner's to re-add.
+    // whitelist startup-fixed). 2026-11-13 ruling (walkthrough N3): share
+    // prints ONLY the provably-correct delta — the wider --select set — and
+    // never assembles a full start command from the probe; the door's listen
+    // address and TLS setup are the owner's (a consumer-reachable probe
+    // origin is not the listen host, and --tls-san/--tls-cert are
+    // unrecoverable), so a seemingly paste-ready rebuild line was a trap.
     const widened = [...new Set([...door.roster, endpoint])].sort();
-    const flags = [
-      "--select",
-      widened.join(","),
-      "--host",
-      atParts.host,
-      "--port",
-      String(atParts.port),
-      ...(door.scheme === "https" ? ["--tls"] : []),
-    ];
     return {
       exitCode: 1,
       stdout: "",
       stderr: [
         `ukp serve: '${endpoint}' is registered on this host but the door's roster does not carry it (a subset door's whitelist is fixed at start).`,
-        `rebuild the door with it, then share again:`,
-        `  ukp serve ${flags.join(" ")}`,
-        `(reconstructed from the live roster and this probe - re-add any flags you originally set, such as --tls-san or --tls-cert; the restart keeps registered endpoints serving)`,
+        `widen the door, then share again: in the command or saved task files that STARTED this door, set --select to the wider set and restart, keeping your own --host/--port and TLS flags unchanged:`,
+        `  --select ${widened.join(",")}`,
+        `(only the select set above is derived, from the live roster - share cannot see the door's original listen address or TLS setup and will not reconstruct a full start command; the restart keeps registered endpoints serving)`,
         `(for a task-managed resident door, make the widen durable: stop the door first ('ukp serve --print-task' Notes carry the kill command), re-save its files with the wider --select (move the current pair aside first - --write never overwrites), then start the task - a foreground rebuild alone leaves the saved cmd narrower, and the next logon re-launches it)`,
         "",
       ].join("\n"),
@@ -535,7 +549,9 @@ async function executeServeShareCommand(
       "",
       `the line embeds the raw key - shown ONCE, stored hash-only at ${path} (0600).`,
       `revoke with 'ukp serve token revoke ${label}'`
-        + `${sameLabel > 0 ? ` (the label already held ${sameLabel} active key(s) - both stay valid until revoked)` : ""}.`,
+        + `${sameLabel > 0
+          ? ` (the label already held ${sameLabel} active key(s); now ${sameLabel + 1}, all valid until revoked - revoke removes EVERY key under '${label}', so consumers holding an older key lose access too)`
+          : ""}.`,
       "if this door gates on UKP_SERVE_TOKEN instead of the file, the key is inert - run the door on the token file to hand out keys.",
       "",
     ].join("\n"),

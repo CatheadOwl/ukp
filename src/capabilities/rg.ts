@@ -400,10 +400,16 @@ export function runRg(parsed: ParsedRg, context: RgContext): RgResult {
     const side = context.executionSide === "door" ? "the door host" : "this machine";
     if (result.signal === "SIGTERM" || spawnError?.code === "ETIMEDOUT") {
       failed = true;
-      const message = `endpoint '${endpoint.name}' rg timed out after ${rgTimeoutMs() / 1000}s on ${side} (set UKP_RG_TIMEOUT_MS to adjust)`;
-      warnings.push(message);
+      // Retry-first teaching (2026-11-13 ruling, walkthrough N2): the
+      // natural occurrence recovered on an immediate retry, so the hint
+      // teaches that before the knob; no warmup, no auto-retry — the root
+      // cause stays open and no attribution is frozen into the wording.
+      const seconds = rgTimeoutMs() / 1000;
+      warnings.push(
+        `endpoint '${endpoint.name}' rg timed out after ${seconds}s on ${side} - retry the command once (a transient first call can succeed); if it keeps timing out, check rg on ${side} or adjust UKP_RG_TIMEOUT_MS`,
+      );
       outcome.status = "failed";
-      outcome.message = `rg timed out after ${rgTimeoutMs() / 1000}s on ${side}`;
+      outcome.message = `rg timed out after ${seconds}s on ${side} (retry once; if it persists, check rg on ${side} / adjust UKP_RG_TIMEOUT_MS)`;
       continue;
     }
     if (spawnError?.code === "ENOENT" || result.status === TOOL_NOT_FOUND_EXIT) {

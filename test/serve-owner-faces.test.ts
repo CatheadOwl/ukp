@@ -110,6 +110,25 @@ describe("ukp serve status (W16 / ADR-REM-015)", () => {
     expect(result.stdout).toContain(`tokens: 1 key(s) at ${path}`);
   });
 
+  // Walkthrough N4 (2026-11-13): an answering non-UKP service is a different
+  // beast from a dead address — the report must not claim "this address did
+  // not answer" when something plainly did.
+  test("an answering non-ukp service is named as not-a-door, not as a dead address (walkthrough N4)", async () => {
+    const stub = Bun.serve({
+      port: 0,
+      fetch: () => new Response("<html>not a ukp door</html>", { headers: { "content-type": "text/html" } }),
+    });
+    try {
+      const result = await runServeCommand(["status", "--port", String(stub.port)], context);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`door: something answered at http://127.0.0.1:${stub.port}, but it is not a ukp door`);
+      expect(result.stdout).toContain("check the address and port, and the http/https scheme");
+      expect(result.stdout).not.toContain("this address did not answer");
+    } finally {
+      stub.stop(true);
+    }
+  });
+
   test("task artifacts in the machine home flip the deployment line", async () => {
     const path = tokenFileWith([{ label: "liku", scopes: "notes:ro" }]);
     const door = startDoor({ tokenFilePath: path });
@@ -166,7 +185,7 @@ describe("ukp serve share (W16 / ADR-REM-015)", () => {
     );
   });
 
-  test("a name hidden by --select refuses to mint and teaches the rebuilt widen command", async () => {
+  test("a name hidden by --select refuses to mint and teaches the widen delta, never a full start command (walkthrough N3)", async () => {
     const path = tokenFileWith([{ label: "liku", scopes: "notes:ro" }]);
     const door = startDoor({ tokenFilePath: path, select: ["notes"] });
     const before = parseTokenFileText(readFileSync(path, "utf8"));
@@ -176,10 +195,14 @@ describe("ukp serve share (W16 / ADR-REM-015)", () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("'cad' is registered on this host but the door's roster does not carry it");
-    expect(result.stderr).toContain(
-      `ukp serve --select cad,notes --host 127.0.0.1 --port ${doorPort(door)}`,
-    );
-    expect(result.stderr).toContain("re-add any flags you originally set, such as --tls-san or --tls-cert");
+    // Only the provably-correct delta is printed (2026-11-13 ruling): the
+    // wider --select set, merged into the door's OWN start command - the
+    // probe origin must never be assembled into a seemingly paste-ready
+    // rebuild line (it silently narrows a 0.0.0.0 door to loopback).
+    expect(result.stderr).toContain("set --select to the wider set and restart, keeping your own --host/--port and TLS flags unchanged");
+    expect(result.stderr).toContain("--select cad,notes");
+    expect(result.stderr).toContain("share cannot see the door's original listen address or TLS setup and will not reconstruct a full start command");
+    expect(result.stderr).not.toMatch(/ukp serve --select [^\n]*--host/);
     // The durable widen for a task-managed door: the quick foreground
     // rebuild alone leaves the saved start-door.cmd narrower (flag drift,
     // 2026-11-12 field finding) and the next logon re-launches it - the
@@ -256,6 +279,11 @@ describe("ukp serve share (W16 / ADR-REM-015)", () => {
       context,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("the label already held 1 active key(s) - both stay valid until revoked");
+    // Walkthrough N5: a repeated label states the resulting active-key count
+    // and the revoke scope (every key under the label - older consumers go
+    // down with it), instead of an unquantified "both stay valid".
+    expect(result.stdout).toContain(
+      "the label already held 1 active key(s); now 2, all valid until revoked - revoke removes EVERY key under 'alice'",
+    );
   });
 });

@@ -142,7 +142,7 @@ export const LIST_SPEC: UkpCommandSpec = {
   strictArguments: true,
   options: [
     { flags: "-g, --global", help: "list every registered endpoint (the full Host Registry), ignoring the workspace scope and without reading .ukp/client.toml" },
-    { flags: "--json", help: "emit the offline machine-readable endpoint snapshot (schema ukp.list.v1; registry facts only - remote bindings are not probed, their capability fields are null); rides the same scope as the text listing" },
+    { flags: "--json", help: "emit the offline machine-readable endpoint snapshot (schema ukp.list.v1; reads registry facts only, so remote capability fields are null - the text listing is the live view, fresh-fetching each remote row's discovery document and degrading unreachable rows to (unavailable)); rides the same scope as the text listing" },
   ],
 };
 

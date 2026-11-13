@@ -15,6 +15,7 @@ import { DISCOVERY_PATH, startUkpServer, type StartedServe } from "../../src/ser
 import { executeListCommand, executeRegisterCommand } from "../../src/commands/inventory.ts";
 import { inMemoryCredentialStore, unavailableCredentialStore } from "../../src/credential-store.ts";
 import {
+  classifyUnreachableDetail,
   classifyWakeFailure,
   fetchDiscoveryDocumentAt,
   wakeFailureMessage,
@@ -1319,5 +1320,46 @@ describe("wake failure classification (ADR-REM-008 / D-093)", () => {
     expect(message).toContain("ukp on the remote PATH");
     expect(message).not.toContain("alias");
     expect(message).not.toContain("key auth");
+  });
+});
+
+// Walkthrough N4 (2026-11-13): connection-level failures speak in classified
+// human wording with the errno short code — the runtime's developer hints
+// ("pass `verbose: true` in the second argument to fetch()") never surface.
+describe("unreachable detail classification (walkthrough N4)", () => {
+  test("connection reset keeps the short code and names the recovery axes", () => {
+    const detail = classifyUnreachableDetail(
+      "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+      "ECONNRESET",
+    );
+    expect(detail).toContain("connection reset by the peer (ECONNRESET)");
+    expect(detail).toContain("http/https scheme");
+    expect(detail).not.toContain("verbose: true");
+    expect(detail).not.toContain("fetch()");
+  });
+
+  test("refused, resolve, and timeout codes map to their own recovery wording", () => {
+    expect(classifyUnreachableDetail("connect ECONNREFUSED 127.0.0.1:9", "ECONNREFUSED")).toContain(
+      "connection refused",
+    );
+    expect(classifyUnreachableDetail("getaddrinfo ENOTFOUND no.example", "ENOTFOUND")).toContain(
+      "address does not resolve",
+    );
+    expect(classifyUnreachableDetail("The operation timed out", "ETIMEDOUT")).toContain(
+      "connection timed out",
+    );
+  });
+
+  test("TLS-shaped failures name the re-register remedy", () => {
+    const detail = classifyUnreachableDetail("self-signed certificate in certificate chain", undefined);
+    expect(detail).toContain("TLS verification failed");
+    expect(detail).toContain("re-register this endpoint");
+  });
+
+  test("an unrecognized message survives as its first line, hint-stripped", () => {
+    const detail = classifyUnreachableDetail("Something odd happened\nsecond line", "EPROTO");
+    expect(detail).toContain("Something odd happened");
+    expect(detail).not.toContain("second line");
+    expect(detail).toContain("[EPROTO]");
   });
 });
