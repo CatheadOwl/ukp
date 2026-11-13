@@ -886,7 +886,8 @@ function isTimeoutError(error: unknown): boolean {
 export function classifyUnreachableDetail(message: string, code: string | undefined): string {
   const firstLine = (message.split("\n")[0] ?? "").trim();
   // Cause (errno code) first, recovery advice second — the ruled shape
-  // (「连接被对端重置（ECONNRESET），请确认地址、端口和 HTTP/HTTPS 配置」).
+  // ("connection reset by the peer (ECONNRESET); check the address, the
+  // port, and the http/https configuration").
   const withCode = (cause: string, advice: string): string =>
     `${cause}${code !== undefined && code !== "" ? ` (${code})` : ""} - ${advice}`;
   if (code === "ECONNREFUSED" || /Connection refused/i.test(firstLine)) {

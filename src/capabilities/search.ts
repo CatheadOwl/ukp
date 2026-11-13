@@ -241,7 +241,11 @@ function planSearch(parsed: ParsedSearch, context: SearchContext): {
     loadedServices.set(binding.name, service);
     const capability = service.manifest.capabilities.search;
     if (!capability) {
-      const warning = `endpoint '${binding.name}' does not provide search`;
+      // The lexical retreat is file-native and needs no declaration — the
+      // same teaching the remote skip carries (the retreat must exist at
+      // every failure point, local and remote alike).
+      const warning =
+        `endpoint '${binding.name}' does not provide search; lexical search via 'ukp rg' needs no declaration`;
       warnings.push(warning);
       return { name: binding.name, provider: null, status: "skipped", warning, traversal };
     }

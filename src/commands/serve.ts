@@ -11,7 +11,7 @@ import {
 import { parseRemoteUrl, readRegistry } from "../registry.ts";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { certSanOf, normalizeTlsSanEntry, spkiPinOf } from "../capabilities/tls-identity.ts";
 import { fetchDoorDocument } from "../capabilities/remote-client.ts";
 import { DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
@@ -235,53 +235,118 @@ function executeServeTokenCommand(
 // anything anywhere itself).
 
 /** The door's self-signed identity, as persisted in the machine home at
- * serve time (door mode resolves the same `<registry dir>/tls/` path).
- * Present = the door (when up) speaks https and this cert is the anchor a
- * registering client pins. */
+ * serve time: the host door keeps the flat `tls/cert.pem`; a single-endpoint
+ * door keeps `tls/<endpoint>/cert.pem` (the same per-endpoint residence the
+ * server resolves). Present = the door (when up) speaks https and this cert
+ * is the anchor a registering client pins. */
 function doorIdentityCert(registryPath: string): string | undefined {
   const certPath = join(dirname(registryPath), "tls", "cert.pem");
   return existsSync(certPath) ? readFileSync(certPath, "utf8") : undefined;
 }
 
+/** Candidate door identities in the machine home, in probe order: the
+ * preferred endpoint's own identity first (the caller names it when it
+ * knows — share does), then the flat host-door cert, then every other
+ * per-endpoint identity sorted. One resolution rule for every face and
+ * every door shape: the probe anchors against the same material the door
+ * serves, and when nothing anchors a live https door the verdict is "TLS
+ * could not be anchored", never "not answering". */
+function doorIdentityCandidates(registryPath: string, preferEndpoint?: string): string[] {
+  const tlsDir = join(dirname(registryPath), "tls");
+  const candidates: string[] = [];
+  if (preferEndpoint !== undefined) {
+    const preferred = join(tlsDir, preferEndpoint, "cert.pem");
+    if (existsSync(preferred)) candidates.push(preferred);
+  }
+  const flat = join(tlsDir, "cert.pem");
+  if (existsSync(flat)) candidates.push(flat);
+  let names: string[] = [];
+  try {
+    names = readdirSync(tlsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    // no tls dir: no identities in the machine home at all
+  }
+  for (const name of names) {
+    const path = join(tlsDir, name, "cert.pem");
+    if (!candidates.includes(path) && existsSync(path)) candidates.push(path);
+  }
+  return candidates;
+}
+
 type DoorProbe =
-  | { state: "up"; origin: string; scheme: "http" | "https"; roster: string[]; bearerRequired: boolean }
+  | { state: "up"; origin: string; scheme: "http" | "https"; roster: string[]; bearerRequired: boolean; identityCert?: string }
   | { state: "down"; origin: string; scheme: "http" | "https"; reason: string }
   /** Something answered at the origin but it is not a ukp service — a
    * different beast from a dead address (walkthrough N4, 2026-11-13: a
    * non-door response must not read as "the address did not answer"). */
   | { state: "not-a-door"; origin: string; scheme: "http" | "https"; reason: string }
-  | { state: "single-endpoint"; origin: string };
+  | { state: "single-endpoint"; origin: string; identityCert?: string }
+  /** The address answered but no machine-home identity anchored its TLS —
+   * "cannot anchor trust" and "unreachable" are different verdicts; a live
+   * door must not read as dead (trust-anchor resolution discipline:
+   * one rule for every operation type, honest failure when unanchorable). */
+  | { state: "tls-unanchored"; origin: string; scheme: "http" | "https"; reason: string };
 
 /** One well-known fetch against a door origin: the live roster's only
- * authority. `scheme` is the caller's stated scheme; a persisted self-signed
- * identity in the machine home anchors https the same TOFU way registration
- * does (an operator-certificate door validates normally without it). */
+ * authority. `scheme` is the caller's stated scheme; the machine home's
+ * persisted identities anchor https the same TOFU way registration does,
+ * tried in candidate order (an operator-certificate door validates
+ * normally without them). */
 async function probeDoorOrigin(input: {
   origin: string;
   scheme: "http" | "https";
   registryPath: string;
+  preferEndpoint?: string;
 }): Promise<DoorProbe> {
-  const cert = doorIdentityCert(input.registryPath);
-  try {
-    const door = await fetchDoorDocument(input.origin, {
-      displayUrl: input.origin,
-      ...(input.scheme === "https" && cert !== undefined ? { tlsAnchor: { ca: cert } } : {}),
-    });
-    return {
-      state: "up",
-      origin: input.origin,
-      scheme: input.scheme,
-      roster: door.doc.endpoints.map((endpoint) => endpoint.name),
-      bearerRequired: door.bearerRequired,
-    };
-  } catch (error) {
-    const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
-    if (message.includes("is not a host door")) return { state: "single-endpoint", origin: input.origin };
-    if (message.includes("is not a ukp-remote service") || message.includes("returned a non-JSON body")) {
-      return { state: "not-a-door", origin: input.origin, scheme: input.scheme, reason: message };
+  const attempts: (string | undefined)[] = input.scheme === "https"
+    ? (() => {
+      const candidates = doorIdentityCandidates(input.registryPath, input.preferEndpoint);
+      return candidates.length > 0 ? candidates : [undefined];
+    })()
+    : [undefined];
+  let lastMessage = "";
+  let anchoredCert: string | undefined;
+  for (const certPath of attempts) {
+    const cert = certPath !== undefined ? readFileSync(certPath, "utf8") : undefined;
+    try {
+      const door = await fetchDoorDocument(input.origin, {
+        displayUrl: input.origin,
+        ...(input.scheme === "https" && cert !== undefined ? { tlsAnchor: { ca: cert } } : {}),
+      });
+      return {
+        state: "up",
+        origin: input.origin,
+        scheme: input.scheme,
+        roster: door.doc.endpoints.map((endpoint) => endpoint.name),
+        bearerRequired: door.bearerRequired,
+        ...(cert !== undefined ? { identityCert: cert } : {}),
+      };
+    } catch (error) {
+      lastMessage = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+      // A TLS verification failure means the door answered and this
+      // candidate did not match — the next identity may anchor it. Any
+      // connection-level verdict (refused / reset / timeout / resolve) or a
+      // body-level one (a ukp document that is not a host door) ends the
+      // ladder; in the latter the attempt's identity did anchor TLS.
+      if (input.scheme !== "https" || !/TLS verification failed/.test(lastMessage)) {
+        if (cert !== undefined) anchoredCert = cert;
+        break;
+      }
     }
-    return { state: "down", origin: input.origin, scheme: input.scheme, reason: message };
   }
+  if (input.scheme === "https" && anchoredCert === undefined && /TLS verification failed/.test(lastMessage)) {
+    return { state: "tls-unanchored", origin: input.origin, scheme: input.scheme, reason: lastMessage };
+  }
+  if (lastMessage.includes("is not a host door")) {
+    return { state: "single-endpoint", origin: input.origin, ...(anchoredCert !== undefined ? { identityCert: anchoredCert } : {}) };
+  }
+  if (lastMessage.includes("is not a ukp-remote service") || lastMessage.includes("returned a non-JSON body")) {
+    return { state: "not-a-door", origin: input.origin, scheme: input.scheme, reason: lastMessage };
+  }
+  return { state: "down", origin: input.origin, scheme: input.scheme, reason: lastMessage };
 }
 
 /** `--host/--port/--tls`, the probe's knobs (status and share share them). */
@@ -348,8 +413,10 @@ async function executeServeStatusCommand(
   const home = context.homeDir ?? homedir();
   const lines: string[] = ["host door status"];
 
-  const cert = doorIdentityCert(context.registryPath);
-  const scheme: "http" | "https" = probe.forceTls || cert !== undefined ? "https" : "http";
+  const scheme: "http" | "https" = probe.forceTls
+    || doorIdentityCandidates(context.registryPath).length > 0
+    ? "https"
+    : "http";
   const result = await probeDoorOrigin({
     origin: `${scheme}://${probe.host}:${probe.port}`,
     scheme,
@@ -372,6 +439,13 @@ async function executeServeStatusCommand(
     lines.push(
       `  door: ${result.origin} is serving a single endpoint, not a host door (status covers door mode)`,
     );
+  } else if (result.state === "tls-unanchored") {
+    // Trust-anchor discipline: "cannot anchor TLS" is not "the address did
+    // not answer" — the door may be live; name what is missing and where
+    // the machine home keeps door identities.
+    lines.push(
+      `  door: ${result.origin} answered but its TLS identity could not be anchored from the machine home - the door may still be live; check the address and scheme, and the door identities under ${join(dirname(context.registryPath), "tls")}`,
+    );
   } else if (result.state === "not-a-door") {
     // Walkthrough N4: an answering non-UKP service is not a dead address —
     // the wording must not claim the address stayed silent.
@@ -388,8 +462,11 @@ async function executeServeStatusCommand(
     );
   }
 
-  if (cert !== undefined) {
-    lines.push(`  tls: self-signed door identity ${spkiPinOf(cert)} (SAN: ${certSanOf(cert)})`);
+  const identityCert = (result.state === "up" || result.state === "single-endpoint")
+    ? result.identityCert
+    : doorIdentityCert(context.registryPath);
+  if (identityCert !== undefined) {
+    lines.push(`  tls: self-signed door identity ${spkiPinOf(identityCert)} (SAN: ${certSanOf(identityCert)})`);
   } else if (result.state === "up" && result.scheme === "https") {
     lines.push("  tls: answering over https with no self-signed identity in the machine home (an operator certificate)");
   }
@@ -454,6 +531,7 @@ async function executeServeShareCommand(
     origin: atParts.origin,
     scheme: atParts.scheme,
     registryPath: context.registryPath,
+    preferEndpoint: endpoint,
   });
   if (door.state === "down") {
     return {
@@ -462,11 +540,21 @@ async function executeServeShareCommand(
       stderr: `ukp serve: the door is not answering at ${door.origin} (${door.reason}) - start it, check 'ukp serve status', then share\n`,
     };
   }
+  if (door.state === "tls-unanchored") {
+    // Trust-anchor discipline: "cannot anchor TLS" is not "not answering".
+    // The probe checked the endpoint's own identity first (the caller names
+    // it), then every machine-home identity.
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `ukp serve: the door at ${door.origin} answered but its TLS identity could not be anchored from the machine home (no matching self-signed identity under ${join(dirname(context.registryPath), "tls")}; '${endpoint}' was checked first) - the door may still be live; verify the door's --tls setup and the --at origin, then share again\n`,
+    };
+  }
   if (door.state === "single-endpoint") {
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `ukp serve: ${door.origin} is serving a single endpoint, not a host door (share works through a host door)\n`,
+      stderr: `ukp serve: ${door.origin} is serving a single endpoint, not a host door (share mints keys through a host door's roster - start the door without --endpoint to serve every registered endpoint as one host door, then share)\n`,
     };
   }
   if (door.state === "not-a-door") {
@@ -607,7 +695,7 @@ export const SERVE_SPEC: UkpCommandSpec = {
     { flags: "--tls-san <ip|dns>", help: "extra SAN entry for the --tls self-signed identity (repeatable): a public/NAT IP or hostname no NIC of this host carries; a persisted certificate missing an entry is re-signed over the same key (pin unchanged, pinned clients re-anchor)", multi: true },
     { flags: "--tls-cert <pem>", help: "TLS certificate (chain) PEM path - Let's Encrypt, mkcert, or a private CA; pair with --tls-key" },
     { flags: "--tls-key <pem>", help: "TLS private key PEM path; pair with --tls-cert" },
-    { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; reverse-proxy deployments still require UKP_SERVE_TOKEN)" },
+    { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; once the tokens file holds any key the bearer gate is armed and this flag no longer enables tokenless access)" },
     { flags: "--max-idle <seconds>", help: "exit after <seconds> without requests (self-reap; the orphan backstop for on-demand-woken doors - fractional values accepted for tests)" },
     { flags: "--systemd-socket", help: "serve on the systemd socket-activation listener (LISTEN_FDS fd 3) instead of binding a port - the port belongs to your .socket unit; Linux-only" },
     { flags: "--print-task", help: "Windows: print this door's process-manager artifacts (start script, hidden launcher, Task Scheduler command, firewall rule) instead of serving - review and apply them yourself; nothing is installed or started for you, and the token is yours to paste (never printed)" },

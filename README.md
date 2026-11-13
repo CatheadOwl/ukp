@@ -16,10 +16,17 @@ memorize, no provider-specific commands to relearn.
 npm install -g @catheadowl/ukp    # or: bun add -g @catheadowl/ukp
 ```
 
+The npm package installs the `ukp` command; the CLI runs on
+[Bun](https://bun.sh) — install Bun first (the exact version is in
+Requirements below; a missing `bun` gets an install hint, not a stack
+trace).
+
 ```bash
 $ ukp init service --name notes && ukp register
 initialized Service: notes
 registered: notes
+
+$ mkdir -p 2026 && printf '# Q3 Plan\n\nGoals for Q3: ship the knowledge plane.\n' > 2026/q3-plan.md
 
 $ ukp rg "Goals" --endpoint notes           # no search provider needed
 == notes ==
@@ -88,10 +95,11 @@ predictable scope, and a single command surface. Use UKP when:
 - Writing a manifest by hand? Every legal key and its grammar ship in the
   package — read them with `ukp guide manifest full` (`ukp guide manifest`
   is the five-line cheat sheet).
-- Give agents JSON output (`--json`; `ukp read` uses `--format json`),
-  reference sidecars, docid handoff keys, and durable `ukp://` references
-  when they need machine-readable results; every `ukp://` reference opens
-  with `ukp read <uri>`.
+- Give agents machine-readable results (`--json`; `ukp read` uses
+  `--format json`): each result carries a `docid` — the machine address
+  the next command (`ukp read`) consumes — plus a verified `ukp://`
+  reference in a sidecar field, so handoffs stay replayable in any
+  session.
 
 UKP owns endpoint names, Registry bindings, scope, and output shape; the
 provider owns collection setup, indexes, ranking, and maintenance. UKP
@@ -105,11 +113,15 @@ Requirements:
 - Bun `1.3.14` or newer, installed by you — the npm package installs the
   `ukp` command, but the CLI runs on Bun; when `bun` is missing the command
   says how to install it instead of showing a stack trace.
+- ripgrep (`rg`) on `PATH` for `ukp rg` and the provider-free lexical
+  search tier — install it from ripgrep's own releases or your package
+  manager. A missing binary skips the affected command with a warning
+  instead of failing the run.
 - QMD on `PATH` only for the QMD-backed capabilities (`search/qmd`,
-  `read/qmd`, `update/qmd`). QMD is an external tool maintained as a
-  separate project; see its own release channel for installation. UKP
-  installs and runs without it — those capabilities report as unavailable
-  until `qmd` is available.
+  `read/qmd`, `update/qmd`). QMD is an external indexing tool maintained
+  as a separate project — `ukp guide service qmd` hands off to its
+  provider-owned setup path. UKP installs and runs without it — those
+  capabilities report as unavailable until `qmd` is available.
 
 ```bash
 npm install -g @catheadowl/ukp
@@ -159,7 +171,7 @@ Endpoint commands:
 
 | Command | What it does |
 |---|---|
-| `ukp search` | Indexed search through the endpoint's provider (QMD today); `--recursive` expands the manifest's declared `dependencies`. Results hand off a docid handoff key and verified `ukp://` references. |
+| `ukp search` | Indexed search through the endpoint's provider (QMD today); `--recursive` expands the manifest's declared `dependencies`. Results hand off a `docid` (the machine address `ukp read` consumes) and verified `ukp://` references. |
 | `ukp read` | Reads an endpoint-scoped resource — exact path, `ukp://` URI, or a `docid` handed off by search results. |
 | `ukp nav` | Markdown outline of an endpoint (`--depth`, respects `.gitignore`); on by default, configurable via `[capabilities.nav]`. |
 | `ukp rg` | Lexical grep (ripgrep) across endpoint files — provider-free, on by default; `--files` enumerates them instead of searching. Results become `read`-ready `ukp://` references. A missing rg binary skips the endpoint with a warning. |
@@ -169,14 +181,15 @@ Registry commands:
 
 | Command | What it does |
 |---|---|
-| `ukp init service` | Creates a minimal `.ukp/service.toml`. The `.ukp/.gitignore` it drops ignores machine-local state only (the instance identity; the serve TLS identity lives in `~/.ukp/tls/`) — `service.toml` and `client.toml` are pure declarations and committable by design (a fresh clone re-registers in one `ukp register`). |
-| `ukp use <endpoint> [endpoint...]` | One-step consumer gesture: sets this workspace's `default_endpoints` (`.ukp/client.toml`, explicit replace, idempotent — every name must be registered) and keeps the config version-visible in the same step. `ukp inspect` confirms the active scope. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings — local folders and remote endpoints alike (`ukp register --url`, see Remote in 60 seconds). `--name <handle>` disambiguates collisions: `notes` vs `ali-notes`. A folder that moved re-binds in one step: `ukp register --rebind` from the new location (local bindings). |
-| `ukp list` | Lists endpoint bindings and capabilities under the **workspace scope** by default (nearest `.ukp/client.toml`; every registered endpoint when there is none); `-g` lists the full Host Registry without reading the client config. `--json` emits the offline machine snapshot (`ukp.list.v1`) riding the same scope — stable field names, the same data core as the text listing, zero network (remote bindings are registry facts only, so their capability fields are `null`); pin `-g` for the full snapshot. New endpoints on a host door show as a stderr note (`door <origin>: N unimported endpoint(s) …`) — importing stays an explicit gesture; when the note-owning binding carries a token, the door answers the check with the key's own admission, marking unimported names outside your key `(not under your key)` and naming bindings your key cannot touch. |
+| `ukp init service` | Creates a minimal `.ukp/service.toml` and a `.ukp/.gitignore` that ignores machine-local state only — the declarations themselves are committable by design (a fresh clone re-registers in one `ukp register`). |
+| `ukp use <endpoint> [endpoint...]` | One-step consumer gesture: sets this workspace's `default_endpoints` (`.ukp/client.toml`, idempotent — every name must be registered). `ukp inspect` confirms the active scope. |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings — local folders and remote endpoints alike (`ukp register --url`, see Remote in 60 seconds). `--name <handle>` disambiguates collisions; a folder that moved re-binds in one step (`ukp register --rebind`). |
+| `ukp list` | Lists endpoint bindings and capabilities under the **workspace scope** by default (nearest `.ukp/client.toml`; `-g` for the full Host Registry). `--json` emits the offline machine snapshot (`ukp.list.v1`, zero network). New endpoints on a host door show as a stderr note — importing stays an explicit gesture, and a key-carrying binding sees the door's admission for its own key. |
 
-A legacy `.ukp/.gitignore` (the retired `*` self-ignore template) migrates
-to this posture in passing whenever `ukp register` (local folders) or
-`ukp use` meets one.
+A legacy `.ukp/.gitignore` carrying the exact retired self-ignore template
+migrates to this posture in passing whenever `ukp register` (local folders)
+or `ukp use` meets one; anything else in that file is operator-owned and
+left untouched (a stderr note names it).
 
 Operations commands:
 
@@ -185,7 +198,7 @@ Operations commands:
 | `ukp diagnose` | Checks a Service folder or endpoint scope for wiring problems. |
 | `ukp inspect` | Explains current scope, bindings, manifest capabilities, and provider availability. |
 | `ukp update` | Runs provider-owned maintenance when `update/qmd` is declared (local endpoints today). |
-| `ukp serve` | Serves one endpoint — or, without `--endpoint`, local bindings as a **host door** (every one of them, or just the ones `--select` names — unselected endpoints are not served, routed, or declared) — over HTTP (a discovery document plus the five command routes; loopback by default). `ukp serve token add|list|revoke` issues scoped door keys; `ukp serve status` self-describes the door (live roster, hidden names, token summary, TLS identity, task vs manual); `ukp serve share <name> --to <label> --at <url> [--rw]` hands one endpoint over — validates it is on the live roster (or teaches the `--select` rebuild), mints the exactly-scoped key, and prints the consumer's paste-ready register command. |
+| `ukp serve` | Serves one endpoint — or, without `--endpoint`, local bindings as a **host door** (every one of them, or a `--select`ed subset) — over HTTP, loopback by default. `ukp serve token add|list|revoke` issues scoped door keys; `ukp serve status` self-describes the door; `ukp serve share <name> --to <label> --at <url> [--rw]` prints the consumer's paste-ready register command. The wire details live in `ukp guide remote` and the deployment guide. |
 
 Help commands:
 
@@ -204,8 +217,10 @@ Help commands:
 `ukp serve` exposes an endpoint over HTTP. Authentication is deny-by-default:
 serving with a `--host` beyond loopback requires a credential — the
 `UKP_SERVE_TOKEN` env token (full power) or a labeled key issued into
-the `~/.ukp/tokens` file (tokenless serving needs an explicit
-`--allow-anonymous` and is refused off loopback). The two fastest
+the `~/.ukp/tokens` file. Tokenless serving needs an explicit
+`--allow-anonymous`, is refused off loopback, and stays tokenless only
+while the tokens file holds no keys — any issued key arms the bearer
+gate for every caller. The two fastest
 paths — each block notes where its commands run:
 
 ```bash
@@ -232,19 +247,11 @@ ukp serve token revoke liku                   # next request is a 401
 ```
 
 Scopes are `name:ro|rw` comma-separated (full power is the explicit `*:rw`;
-a read-only scope has no propose route);
-the file stores hashes only, and the door re-reads it on every request —
-deleting a line revokes without a restart. A scoped key sees only its own
-endpoints: a name the door declares but the key cannot touch answers
-`no route for '<name>' under your key` — uniform whether the scope is
-read-only, absent, or the write route is undeclared, never 403 — while
-names the door does not declare answer exactly like nonexistent ones. That
-boundary is visible before the first call, too: `register --token` marks
-blind imports on the spot (`your key has no scope for it`), because the
-door's public document answers an authenticated fetch with the key's own
-admitted names. While `UKP_SERVE_TOKEN` is set it takes precedence and the
-file is not consulted (env tokens never earn an echo — the door's own width
-applies).
+a read-only scope has no propose route); the file stores hashes only, and
+the door re-reads it on every request — deleting a line revokes without a
+restart. What a scoped key can and cannot see — the route denial, the
+admission face, and the env-token precedence — is the Security section
+below.
 
 NAT/EIP cloud host (public IP on no NIC)? Name it with
 `ukp serve --tls --tls-san <public-ip>` — the persisted certificate re-signs
@@ -316,6 +323,6 @@ please don't use public issues for security reports.
   Also ships inside the npm package (`docs/remote-deployment.md` in the
   installed package); the other docs live in the GitHub repository.
 - [Contributing](https://github.com/CatheadOwl/ukp/blob/main/CONTRIBUTING.md) — development setup and release packaging.
-- [Changelog](https://github.com/CatheadOwl/ukp/blob/main/CHANGELOG.md) — what changed per release.
+- [Changelog](https://github.com/CatheadOwl/ukp/blob/main/changelogs) — what changed per release (one file per version; the npm tarball carries the same files).
 - Repository: https://github.com/CatheadOwl/ukp ·
   Issues: https://github.com/CatheadOwl/ukp/issues

@@ -23,8 +23,7 @@ Knowledge you got from ukp is handed off as
 references stay valid. 
 
 `ukp read <uri>` opens one as-is, replayable in
-any session. The cross-repo `{name}:path` shorthand resolves the same
-way.
+any session.
 
 ## Remote
 

@@ -1,6 +1,6 @@
 ---
 name: ukp-manifest-reference
-description: "Normative reference for the hand-authored Service manifest (.ukp/service.toml) — every legal key, grammar, and example; kept in lockstep with the loader by an anchor test"
+description: "Normative reference for the hand-authored Service manifest (.ukp/service.toml) — every public declaration key, grammar, and example; kept in lockstep with the loader by an anchor test"
 ---
 
 # Service manifest reference

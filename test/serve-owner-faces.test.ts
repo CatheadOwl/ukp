@@ -1,5 +1,6 @@
 import { describe, expect, test, afterAll } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { binAvailable } from "./helpers/bin-probe.ts";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { registerAt } from "../src/registry.ts";
@@ -285,5 +286,59 @@ describe("ukp serve share (W16 / ADR-REM-015)", () => {
     expect(result.stdout).toContain(
       "the label already held 1 active key(s); now 2, all valid until revoked - revoke removes EVERY key under 'alice'",
     );
+  });
+});
+
+describe("door probe TLS anchoring (M4, 2026-11-14): one resolution rule, honest failure", () => {
+  // Skip without openssl: self-signed doors need it (the unanchored case
+  // deletes the machine-home identities after the door loaded them).
+  const opensslAvailable = binAvailable("openssl", ["version"]);
+
+  test.skipIf(!opensslAvailable)("a single-endpoint https door is reachable and named, never a false down", async () => {
+    // Own registry so the door's identity lands beside it (same machine
+    // home the probe resolves — server.ts keeps identities per-endpoint).
+    const singleRegistry = join(root, "m4-single-registry.toml");
+    registerAt(singleRegistry, "notes", createService("m4-notes-svc", "notes"));
+    const door = startDoor({ registryPath: singleRegistry, endpointName: "notes", tls: { mode: "self-signed" } });
+
+    // No --tls flag: the probe sees the endpoint identity in the machine
+    // home and anchors https by itself (the pre-fix behavior reported the
+    // live door as "not answering" here).
+    const status = await runServeCommand(["status", "--port", doorPort(door)], context);
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout).toContain("is serving a single endpoint, not a host door");
+    expect(status.stdout).toContain("tls: self-signed door identity");
+    expect(status.stdout).not.toContain("not answering");
+  });
+
+  test.skipIf(!opensslAvailable)("share against a single-endpoint https door says so and teaches the host-door shape", async () => {
+    const singleRegistry = join(root, "m4-share-registry.toml");
+    registerAt(singleRegistry, "notes", createService("m4-share-notes-svc", "notes"));
+    const door = startDoor({ registryPath: singleRegistry, endpointName: "notes", tls: { mode: "self-signed" } });
+
+    const result = await runServeCommand(
+      ["share", "notes", "--to", "liku", "--at", door.info.url],
+      context,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("is serving a single endpoint, not a host door");
+    expect(result.stderr).toContain("start the door without --endpoint to serve every registered endpoint as one host door");
+    expect(result.stderr).not.toContain("not answering");
+  });
+
+  test.skipIf(!opensslAvailable)("an https door no machine-home identity anchors reports tls-unanchored, not down", async () => {
+    const singleRegistry = join(root, "m4-unanchored-registry.toml");
+    registerAt(singleRegistry, "cad", createService("m4-cad-svc", "cad"));
+    const door = startDoor({ registryPath: singleRegistry, endpointName: "cad", tls: { mode: "self-signed" } });
+    // The door loaded its identity at start; removing the machine-home
+    // material leaves the probe nothing to anchor with — the verdict must
+    // name the unanchorable trust, not a dead address.
+    rmSync(join(root, "tls"), { recursive: true, force: true });
+
+    const status = await runServeCommand(["status", "--port", doorPort(door), "--tls"], context);
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout).toContain("answered but its TLS identity could not be anchored from the machine home");
+    expect(status.stdout).toContain("the door may still be live");
+    expect(status.stdout).not.toContain("not answering");
   });
 });

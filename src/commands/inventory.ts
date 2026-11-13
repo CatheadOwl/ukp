@@ -597,7 +597,9 @@ function importDoorEndpoints(
         : `imported: ${handle}  (${declaredCapabilitySummary(target.capabilities)}${noScope})`,
     );
   }
-  if (credentials.token !== undefined) {
+  if (credentials.token !== undefined && landed > 0) {
+    // No imports landed = no token was stored anywhere; printing an auth
+    // line then misattributed a store failure that never happened.
     lines.push(
       storedHandles > 0 && inlineHandles === 0
         ? "auth: token stored in the OS credential store (keyed per endpoint handle)"
