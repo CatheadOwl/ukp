@@ -425,6 +425,13 @@ describe("CLI bootstrap", () => {
     // carry the NAT/EIP remedy itself, not defer it to the README.
     expect(guide).toContain("--tls --tls-san <public-ip>");
     expect(guide).toContain("registration fails on certificate name mismatch");
+    // 2026-11-13 focused replay R1 (owner ruled option b): the arming key is
+    // a bootstrap credential with a taught lifecycle — revoke once per-person
+    // keys exist, re-mint re-arms, own access is just another handover
+    // (mainstream backing: docs/wiki/bootstrap-credential-lifecycle).
+    expect(guide).toContain("the arming key is a bootstrap credential, not anyone's daily access");
+    expect(guide).toContain("revoke it ('ukp serve token revoke gate')");
+    expect(guide).toContain("another handover: share to a label");
     // ADR-REM-007 guard: --endpoint stays a declared-name assertion; the
     // consumer handle (not an alias layer) is the --name registration slot.
     expect(guide).toContain("expected-name assertion on the declared name");

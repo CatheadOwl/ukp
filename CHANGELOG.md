@@ -83,6 +83,15 @@ All notable public changes to UKP will be documented in this file.
   guide's cold-start recipe now arms the gate with a non-person label
   (`token add gate "notes:ro"`), so arming and per-person handovers no
   longer stack two active keys under one label.
+- The guide's arming key teaches its full lifecycle (focused-replay R1,
+  owner-ruled option b): it is a bootstrap credential, not anyone's daily
+  access — revoke it once per-person keys exist (re-minting on the door
+  machine re-arms the gate anytime, so revoking costs nothing), and
+  wanting your own remote access is just another handover (share to a
+  label for your device). Mainstream backing:
+  first credentials are never the owner's everyday credential across the
+  surveyed systems (Vault/Jenkins/Rancher/K8s/Tailscale/GitLab et al.).
+  The Scoped keys section's duplicate step numbering is fixed in passing.
 
 - Handing an endpoint to another machine collapses into one gesture
   (ADR-REM-015): `ukp serve status` self-describes the door (live roster,

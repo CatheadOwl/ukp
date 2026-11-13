@@ -48,9 +48,14 @@ Scoped keys for a second machine or an agent (instead of sharing the env token):
    consulted), then start the door and keep it under your process manager
    ukp serve token add gate "notes:ro"         # arming key; raw key ONCE
    ukp serve --host 0.0.0.0 --tls --select notes
-   (arm once with a tool label like 'gate'; per-person keys come from the
-   share gesture below - minting 'liku' here AND sharing to 'liku' later
-   leaves two active keys under one label)
+   (the arming key is a bootstrap credential, not anyone's daily access:
+   arm once with a tool label like 'gate' - minting 'liku' here AND
+   sharing to 'liku' later leaves two active keys under one label. Once
+   per-person keys exist through share,
+   revoke it ('ukp serve token revoke gate'); re-minting on the door
+   machine re-arms the gate anytime, so revoking costs nothing. Wanting
+   your OWN remote access is just another handover: share to a label
+   for your device.)
 2. Hand an endpoint over in one gesture (--at is the origin the consumer
    will use, and share probes the door through it)
    ukp serve status [--port <n>]                # door width at a glance
@@ -68,7 +73,7 @@ Scoped keys for a second machine or an agent (instead of sharing the env token):
    every key under that label. Manual form for broader scopes is the
    same mint command, e.g. ukp serve token add liku "notes:ro,cad:rw".
 
-2. On the consuming machine, register with the raw key as the token
+3. On the consuming machine, register with the raw key as the token
    (the share gesture above prints this exact line, scoped to one endpoint)
    ukp register --url https://<ip>:8570 --token <raw-key>
    With an OS credential store present the raw key goes there (Windows
@@ -86,7 +91,7 @@ Scoped keys for a second machine or an agent (instead of sharing the env token):
    'ukp list' keeps flagging them, because the door's public document
    answers the authenticated fetch with the key's own admitted names.
 
-3. Revoke on the host (effective on the next request - no restart)
+4. Revoke on the host (effective on the next request - no restart)
    ukp serve token list
    ukp serve token revoke liku
 
