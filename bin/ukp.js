@@ -10,6 +10,7 @@
 // when it already is bun, the standard install locations, then PATH.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { classifySpawnFailure, spawnFailureStderr } from "./spawn-failure.js";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -118,9 +119,20 @@ if (runningUnderBun) {
     env: process.env,
   });
   if (result.error) {
-    // bunPath existed on disk a moment ago; a spawn failure here is exotic,
-    // but it must still land in the remedy, never a stack trace.
-    fail(`spawning '${bunPath}' failed: ${String(result.error.message ?? result.error)}`);
+    // bunPath passed the existsSync gate a moment ago, yet the spawn still
+    // failed — and the shape is reachable, not exotic (0.4.0 learnability
+    // SF-2): a shell sitting in a directory that gets moved or renamed
+    // leaves this launcher inheriting a dangling cwd, and spawnSync reports
+    // ENOENT while bun is perfectly fine. Classify instead of funneling
+    // everything into the no-bun remedy.
+    const failure = classifySpawnFailure(result.error, bunPath);
+    if (failure.kind === "exe-vanished") {
+      // The bun we gated on is gone at launch: the no-bun remedy text is
+      // the honest direction after all.
+      fail(`found earlier at '${bunPath}' but gone at launch`);
+    }
+    process.stderr.write(spawnFailureStderr(failure.kind, bunPath, failure.code));
+    process.exit(1);
   }
   process.exit(result.status === null ? (result.signal !== null ? 130 : 1) : result.status);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -73,6 +73,29 @@ describe("bin/ukp.js self-locating launcher", () => {
       expect(result.stderr).toContain("UKP_BUN");
     } finally {
       rmSync(emptyHome, { recursive: true, force: true });
+    }
+  });
+
+  test("a found-but-unstartable bun reports the start failure, not the no-bun remedy", () => {
+    // POSIX-only, same skip reason as the no-bun shape above. UKP_BUN is
+    // the first candidate, so pointing it at a data file that EXISTS (the
+    // gate passes, no PATH suppression needed) but carries no execute
+    // permission makes the spawn fail EACCES — the launcher must attribute
+    // that to starting bun, never to a missing one.
+    if (process.platform === "win32") return;
+    const node = Bun.which("node");
+    if (node === null) return;
+    const dir = mkdtempSync(join(tmpdir(), "ukp-launcher-eacces-"));
+    try {
+      const notExecutable = join(dir, "bun.shaped");
+      writeFileSync(notExecutable, "#!/bin/sh\nexit 0\n");
+      chmodSync(notExecutable, 0o644); // exists, readable, deliberately NOT executable
+      const result = run([node, launcher, "--version"], { ...process.env, UKP_BUN: notExecutable });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("could not start (EACCES)");
+      expect(result.stderr).not.toContain("no bun executable found");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
