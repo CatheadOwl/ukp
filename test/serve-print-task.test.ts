@@ -345,7 +345,7 @@ describe("serve --print-task guards", () => {
     ).toBeUndefined();
   });
 
-  test("off-loopback without TLS is refused (clients refuse plain-http registration)", () => {
+  test("off-loopback without TLS is refused (serve would refuse it at task start)", () => {
     const error = printTaskPreflightError({
       platform: "win32",
       host: "0.0.0.0",
@@ -353,10 +353,29 @@ describe("serve --print-task guards", () => {
       allowAnonymous: false,
     });
     expect(error).toContain("without TLS");
+    expect(error).toContain("--allow-http");
     // Loopback without TLS stays printable: the reverse-proxy shape.
     expect(
       printTaskPreflightError({ platform: "win32", host: "127.0.0.1", hasTls: false, allowAnonymous: false }),
     ).toBeUndefined();
+  });
+
+  test("--allow-http mirrors serve admission: printable, and the serve line carries the flag", () => {
+    // The preflight mirrors serve's transport admission (INV-03 override),
+    // so the TLS-terminated-in-front shape prints instead of dead-ending —
+    // and the generated serve line carries the flag, or the resident
+    // artifact would be refused at task start.
+    expect(
+      printTaskPreflightError({
+        platform: "win32",
+        host: "0.0.0.0",
+        hasTls: false,
+        allowAnonymous: false,
+        allowHttp: true,
+      }),
+    ).toBeUndefined();
+    const out = renderServeTaskArtifacts({ host: "0.0.0.0", port: 8570, allowHttp: true });
+    expect(out).toContain("ukp serve --host 0.0.0.0 --port 8570 --allow-http");
   });
 
   test("--allow-anonymous off loopback is refused (serve would refuse it at task start)", () => {

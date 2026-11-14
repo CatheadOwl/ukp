@@ -78,26 +78,32 @@ export interface ServeTaskInput {
   host: string;
   port: number;
   tls?: ServeTaskTls;
+  /** Mirrored --allow-http (INV-03 override): carried into the §1 serve
+   * line so a door admitted by the flag restarts with it — without the
+   * round-trip the resident artifact would be refused at task start. */
+  allowHttp?: boolean;
 }
 
 /** Door-shape guards the command layer runs before printing. Pure so both
  * platforms are testable: `platform` is `process.platform` in production.
  * These mirror what serve itself would refuse at task start — they never
  * widen admission, and the TLS one stops a dead-end artifact before it is
- * applied (clients refuse to register plain-http urls off loopback). */
+ * applied (plain http beyond loopback carries bearer keys unencrypted;
+ * --allow-http is the explicit TLS-terminated-in-front opt-in). */
 export function printTaskPreflightError(input: {
   platform: string;
   host: string;
   hasTls: boolean;
   allowAnonymous: boolean;
+  allowHttp?: boolean;
 }): string | undefined {
   if (input.platform !== "win32") {
     return "--print-task is Windows-only; on Linux prefer systemd socket activation (ukp serve --systemd-socket) - the deployment handbook carries that recipe";
   }
   const loopback =
     input.host === "127.0.0.1" || input.host === "localhost" || input.host === "::1" || input.host === "[::1]";
-  if (!loopback && !input.hasTls) {
-    return "refusing to print an off-loopback door without TLS: clients refuse to register plain-http urls - pass --tls (self-signed, pinned at registration) or --tls-cert/--tls-key, or bind loopback behind a TLS-terminating proxy";
+  if (!loopback && !input.hasTls && input.allowHttp !== true) {
+    return "refusing to print an off-loopback door without TLS: bearer keys would travel unencrypted, and serve refuses this shape at task start - pass --tls (self-signed, pinned at registration) or --tls-cert/--tls-key, bind loopback behind a TLS-terminating proxy, or pass --allow-http when TLS is terminated in front of this door";
   }
   if (input.allowAnonymous && !loopback) {
     return "refusing to print this shape: --allow-anonymous is loopback-only and serve would refuse it at task start - set the token in the generated script instead";
@@ -119,6 +125,7 @@ function serveCommandLine(input: ServeTaskInput): string {
     `--host ${input.host}`,
     `--port ${input.port}`,
     ...tls,
+    ...(input.allowHttp === true ? ["--allow-http"] : []),
   ].join(" ");
 }
 

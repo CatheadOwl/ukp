@@ -30,7 +30,13 @@ deny-by-default**: serving requires `UKP_SERVE_TOKEN`; tokenless serving needs
 an explicit `--allow-anonymous` and is refused off loopback. A reverse proxy on
 the same host forwards from the public side to the loopback bind, so proxied
 deployments treat the token as mandatory (serve cannot see past its own bind
-address).
+address). **Transport is deny-by-default the same way**: a bind beyond
+loopback without TLS is refused at startup — bearer keys must not travel
+unencrypted. The escape hatch is explicit: `--allow-http` admits a door whose
+TLS is terminated by a fronting component on another host or a container
+sidecar (the proxy→door hop stays plaintext; keep it on a private network,
+and the startup banner warns about it). Same-host proxy recipes keep the
+loopback bind and need no flag.
 
 The complete route list (ukp-remote v1) — what a client or a fronting proxy's
 path allowlist must account for: `GET /.well-known/ukp.json` (the public

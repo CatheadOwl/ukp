@@ -106,7 +106,7 @@ Name and identity:
 - A host door can import everything, --select a comma-separated subset, or --endpoint exactly one endpoint.
 - Self-signed HTTPS certificates are pinned on first registration; compare the pinned fingerprint with the serve banner on untrusted networks.
 - --tls names the host's interface IPs only. A NAT/EIP host's public IP needs --tls-san <public-ip>; without it registration fails on certificate name mismatch. Adding it later re-signs the persisted cert over the same key, so existing pins survive.
-- Non-loopback plain http is refused. Use https, ssh://, or loopback http for local testing.
+- Non-loopback plain http is refused at both ends: registration refuses the url, and serve refuses to start the door (bearer keys must not travel unencrypted). Use https, ssh://, or loopback http for local testing; --allow-http is the explicit opt-in for a door whose TLS is terminated by a fronting component on another host (reverse proxy, container sidecar) - that hop stays plaintext, and consumers register the edge's https origin, never this door's.
 - ssh:// urls take no port: registration rejects one (the woken door listens on a client-chosen loopback port; use an ssh config Host alias for a non-standard sshd port).
 
 Operational note:

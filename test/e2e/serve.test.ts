@@ -29,7 +29,7 @@ import {
   type StartedServe,
 } from "../../src/server.ts";
 import { loadManifest } from "../../src/config/manifest.ts";
-import { parseServeArgs, renderServeBanner, executeServeCommand } from "../../src/commands/serve.ts";
+import { parseServeArgs, renderServeBanner, executeServeCommand, serveTransportDecision } from "../../src/commands/serve.ts";
 import { parseListenFds, createSocketBridge } from "../../src/server.ts";
 import { createServer as netCreateServer } from "node:net";
 import { createQmdFixtureCopy } from "../helpers/qmd-fixture.ts";
@@ -410,6 +410,73 @@ describe("serve auth admission (RQ-18, deny by default)", () => {
     });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("serve requires authentication");
+  });
+});
+
+describe("serve transport admission (INV-03 serve side: plain http stops at loopback)", () => {
+  test("non-loopback plain http refuses even with a credential; TLS, loopback, or --allow-http admit (learnability 0.4.0 SF-1)", () => {
+    // The 0.4.0 live repro: a bearer-keyed door started on a non-loopback
+    // plain-http bind with zero warning — and since ukp clients refuse to
+    // register that url, the only callers it served were ones sending the
+    // key in the clear. The listener must never come up now.
+    const refused = serveTransportDecision({ host: "0.0.0.0", tls: false, allowHttp: false });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.reason).toContain("--tls");
+      expect(refused.reason).toContain("--allow-http");
+    }
+    // TLS on the door admits any bind; loopback plain http stays the
+    // sanctioned local shape (testing, same-host proxy, ssh forward).
+    expect(serveTransportDecision({ host: "0.0.0.0", tls: true, allowHttp: false })).toEqual({
+      ok: true,
+      insecureHttp: false,
+    });
+    expect(serveTransportDecision({ host: "127.0.0.1", tls: false, allowHttp: false })).toEqual({
+      ok: true,
+      insecureHttp: false,
+    });
+    // The explicit opt-in admits and flags itself for the banner warning.
+    expect(serveTransportDecision({ host: "0.0.0.0", tls: false, allowHttp: true })).toEqual({
+      ok: true,
+      insecureHttp: true,
+    });
+    // A --systemd-socket listener's bind belongs to the socket unit, so
+    // loopback cannot be verified there — it rides the same rule.
+    const socket = serveTransportDecision({ host: "127.0.0.1", tls: false, allowHttp: false, systemdSocket: true });
+    expect(socket.ok).toBe(false);
+    expect(serveTransportDecision({ host: "127.0.0.1", tls: false, allowHttp: true, systemdSocket: true })).toEqual({
+      ok: true,
+      insecureHttp: true,
+    });
+
+    // Command layer: the credential is present (auth admission passes) and
+    // the transport admission still refuses — no listener left behind, and
+    // the remedy names all three doors out.
+    const result = executeServeCommand(["--endpoint", "serve-fixture", "--host", "0.0.0.0"], {
+      currentDirectory: root,
+      registryPath,
+      tokens: ["sf1-token"],
+      homeDir: join(root, "sf1-no-token-home"),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("refusing to serve");
+    expect(result.stderr).toContain("unencrypted");
+    expect(result.stderr).toContain("--allow-http");
+  });
+
+  test("banner: the --allow-http admission warns; every other door stays silent", () => {
+    const base = {
+      mode: "door" as const,
+      door: { endpoints: [], write: [] },
+      url: "http://0.0.0.0:8570",
+      host: "0.0.0.0",
+      port: 8570,
+      authRequired: true,
+    };
+    expect(renderServeBanner({ ...base, rg: "ok", insecureHttp: true })).toContain(
+      "warning: plain http beyond loopback (--allow-http)",
+    );
+    expect(renderServeBanner({ ...base, rg: "ok" })).not.toContain("warning:");
   });
 });
 

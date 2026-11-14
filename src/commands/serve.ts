@@ -689,13 +689,14 @@ export const SERVE_SPEC: UkpCommandSpec = {
   options: [
     { flags: "--endpoint <name>", help: "the registered endpoint to expose; omit it to serve a host door (/e/<name>/ routing, one port) instead" },
     { flags: "--select <names>", help: "host door serving ONLY the named endpoints (comma-separated): one port, /e/<name>/ routing, and a door document that declares just this subset - unselected local endpoints are not served, routed, or declared; mutually exclusive with --endpoint" },
-    { flags: "--host <addr>", help: "listen address (default 127.0.0.1, loopback only without a token)" },
+    { flags: "--host <addr>", help: "listen address (default 127.0.0.1; a bind beyond loopback needs a token and TLS)" },
     { flags: "--port <n>", help: "listen port (default 8570)" },
     { flags: "--tls", help: "serve HTTPS with a self-signed identity (auto-generated under ~/.ukp/tls/<name>/, machine-local beside the registry; SAN covers this host's addresses; clients pin it at registration)" },
     { flags: "--tls-san <ip|dns>", help: "extra SAN entry for the --tls self-signed identity (repeatable): a public/NAT IP or hostname no NIC of this host carries; a persisted certificate missing an entry is re-signed over the same key (pin unchanged, pinned clients re-anchor)", multi: true },
     { flags: "--tls-cert <pem>", help: "TLS certificate (chain) PEM path - Let's Encrypt, mkcert, or a private CA; pair with --tls-key" },
     { flags: "--tls-key <pem>", help: "TLS private key PEM path; pair with --tls-cert" },
     { flags: "--allow-anonymous", help: "permit tokenless access on loopback (local testing, or an ssh-forwarded host door where SSH carries encryption and auth; once the tokens file holds any key the bearer gate is armed and this flag no longer enables tokenless access)" },
+    { flags: "--allow-http", help: "permit plain http beyond loopback when TLS is terminated in front of this door (a reverse proxy on another host, a container sidecar, an overlay network): without it such a door is refused, because bearer keys would travel unencrypted - with it the hop from that TLS edge to this door stays plaintext, so keep it on a private network; consumers register the edge's https origin" },
     { flags: "--max-idle <seconds>", help: "exit after <seconds> without requests (self-reap; the orphan backstop for on-demand-woken doors - fractional values accepted for tests)" },
     { flags: "--systemd-socket", help: "serve on the systemd socket-activation listener (LISTEN_FDS fd 3) instead of binding a port - the port belongs to your .socket unit; Linux-only" },
     { flags: "--print-task", help: "Windows: print this door's process-manager artifacts (start script, hidden launcher, Task Scheduler command, firewall rule) instead of serving - review and apply them yourself; nothing is installed or started for you, and the token is yours to paste (never printed)" },
@@ -773,7 +774,11 @@ export const SERVE_SPEC: UkpCommandSpec = {
     "  --tls-cert/--tls-key",
     "  for your own certificate (Let's Encrypt - IP certs available since",
     "  2026-01 -, mkcert, a private CA). Plain HTTP remains loopback-only by",
-    "  admission; public exposure needs TLS or the ssh:// transport.",
+    "  admission; public exposure needs TLS or the ssh:// transport. A door",
+    "  bound beyond loopback without TLS is refused at startup - a bearer",
+    "  key must not travel unencrypted. --allow-http is the explicit opt-in",
+    "  for a door whose TLS is terminated in front (a proxy on another host,",
+    "  a container sidecar): that hop stays plaintext and the banner says so.",
     "",
     "  A cloud NAT/EIP host's public IP is on no NIC (--tls alone cannot",
     "  cover it): add --tls-san <public-ip> next to --tls. Repeatable; DNS",
@@ -903,6 +908,15 @@ function authBannerLine(info: ServeInfo): string {
     : "  auth: no token (loopback only)";
 }
 
+/** The banner transport warning (INV-03 override): present only when
+ * --allow-http admitted plain http beyond loopback, so the operator channel
+ * keeps naming the plaintext hop the flag accepted. */
+function transportBannerLines(info: ServeInfo): string[] {
+  return info.insecureHttp === true
+    ? ["  warning: plain http beyond loopback (--allow-http) - bearer keys travel unencrypted from your TLS edge to this door; keep that hop on a private network"]
+    : [];
+}
+
 export function renderServeBanner(info: ServeInfo): string {
   if (info.mode === "door") {
     return [
@@ -915,6 +929,7 @@ export function renderServeBanner(info: ServeInfo): string {
         : []),
       `  write: ${info.door!.write.length > 0 ? info.door!.write.join(", ") + " (propose via PUT /e/<name>/v1/propose/<id>)" : "(no endpoint declares propose)"}`,
       authBannerLine(info),
+      ...transportBannerLines(info),
       `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning - install ripgrep on this door's PATH)"}`,
       ...(info.maxIdleSeconds !== undefined
         ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
@@ -930,6 +945,7 @@ export function renderServeBanner(info: ServeInfo): string {
     `  listening: ${info.url}`,
     `  discovery: ${info.url.startsWith("http") ? `${info.url}${DISCOVERY_PATH}` : info.url}`,
     authBannerLine(info),
+    ...transportBannerLines(info),
     `  rg: ${info.rg === "ok" ? "ok" : "missing (rg calls skip with a warning - install ripgrep on this door's PATH)"}`,
     ...(info.maxIdleSeconds !== undefined
       ? [`  idle: exits after ${info.maxIdleSeconds}s without requests (--max-idle)`]
@@ -967,6 +983,40 @@ export function serveAuthDecision(
   };
 }
 
+/** Transport admission (INV-03, serve side): plain http stops at loopback.
+ * Registration and --print-task already refused the shape, but a
+ * bearer-keyed door could still start on a non-loopback bind without TLS -
+ * and since ukp clients refuse to register that url, the only callers able
+ * to use it were ones sending the key in the clear. TLS on the door admits
+ * any bind; loopback plain http stays the sanctioned local shape (same-host
+ * proxy, ssh forward); anything else needs --allow-http, the explicit
+ * statement that TLS is terminated in front of this door. A
+ * --systemd-socket listener's bind belongs to the socket unit, so loopback
+ * cannot be verified there and it rides the same refusal. `insecureHttp`
+ * marks the admitted override for the banner warning. */
+export function serveTransportDecision(input: {
+  host: string;
+  tls: boolean;
+  allowHttp: boolean;
+  systemdSocket?: boolean;
+}): { ok: true; insecureHttp: boolean } | { ok: false; reason: string } {
+  if (input.tls) return { ok: true, insecureHttp: false };
+  if (input.systemdSocket === true) {
+    if (input.allowHttp) return { ok: true, insecureHttp: true };
+    return {
+      ok: false,
+      reason:
+        "plain http on --systemd-socket: the listener's bind address belongs to the socket unit and may be public, so bearer keys could travel unencrypted - pass --tls (or --tls-cert/--tls-key), or --allow-http when the socket unit binds a private address with TLS terminated in front",
+    };
+  }
+  if (isLoopback(input.host)) return { ok: true, insecureHttp: false };
+  if (input.allowHttp) return { ok: true, insecureHttp: true };
+  return {
+    ok: false,
+    reason: `plain http on non-loopback ${input.host}: bearer keys would travel unencrypted - pass --tls (self-signed, pinned at registration) or --tls-cert/--tls-key, bind loopback behind a TLS-terminating proxy, or pass --allow-http when TLS is terminated in front of this door`,
+  };
+}
+
 export function executeServeCommand(
   args: readonly string[],
   context: ServeCommandContext,
@@ -996,6 +1046,7 @@ export function executeServeCommand(
   return executeKitCommand(SERVE_SPEC, args, (parsed) => {
     const { endpoint, select, host, port, maxIdleSeconds, systemdSocket, write, tlsSan = [] } = toParsedServe(parsed);
     const allowAnonymous = (parsed.options as { allowAnonymous?: boolean }).allowAnonymous === true;
+    const allowHttp = (parsed.options as { allowHttp?: boolean }).allowHttp === true;
     const printTask = (parsed.options as { printTask?: boolean }).printTask === true;
     const options = parsed.options as { tls?: boolean; tlsCert?: string; tlsKey?: string };
     // TLS flag family (W5'): --tls and --tls-cert/--tls-key are mutually
@@ -1048,6 +1099,7 @@ export function executeServeCommand(
         host,
         hasTls: options.tls === true || options.tlsCert !== undefined,
         allowAnonymous,
+        allowHttp,
       });
       if (preflight !== undefined) {
         throw new Error(preflight);
@@ -1064,6 +1116,7 @@ export function executeServeCommand(
         ...(endpoint !== undefined ? { endpoint } : {}),
         ...(select !== undefined ? { select } : {}),
         ...(tls !== undefined ? { tls } : {}),
+        ...(allowHttp ? { allowHttp } : {}),
       };
       if (!write) {
         return {
@@ -1105,6 +1158,16 @@ export function executeServeCommand(
       const target = endpoint === undefined ? "host door" : `'${endpoint}'`;
       throw new Error(`refusing to serve ${target}: ${decision.reason}`);
     }
+    const transport = serveTransportDecision({
+      host,
+      tls: options.tls === true || options.tlsCert !== undefined,
+      allowHttp,
+      ...(systemdSocket ? { systemdSocket } : {}),
+    });
+    if (!transport.ok) {
+      const target = endpoint === undefined ? "host door" : `'${endpoint}'`;
+      throw new Error(`refusing to serve ${target}: ${transport.reason}`);
+    }
     const { server, info, stopAll } = startUkpServer({
       currentDirectory: context.currentDirectory,
       registryPath: context.registryPath,
@@ -1117,6 +1180,7 @@ export function executeServeCommand(
       ...(tokenFilePath !== undefined ? { tokenFilePath } : {}),
       ...(maxIdleSeconds !== undefined ? { maxIdleSeconds } : {}),
       ...(systemdSocket !== undefined && systemdSocket ? { systemdSocket } : {}),
+      ...(transport.insecureHttp ? { insecureHttp: true } : {}),
       ...(options.tls === true
         ? { tls: { mode: "self-signed" as const, ...(tlsSan.length > 0 ? { sanEntries: tlsSan } : {}) } }
         : options.tlsCert !== undefined && options.tlsKey !== undefined

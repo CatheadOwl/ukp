@@ -220,7 +220,11 @@ serving with a `--host` beyond loopback requires a credential — the
 the `~/.ukp/tokens` file. Tokenless serving needs an explicit
 `--allow-anonymous`, is refused off loopback, and stays tokenless only
 while the tokens file holds no keys — any issued key arms the bearer
-gate for every caller. The two fastest
+gate for every caller. Transport is equally deny-by-default: a bind
+beyond loopback without TLS is refused at startup, because bearer keys
+must not travel unencrypted — `--allow-http` is the explicit opt-in for
+a door whose TLS is terminated by a fronting component (proxy on
+another host, container sidecar); that hop stays plaintext. The two fastest
 paths — each block notes where its commands run:
 
 ```bash
@@ -285,7 +289,11 @@ required per-key scopes, revocation by deleting the line — effective on
 the next request). Transport is `https://`, pinned
 automatically at registration (a certificate that renews on the same key
 re-pins silently; a different key hard-blocks with both fingerprints), or
-`ssh://`, where SSH carries both encryption and authentication. A
+`ssh://`, where SSH carries both encryption and authentication. Plain
+http stops at loopback: a door bound beyond loopback without TLS is
+refused at startup — `--allow-http` is the explicit opt-in when TLS is
+terminated in front of the door (that hop stays plaintext, and the
+startup banner says so). A
 `--select` door neither routes, declares, nor lists unselected endpoints —
 excluded and unknown names return byte-identical 404s, and a scoped key
 probing an endpoint it cannot touch gets a route denial (`no route for

@@ -148,6 +148,12 @@ export interface ServeConfig {
    * (LISTEN_FDS fd 3) instead of binding a port — the port belongs to the
    * socket unit; the process only exists while in use. Linux-only. */
   systemdSocket?: boolean;
+  /** INV-03 override marker: --allow-http admitted plain http beyond a
+   * verified loopback bind (TLS is terminated in front, at an edge the
+   * operator owns). Banner signal only — the admission itself is the
+   * command layer's serveTransportDecision; this keeps the operator channel
+   * naming the plaintext hop the flag accepted. */
+  insecureHttp?: boolean;
 }
 
 export interface DiscoveryDocument {
@@ -209,6 +215,10 @@ export interface ServeInfo {
    * snapshot for visibility only; the live truth is the per-request fresh
    * read (delete a line, next request 401s). */
   tokenFile?: { keys: number };
+  /** Present when --allow-http admitted plain http beyond loopback (INV-03
+   * override) — feeds the banner's transport warning. Absent on every
+   * loopback or TLS door, so the warning line is exactly the override's. */
+  insecureHttp?: boolean;
   /** ripgrep availability probed once at startup IN THE DOOR'S OWN PROCESS
    * (2026-09-20, liku feedback): /v1/rg serves every endpoint and a missing
    * binary degrades per-endpoint on the wire by design — but that truth is
@@ -1165,6 +1175,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
     port: listener.port,
     authRequired: gateArmed(config),
     ...(tokenFile !== undefined ? { tokenFile } : {}),
+    ...(config.insecureHttp === true ? { insecureHttp: true } : {}),
     rg: rgExecutableAvailable() ? "ok" : "missing",
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
@@ -1339,6 +1350,7 @@ export function startUkpServer(config: ServeConfig): StartedServe {
     port: listener.port,
     authRequired: gateArmed(config),
     ...(tokenFile !== undefined ? { tokenFile } : {}),
+    ...(config.insecureHttp === true ? { insecureHttp: true } : {}),
     rg: rgExecutableAvailable() ? "ok" : "missing",
     ...(tlsMaterial !== undefined
       ? { tls: { pin: tlsMaterial.pin, san: tlsMaterial.san, source: tlsMaterial.source } }
