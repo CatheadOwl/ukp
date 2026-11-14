@@ -933,14 +933,33 @@ function bearerGate(
  * set — and since 2026-11-11 that absence answers as a route denial (the
  * door publicly declares the name, so denying its existence would be a
  * lie), while select-excluded names keep the existence-shaped 404 —
- * still no 403 class either way. Env credentials and anonymous
- * serving return undefined (the door's own width applies). */
+ * still no 403 class either way. The returned pairing carries the access
+ * level next to the predicate it built — one value, so the roster clause an
+ * empty effective set produces (N3, 2026-11-14) can name the level without
+ * a second source of truth. Env credentials and anonymous serving return
+ * undefined (the door's own width applies). */
 function scopeAdmit(
   credential: GateCredential | undefined,
   access: ScopeAccess,
-): ((name: string) => boolean) | undefined {
+): { admit: (name: string) => boolean; access: ScopeAccess } | undefined {
   if (credential?.kind !== "file") return undefined;
-  return (name: string) => scopeAllows(credential.entry.scopes, name, access);
+  return { admit: (name: string) => scopeAllows(credential.entry.scopes, name, access), access };
+}
+
+/** The roster clause every door 404 carries. A non-empty roster renders
+ * `(available: a, b)` exactly as always; an EMPTY roster used to render the
+ * bare `(available: )`, which taught nothing (N3, 2026-11-14 learnability
+ * review). The empty case now states only what the caller already holds:
+ * with `access` defined a scoped file key is in play and the clause names
+ * THAT key's grants for the route's own access level; with `access`
+ * undefined no key narrows the roster (anonymous / env credential) and the
+ * door's own width is simply empty. The clause never widens a roster and
+ * never distinguishes the uniform tier-2 causes. */
+function rosterClause(names: readonly string[], access?: ScopeAccess): string {
+  if (names.length > 0) return `(available: ${names.join(", ")})`;
+  return access !== undefined
+    ? `(your key grants no ${access === "rw" ? "write" : "read"} routes on this door)`
+    : `(the door serves no endpoints)`;
 }
 
 /** Per-request endpoint resolution for door routing (O-2): the registry is
@@ -958,12 +977,19 @@ function scopeAdmit(
  * existence, uniform across ro-scope / absent-scope / undeclared-write-
  * route, so the difference never leaks whether anyone else could write
  * it. The roster either tier carries is the key's own effective set
- * (`admit` = scope ∩ select ∩ registry), never the wider door. */
+ * (`admit` = scope ∩ select ∩ registry), never the wider door. Since N3
+ * (2026-11-14 learnability review) an empty roster no longer renders the
+ * bare `(available: )`: `rosterClause` names the key's own grants for the
+ * route's access level — knowledge the caller already holds — or, with no
+ * key narrowing in play, that the door serves no endpoints; `access` rides
+ * the same scopeAdmit pairing as `admit` and both tiers share the one
+ * clause, so the uniformity above is untouched. */
 function resolveDoorRoute(
   registryPath: string,
   name: string,
   select?: readonly string[],
   admit?: (name: string) => boolean,
+  access?: ScopeAccess,
 ): { folder: string } | { response: Response } {
   let binding;
   try {
@@ -977,10 +1003,13 @@ function resolveDoorRoute(
     || binding.kind === "remote"
     || (select !== undefined && !select.includes(name))
   ) {
-    const roster = listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name).join(", ");
+    const roster = rosterClause(
+      listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name),
+      access,
+    );
     return {
       response: jsonResponse(
-        errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
+        errorBody("not-found", `no such endpoint '${name}' on this host door ${roster}`),
         404,
       ),
     };
@@ -990,11 +1019,16 @@ function resolveDoorRoute(
     // key's effective set does not include it — a route denial, never an
     // existence denial. Roster membership is public discovery, and the
     // uniform shape (ro scope, absent scope, undeclared write route alike)
-    // keeps writability-for-others unreadable.
-    const roster = listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name).join(", ");
+    // keeps writability-for-others unreadable. An empty effective set
+    // renders the key's own grants for this access level (N3), not a bare
+    // `(available: )` — caller-held knowledge, uniform across the causes.
+    const roster = rosterClause(
+      listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name),
+      access,
+    );
     return {
       response: jsonResponse(
-        errorBody("not-found", `no route for '${name}' under your key on this host door (available: ${roster})`),
+        errorBody("not-found", `no route for '${name}' under your key on this host door ${roster}`),
         404,
       ),
     };
@@ -1043,9 +1077,12 @@ function doorNotFound(
   admit?: (name: string) => boolean,
 ): Response {
   if (name !== undefined) {
-    const roster = listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name).join(", ");
+    // No `access` here: this branch is only reached before the gate (an
+    // invalid name segment), so no key ever narrows this roster and the
+    // empty case is the door's own width (N3's anonymous clause).
+    const roster = rosterClause(listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name));
     return jsonResponse(
-      errorBody("not-found", `no such endpoint '${name}' on this host door (available: ${roster})`),
+      errorBody("not-found", `no such endpoint '${name}' on this host door ${roster}`),
       404,
     );
   }
@@ -1082,7 +1119,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         // the public document byte-identical: no echo, no credential oracle.
         const echo = fileGateCredential(request, config);
         const admitted = echo !== undefined
-          ? listDoorEndpoints(config.registryPath, select, scopeAdmit(echo, "ro")).map((endpoint) => endpoint.name)
+          ? listDoorEndpoints(config.registryPath, select, scopeAdmit(echo, "ro")?.admit).map((endpoint) => endpoint.name)
           : undefined;
         return jsonResponse(
           buildDoorDocument(listDoorEndpoints(config.registryPath, select), gateArmed(config), admitted),
@@ -1122,19 +1159,20 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         const gate = bearerGate(request, config);
         if ("response" in gate) return gate.response;
         // The write face demands the rw bit: a ro-scoped endpoint is not in
-        // this key's effective write roster (rehearsal point E).
-        const admit = scopeAdmit(gate.credential, "rw");
+        // this key's effective write roster (rehearsal point E). `admit` and
+        // its `access` level ride the one scopeAdmit pairing.
+        const admission = scopeAdmit(gate.credential, "rw");
         const id = rest.slice("/v1/propose/".length);
-        if (id.includes("/")) return doorNotFound(undefined, config.registryPath, select, admit);
-        const resolved = resolveDoorRoute(config.registryPath, name, select, admit);
+        if (id.includes("/")) return doorNotFound(undefined, config.registryPath, select, admission?.admit);
+        const resolved = resolveDoorRoute(config.registryPath, name, select, admission?.admit, admission?.access);
         if ("response" in resolved) return resolved.response;
         return await handlePropose(request, config, name, resolved.folder, id);
       }
       if (rest === "/v1/search" || rest === "/v1/read" || rest === "/v1/nav" || rest === "/v1/rg") {
         const gate = bearerGate(request, config);
         if ("response" in gate) return gate.response;
-        const admit = scopeAdmit(gate.credential, "ro");
-        const resolved = resolveDoorRoute(config.registryPath, name, select, admit);
+        const admission = scopeAdmit(gate.credential, "ro");
+        const resolved = resolveDoorRoute(config.registryPath, name, select, admission?.admit, admission?.access);
         if ("response" in resolved) return resolved.response;
         if (rest === "/v1/search") {
           return await handleSearch(request, config, name, resolved.folder);

@@ -924,6 +924,19 @@ describe("serve host door mode (W7 / ADR-REM-004)", () => {
     expect(((await alien.json()) as { error: { message: string } }).error.message).toContain("host door");
   });
 
+  test("a door with zero registered endpoints answers the roster 404 with the empty-door clause (N3)", async () => {
+    // Door mode reads the registry per request and a missing file reads as
+    // empty, so the door starts and serves an empty roster. Anonymous (no
+    // key narrowing in play): the empty roster renders the door's own
+    // width — never the bare `(available: )` (2026-11-14 learnability N3).
+    const { info } = startDoor({ registryPath: join(root, "empty-door-registry.toml") });
+    const response = await fetch(`${info.url}/e/anything/v1/read?ref=documents/note.md`);
+    expect(response.status).toBe(404);
+    const body = await response.json() as { error: { message: string } };
+    expect(body.error.message).toContain("no such endpoint 'anything' on this host door");
+    expect(body.error.message).toContain("(the door serves no endpoints)");
+  });
+
   test("door-level auth: bearer covers /e/*/v1/*, documents stay public (RQ-16/18)", async () => {
     const { info } = startDoor({ tokens: ["door-token"] });
     expect((await fetch(`${info.url}${DISCOVERY_PATH}`)).status).toBe(200);

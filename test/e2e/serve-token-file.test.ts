@@ -242,7 +242,12 @@ describe("serve token file: scoped overreach (two refusal tiers — 2026-11-11 r
     const roRefusedText = await roRefused.text();
     expect((JSON.parse(roRefusedText) as { error: { message: string } }).error.message)
       .toContain("no route for 'writer' under your key");
-    expect((JSON.parse(roRefusedText) as { error: { message: string } }).error.message).toContain("(available: )");
+    // N3 (2026-11-14): the ro key's effective write set is empty, and the
+    // empty roster renders the key's own grants for the write face — caller-
+    // held knowledge — never the bare `(available: )`.
+    const roRefusedMessage = (JSON.parse(roRefusedText) as { error: { message: string } }).error.message;
+    expect(roRefusedMessage).toContain("(your key grants no write routes on this door)");
+    expect(roRefusedMessage).not.toContain("(available: )");
     const rwAccepted = await fetch(`${door.info.url}/e/writer/v1/propose/test-prop`, {
       method: "PUT",
       headers: { authorization: `Bearer ${rwKey}`, "content-type": "text/plain" },
