@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { ENDPOINT_NAME, loadManifest, ServiceFolderInaccessibleError } from "../config/manifest.ts";
 import { FILE_NATIVE_CAPABILITIES, isFileNativeCapability } from "../config/file-native.ts";
-import { EXTERNAL_TOOL_CAPABILITIES } from "../config/external-tool.ts";
+import { EXTERNAL_TOOL_CAPABILITIES, type ExternalToolCapabilityName } from "../config/external-tool.ts";
+import { rgExecutableAvailable } from "../capabilities/rg.ts";
 import { diagnoseService, type ProviderResolver } from "./diagnose.ts";
 import {
   assertUkpResidents,
@@ -182,6 +183,28 @@ const BASE_TIER_CAPABILITIES = [
     .filter((name) => EXTERNAL_TOOL_CAPABILITIES[name].baseTier),
 ].sort();
 
+/** Availability probes for the external-tool tier, keyed by tool name. The
+ * table has no generic per-tool probe (availability classification is the
+ * tier's degradation rule, not a table field), so the map lives here — typing
+ * it over ExternalToolCapabilityName makes a new table entry a compile error
+ * until a probe is registered. */
+const EXTERNAL_TOOL_PROBES: Readonly<Record<ExternalToolCapabilityName, () => boolean>> = {
+  rg: rgExecutableAvailable,
+};
+
+/** `base_tools` for the snapshot envelope (0.4.0 learnability N4): keys
+ * derive from the SAME baseTier filter that builds BASE_TIER_CAPABILITIES —
+ * the membership rows and this liveness report cannot drift — and values ride
+ * the ServeInfo vocabulary ("ok"/"missing", server.ts) over the shared
+ * memoized probe (rg.ts; a local sync spawn, memoized per process). */
+function externalBaseToolAvailability(): Readonly<Record<string, "ok" | "missing">> {
+  return Object.fromEntries(
+    (Object.keys(EXTERNAL_TOOL_CAPABILITIES) as Array<keyof typeof EXTERNAL_TOOL_CAPABILITIES>)
+      .filter((name) => EXTERNAL_TOOL_CAPABILITIES[name].baseTier)
+      .map((name) => [name as string, EXTERNAL_TOOL_PROBES[name]() ? "ok" as const : "missing" as const]),
+  );
+}
+
 /** One endpoint as offline machine facts — the `ukp.list.v1` row (TODO
  * 20261028-0053). The machine contract is a registry-snapshot projection:
  * local rows read the Service Manifest (a local file read, never the
@@ -225,6 +248,12 @@ export interface ListEndpointSnapshot {
 export interface ListSnapshotEnvelope {
   schema: "ukp.list.v1";
   command: "list";
+  /** Machine-level external base-tool availability (0.4.0 learnability N4):
+   * one fact for the whole document, not per row — `base_tier` is membership,
+   * row `available` is endpoint availability, and tool liveness lives here
+   * alone. Keys = the external base-tier members (rg today), values use the
+   * ServeInfo vocabulary ("ok"/"missing") over the same memoized probe. */
+  base_tools: Readonly<Record<string, "ok" | "missing">>;
   endpoints: ListEndpointSnapshot[];
 }
 
@@ -355,8 +384,11 @@ function remoteSnapshotRow(endpoint: RegistryBinding): ListEndpointSnapshot {
  * text face's order (locals first, then remotes, each in registry order).
  * Offline and synchronous by construction — no transport pool is ever
  * created for this path, so a registry full of remote bindings costs zero
- * network. stderr stays empty in this mode: degradation truth rides in the
- * rows' `warning` fields. */
+ * network. The envelope's `base_tools` probe is the one non-registry read:
+ * a local synchronous process spawn (rg.ts, memoized per process — ~0.8s on
+ * win32 via the relay on the first call), so the path stays offline and
+ * synchronous. stderr stays empty in this mode: degradation truth rides in
+ * the rows' `warning` fields. */
 function renderListJsonSnapshot(endpoints: readonly RegistryBinding[]): InventoryCommandResult {
   const rows = [
     ...endpoints
@@ -364,7 +396,12 @@ function renderListJsonSnapshot(endpoints: readonly RegistryBinding[]): Inventor
       .map((endpoint) => localSnapshotRow({ name: endpoint.name, path: endpoint.path! })),
     ...endpoints.filter(isRemoteBinding).map(remoteSnapshotRow),
   ];
-  const envelope: ListSnapshotEnvelope = { schema: "ukp.list.v1", command: "list", endpoints: rows };
+  const envelope: ListSnapshotEnvelope = {
+    schema: "ukp.list.v1",
+    command: "list",
+    base_tools: externalBaseToolAvailability(),
+    endpoints: rows,
+  };
   return { exitCode: 0, stdout: `${JSON.stringify(envelope, null, 2)}\n`, stderr: "" };
 }
 

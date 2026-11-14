@@ -66,6 +66,7 @@ const ROOT_MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [
 const MIGRATED_SPECS: ReadonlyArray<UkpCommandSpec> = [...ROOT_MIGRATED_SPECS, INIT_SERVICE_SPEC];
 import { loadManifest } from "../src/config/manifest.ts";
 import { registerAt, readRegistry, registerRemoteAt } from "../src/registry.ts";
+import { rgExecutableAvailable } from "../src/capabilities/rg.ts";
 import { createQmdFixtureCopy } from "./helpers/qmd-fixture.ts";
 
 // Private per-file copy: the fixture's invocation state is written into the
@@ -1720,7 +1721,7 @@ describe("CLI bootstrap", () => {
   }
   const SNAPSHOT_FIELDS = ["available", "base_tier", "capabilities", "declared_name", "kind", "location", "name", "token_residence", "warning"];
 
-  function parseSnapshotEnvelope(lines: readonly string[]): { schema: string; command: string; endpoints: SnapshotRow[] } {
+  function parseSnapshotEnvelope(lines: readonly string[]): { schema: string; command: string; base_tools: { rg: "ok" | "missing" }; endpoints: SnapshotRow[] } {
     return JSON.parse(lines.join("\n"));
   }
 
@@ -1751,6 +1752,16 @@ describe("CLI bootstrap", () => {
     const envelope = parseSnapshotEnvelope(output);
     expect(envelope.schema).toBe("ukp.list.v1");
     expect(envelope.command).toBe("list");
+    // Envelope-level field set is pinned too — stable names are the promise.
+    // Machine-level tool facts live HERE, never in rows (0.4.0 learnability
+    // N4): base_tools keys = the external base-tier members (rg today), the
+    // ServeInfo "ok"/"missing" vocabulary over the same memoized probe the
+    // door uses — asserted against the real probe so the pin is truthful on
+    // machines with and without rg, not hard-coded "ok".
+    expect(Object.keys(envelope).sort()).toEqual(["base_tools", "command", "endpoints", "schema"]);
+    expect(Object.keys(envelope.base_tools)).toEqual(["rg"]);
+    expect(["ok", "missing"]).toContain(envelope.base_tools.rg);
+    expect(envelope.base_tools.rg).toBe(rgExecutableAvailable() ? "ok" : "missing");
     // Locals first (registry order), remote after — the text face's row order.
     expect(envelope.endpoints.map((row) => row.name)).toEqual(["bare", "fixture-qmd", "a-remote"]);
     // Contract field set is pinned: stable field names ARE the promise.
@@ -1838,7 +1849,13 @@ describe("CLI bootstrap", () => {
     const context = { currentDirectory: fixture, registryPath, resolveProvider: () => ({ supported: true }) };
     const output: string[] = [];
     expect(runCli(["list", "--json"], (message) => output.push(message), undefined, context)).toBe(0);
-    expect(parseSnapshotEnvelope(output)).toEqual({ schema: "ukp.list.v1", command: "list", endpoints: [] });
+    // base_tools is always present — a machine fact, independent of rows.
+    expect(parseSnapshotEnvelope(output)).toEqual({
+      schema: "ukp.list.v1",
+      command: "list",
+      base_tools: { rg: rgExecutableAvailable() ? "ok" : "missing" },
+      endpoints: [],
+    });
   });
 
   test("list --json is singleton-checked and rejects unknown options", () => {
