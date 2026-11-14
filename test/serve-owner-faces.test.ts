@@ -94,6 +94,42 @@ describe("ukp serve status (W16 / ADR-REM-015)", () => {
     expect(result.stdout).toContain(
       "select: the roster hides 2 registered endpoint(s): cad, writer (a subset door's whitelist is fixed at start - restart to change it)",
     );
+    // Pure select scenario: the hidden names are healthy, so ONLY the subset
+    // line renders — the door-skip line must not ride along (N1).
+    expect(result.stdout).not.toContain("skipped by the door");
+  });
+
+  // Learnability N1 (2026-11-14): hidden-∧-healthy is select exclusion, but
+  // hidden-∧-broken is the door skipping the binding (manifest unreadable or
+  // name drift) — two causes, two lines; the subset phrase must not cover
+  // for a broken binding.
+  test("a door-skipped binding gets its own roster line with a reason, not the subset phrase (learnability N1)", async () => {
+    const brokenRegistry = join(root, "n1-broken-registry.toml");
+    registerAt(brokenRegistry, "notes", createService("n1-notes-svc", "notes"));
+    registerAt(brokenRegistry, "cad", createService("n1-cad-svc", "cad"));
+    registerAt(brokenRegistry, "writer", createService("n1-writer-svc", "writer"));
+    const ghost = createService("n1-ghost-svc", "ghost");
+    registerAt(brokenRegistry, "ghost", ghost);
+    // Break the manifest AFTER registration: the binding stays, but the
+    // door's fresh per-request manifest read throws, so the door omits it.
+    rmSync(join(ghost, ".ukp", "service.toml"), { force: true });
+    const path = tokenFileWith([{ label: "liku", scopes: "notes:ro" }]);
+    const door = startDoor({ registryPath: brokenRegistry, tokenFilePath: path });
+    const result = await runServeCommand(
+      ["status", "--port", doorPort(door)],
+      { currentDirectory: root, registryPath: brokenRegistry, homeDir },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("- 3 endpoint(s) on the roster: cad, notes, writer");
+    expect(result.stdout).toContain(
+      "roster: 1 registered endpoint(s) skipped by the door (binding unreadable or name drift)",
+    );
+    // The per-name reason rides the line: the loadManifest failure headline,
+    // the same sentence the door's serve-side stderr note carries.
+    expect(result.stdout).toContain("ghost (no Service manifest in this folder");
+    expect(result.stdout).toContain("'ukp list' shows the same row degradation");
+    expect(result.stdout).not.toContain("whitelist is fixed at start");
+    expect(result.stdout).not.toContain("the roster serves every registered endpoint");
   });
 
   test("a down door is named on stdout but exits 1 (report text stays, exit code carries health)", async () => {

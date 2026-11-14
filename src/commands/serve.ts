@@ -9,6 +9,7 @@ import {
   type UkpCommandSpec,
 } from "./kit.ts";
 import { parseRemoteUrl, readRegistry } from "../registry.ts";
+import { loadManifest } from "../config/manifest.ts";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
@@ -375,11 +376,15 @@ function parseDoorProbeArgs(args: readonly string[], usage: string): { host: str
   return { host, port, forceTls };
 }
 
-function localRegistryNames(registryPath: string): string[] | undefined {
+/** Local bindings with their folders, for the status/share reconciliation
+ * against the live roster: the name the roster carries plus the path the
+ * binding-health check (status) needs. Unreadable registry = undefined, the
+ * same degrade-silently semantics the names-only reader always had. */
+function localRegistryBindings(registryPath: string): Array<{ name: string; path: string }> | undefined {
   try {
     return readRegistry(registryPath)
       .filter((binding) => binding.kind !== "remote")
-      .map((binding) => binding.name);
+      .map((binding) => ({ name: binding.name, path: binding.path! }));
   } catch {
     return undefined;
   }
@@ -433,12 +438,43 @@ async function executeServeStatusCommand(
         result.roster.join(", ") || "(none)"
       }`,
     );
-    const locals = localRegistryNames(context.registryPath);
+    const locals = localRegistryBindings(context.registryPath);
     if (locals !== undefined) {
-      const hidden = locals.filter((name) => !result.roster.includes(name));
-      lines.push(hidden.length > 0
-        ? `  select: the roster hides ${hidden.length} registered endpoint(s): ${hidden.join(", ")} (a subset door's whitelist is fixed at start - restart to change it)`
-        : `  select: the roster serves every registered endpoint (${locals.length}) - no hidden names`);
+      // N1 (2026-11-14 learnability review): the roster∩registry difference
+      // has TWO causes, and the startup face already distinguishes them, so
+      // status must not fold both into the subset-door phrase. The door
+      // reads the registry fresh per request, which makes binding health the
+      // classifier: hidden ∧ healthy (loadManifest succeeds and the
+      // manifest's effective name matches the binding) ⇒ select-excluded
+      // (ADR-REM-010); hidden ∧ broken (manifest unreadable, or declaring a
+      // different effective name — exactly buildDoorDocument's skip
+      // conditions, RQ-14) ⇒ skipped by the door.
+      const excluded: string[] = [];
+      const skipped: string[] = [];
+      for (const binding of locals) {
+        if (result.roster.includes(binding.name)) continue;
+        try {
+          const loaded = loadManifest(binding.path);
+          if (loaded.effectiveName === binding.name) excluded.push(binding.name);
+          else skipped.push(`${binding.name} (binding resolves to a Service declaring '${loaded.effectiveName}')`);
+        } catch (error) {
+          const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+          skipped.push(`${binding.name} (${reason})`);
+        }
+      }
+      if (excluded.length > 0) {
+        lines.push(
+          `  select: the roster hides ${excluded.length} registered endpoint(s): ${excluded.join(", ")} (a subset door's whitelist is fixed at start - restart to change it)`,
+        );
+      }
+      if (skipped.length > 0) {
+        lines.push(
+          `  roster: ${skipped.length} registered endpoint(s) skipped by the door (binding unreadable or name drift): ${skipped.join("; ")} - fix the binding or re-register; 'ukp list' shows the same row degradation`,
+        );
+      }
+      if (excluded.length === 0 && skipped.length === 0) {
+        lines.push(`  select: the roster serves every registered endpoint (${locals.length}) - no hidden names`);
+      }
     }
   } else if (result.state === "single-endpoint") {
     lines.push(
@@ -570,7 +606,7 @@ async function executeServeShareCommand(
     };
   }
   if (!door.roster.includes(endpoint)) {
-    const locals = localRegistryNames(context.registryPath);
+    const locals = localRegistryBindings(context.registryPath);
     if (locals === undefined) {
       return {
         exitCode: 1,
@@ -578,7 +614,7 @@ async function executeServeShareCommand(
         stderr: `ukp serve: '${endpoint}' is not on the door's roster and the Host Registry is not readable\n`,
       };
     }
-    if (!locals.includes(endpoint)) {
+    if (!locals.some((binding) => binding.name === endpoint)) {
       return {
         exitCode: 1,
         stdout: "",
