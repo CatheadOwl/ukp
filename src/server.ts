@@ -391,7 +391,7 @@ function listWriteEndpoints(registryPath: string, select?: readonly string[]): s
  * but unloadable) is simply undeclared: its name answers exactly like a
  * never-registered one (the guide's uniformity promise), and the startup
  * banner cannot announce an endpoint the door will skip. */
-function declaredDoorNames(registryPath: string, select?: readonly string[]): string[] {
+export function declaredDoorNames(registryPath: string, select?: readonly string[]): string[] {
   return listDoorEndpoints(registryPath, select).flatMap((endpoint) => {
     try {
       return loadManifest(endpoint.folder).effectiveName === endpoint.name
@@ -401,6 +401,21 @@ function declaredDoorNames(registryPath: string, select?: readonly string[]): st
       return [];
     }
   });
+}
+
+/** The key's effective roster for a 404 clause or the key-echo admission
+ * list: the DECLARED set intersected with the key's admit predicate — never
+ * the raw registry (0.4.1 gate round 2: a dead binding in the raw list
+ * fingerprinted itself even when the denial wording was uniform). A key's
+ * effective set is scoped by what the door declares; raw-registry names the
+ * door does not declare are not the door's to offer. */
+export function keyEffectiveNames(
+  registryPath: string,
+  select?: readonly string[],
+  admit?: (name: string) => boolean,
+): string[] {
+  const declared = declaredDoorNames(registryPath, select);
+  return admit === undefined ? declared : declared.filter(admit);
 }
 
 /** Door document (O-1): per-endpoint projection of the same fields an
@@ -1028,10 +1043,7 @@ function resolveDoorRoute(
     // the door does not declare answer exactly like nonexistent ones.
     || !declaredDoorNames(registryPath, select).includes(name)
   ) {
-    const roster = rosterClause(
-      listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name),
-      access,
-    );
+    const roster = rosterClause(keyEffectiveNames(registryPath, select, admit), access);
     return {
       response: jsonResponse(
         errorBody("not-found", `no such endpoint '${name}' on this host door ${roster}`),
@@ -1047,10 +1059,7 @@ function resolveDoorRoute(
     // keeps writability-for-others unreadable. An empty effective set
     // renders the key's own grants for this access level (N3), not a bare
     // `(available: )` — caller-held knowledge, uniform across the causes.
-    const roster = rosterClause(
-      listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name),
-      access,
-    );
+    const roster = rosterClause(keyEffectiveNames(registryPath, select, admit), access);
     return {
       response: jsonResponse(
         errorBody("not-found", `no route for '${name}' under your key on this host door ${roster}`),
@@ -1105,7 +1114,7 @@ function doorNotFound(
     // No `access` here: this branch is only reached before the gate (an
     // invalid name segment), so no key ever narrows this roster and the
     // empty case is the door's own width (N3's anonymous clause).
-    const roster = rosterClause(listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name));
+    const roster = rosterClause(keyEffectiveNames(registryPath, select, admit));
     return jsonResponse(
       errorBody("not-found", `no such endpoint '${name}' on this host door ${roster}`),
       404,
@@ -1138,13 +1147,15 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
         // narrowing — the door's own width is what the roster declares.
         // Key-echo (ADR-REM-014 / INV-23): a VALID file key additionally
         // earns its own admission roster — the same scope ∩ select ∩
-        // registry set the tier-2 route denial prints as `available:` (the
+        // declared set the tier-2 route denial prints as `available:` (the
         // echo aggregates a disclosure that already exists, it opens no new
         // face) — while anonymous, invalid, and env-credential fetches keep
-        // the public document byte-identical: no echo, no credential oracle.
+        // the public document byte-identical: no echo, no credential
+        // oracle. The set rides the DECLARED base like every other face
+        // (0.4.1 gate round 2): a dead binding never joins the echo either.
         const echo = fileGateCredential(request, config);
         const admitted = echo !== undefined
-          ? listDoorEndpoints(config.registryPath, select, scopeAdmit(echo, "ro")?.admit).map((endpoint) => endpoint.name)
+          ? keyEffectiveNames(config.registryPath, select, scopeAdmit(echo, "ro")?.admit)
           : undefined;
         return jsonResponse(
           buildDoorDocument(listDoorEndpoints(config.registryPath, select), gateArmed(config), admitted),

@@ -85,7 +85,7 @@ export const READ_SPEC: UkpCommandSpec = {
       help: "not supported; read is explicitly endpoint-scoped (current scope: 'ukp inspect'; endpoints: 'ukp list')",
       teachingFlag: true,
     },
-    { flags: "--lines <start[:count]>", help: "read a 1-based text line window (count omitted: to end of file)" },
+    { flags: "--lines <start[:count]>", help: "read a 1-based text line window (count omitted: to end of file; trailing blank lines in the window are trimmed, as everywhere)" },
     {
       flags: "--from <route>",
       help: "resolve a document-relative reference (../x.md, bare filename) against this source document's endpoint-relative route",

@@ -15,7 +15,7 @@ import { join, dirname } from "node:path";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { certSanOf, normalizeTlsSanEntry, spkiPinOf } from "../capabilities/tls-identity.ts";
 import { fetchDoorDocument } from "../capabilities/remote-client.ts";
-import { DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
+import { declaredDoorNames, DISCOVERY_PATH, startUkpServer, type ServeInfo } from "../server.ts";
 import { printTaskPreflightError, renderServeTaskArtifacts, writeServeTaskArtifacts, type ServeTaskTls } from "./serve-task.ts";
 import { acquireLock, releaseLock, LockBusyError } from "../fslock.ts";
 import {
@@ -435,11 +435,25 @@ async function executeServeStatusCommand(
     || doorIdentityCandidates(context.registryPath).length > 0
     ? "https"
     : "http";
-  const result = await probeDoorOrigin({
+  let result = await probeDoorOrigin({
     origin: `${scheme}://${probe.host}:${probe.port}`,
     scheme,
     registryPath: context.registryPath,
   });
+  if (result.state !== "up" && scheme === "https" && isLoopback(probe.host)) {
+    // Round-2 gate finding (0.4.1): the identity-candidates rule steers the
+    // probe to https the moment the machine home holds any door identity,
+    // which misread a LIVE plain-http loopback door as down (the exit-code
+    // contract landed this round — a false down directly wounds it). On
+    // loopback the plain-http form is a sanctioned door shape, so the probe
+    // falls back to http before reporting a verdict.
+    const httpResult = await probeDoorOrigin({
+      origin: `http://${probe.host}:${probe.port}`,
+      scheme: "http",
+      registryPath: context.registryPath,
+    });
+    if (httpResult.state === "up") result = httpResult;
+  }
   if (result.state === "up") {
     lines.push(
       `  door: up at ${result.origin} - ${result.roster.length} endpoint(s) on the roster: ${
@@ -636,6 +650,18 @@ async function executeServeShareCommand(
     // address and TLS setup are the owner's (a consumer-reachable probe
     // origin is not the listen host, and --tls-san/--tls-cert are
     // unrecoverable), so a seemingly paste-ready rebuild line was a trap.
+    // Round-2 gate (0.4.1): a full-registry door whose binding has DIED also
+    // leaves the name off the roster, but that is not a whitelist matter —
+    // teaching a widen (with the dead name in the derived set!) is wrong on
+    // both counts. The declaration set splits the two: undeclared ⇒ the
+    // binding is broken, teach the binding fix, not a restart.
+    if (!declaredDoorNames(context.registryPath).includes(endpoint)) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `ukp serve: '${endpoint}' is registered on this host but the door cannot load it (binding unreadable or name drift) - fix the binding (folder moved? re-register from the new location: 'ukp register --rebind') or re-register, then share again\n`,
+      };
+    }
     const widened = [...new Set([...door.roster, endpoint])].sort();
     return {
       exitCode: 1,
