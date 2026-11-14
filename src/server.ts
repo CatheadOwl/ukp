@@ -384,6 +384,25 @@ function listWriteEndpoints(registryPath: string, select?: readonly string[]): s
   });
 }
 
+/** The door's own declaration set (0.4.1 learnability gate F2/F3): names
+ * that survive the same load the door document applies — the manifest loads
+ * and its effective name matches the binding. Routing, banner, and door
+ * document answer from ONE set, so a dead binding (present in the registry
+ * but unloadable) is simply undeclared: its name answers exactly like a
+ * never-registered one (the guide's uniformity promise), and the startup
+ * banner cannot announce an endpoint the door will skip. */
+function declaredDoorNames(registryPath: string, select?: readonly string[]): string[] {
+  return listDoorEndpoints(registryPath, select).flatMap((endpoint) => {
+    try {
+      return loadManifest(endpoint.folder).effectiveName === endpoint.name
+        ? [endpoint.name]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 /** Door document (O-1): per-endpoint projection of the same fields an
  * endpoint document carries (name, instance_uid, capabilities). Endpoints
  * whose manifest is unreadable or whose name drifted from the binding
@@ -1002,6 +1021,12 @@ function resolveDoorRoute(
     binding === undefined
     || binding.kind === "remote"
     || (select !== undefined && !select.includes(name))
+    // The declaration set, not the registry, decides existence (F2): a
+    // binding present in the registry but unloadable is NOT declared by
+    // the door document, and a route denial here would fingerprint it to
+    // any authenticated caller — betraying the guide's promise that names
+    // the door does not declare answer exactly like nonexistent ones.
+    || !declaredDoorNames(registryPath, select).includes(name)
   ) {
     const roster = rosterClause(
       listDoorEndpoints(registryPath, select, admit).map((endpoint) => endpoint.name),
@@ -1204,7 +1229,7 @@ function startDoorServer(config: ServeConfig, host: string, tlsMaterial: ReturnT
   const info: ServeInfo = {
     mode: "door",
     door: {
-      endpoints: listDoorEndpoints(config.registryPath, select).map((endpoint) => endpoint.name),
+      endpoints: declaredDoorNames(config.registryPath, select),
       write: listWriteEndpoints(config.registryPath, select),
       ...(select !== undefined ? { select: [...select] } : {}),
     },

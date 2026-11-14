@@ -62,6 +62,18 @@ describe("bin/spawn-failure spawnFailureStderr", () => {
     expect(text).not.toContain("bun.sh");
   });
 
+  test("cwd-missing carries the missing directory path when the caller can read it (F5)", () => {
+    const text = spawnFailureStderr("cwd-missing", existingPath, "ENOENT", "D:/moved/notes");
+    expect(text).toContain("working directory 'D:/moved/notes'");
+    expect(text).toContain("moved or renamed");
+  });
+
+  test("cwd-missing without a readable cwd still renders the remedy (no empty quotes)", () => {
+    const text = spawnFailureStderr("cwd-missing", existingPath, "ENOENT", undefined);
+    expect(text).toContain("the working directory");
+    expect(text).not.toContain("working directory ''");
+  });
+
   test("start-failed keeps the errno code as the safe detail; only EACCES adds the permission clause", () => {
     const eacces = spawnFailureStderr("start-failed", existingPath, "EACCES");
     expect(eacces).toContain(existingPath);

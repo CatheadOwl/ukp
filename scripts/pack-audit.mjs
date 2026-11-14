@@ -43,10 +43,16 @@ for (const entry of manifest.files ?? []) {
   if (metaHit(entry)) violations.push(`manifest files entry is meta layer: ${entry}`);
 }
 // B. tarball 模拟面（--ignore-scripts 防递归）
+// shell: true 是双 runtime 要求（0.4.1 learnability gate F1）：prepack 原本
+// 只被 bun 执行，bun 的 spawnSync 容忍 win32 上的 .cmd；prepack 改为
+// node --input-type=module 后，node ≥ 18.20 对无 shell 的 .cmd spawn 直接
+// EINVAL（CVE-2024-27980 加固），必须走 shell。args 全部为无空格 token，
+// shell 拼接无引号风险。
 const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
 const packed = spawnSync(npmBin, ["pack", "--dry-run", "--json", "--ignore-scripts"], {
   cwd: pkgDir,
   encoding: "utf8",
+  shell: process.platform === "win32",
 });
 if (packed.status !== 0) {
   console.error("pack-audit: npm pack --dry-run failed");

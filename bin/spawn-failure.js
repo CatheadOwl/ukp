@@ -41,12 +41,16 @@ export function classifySpawnFailure(error, bunPath, cwdReachable = currentCwdRe
 
 /** stderr text for the kinds the caller prints itself. exe-vanished
  * returns "" — the caller routes it to the existing no-bun fail() instead,
- * whose remedy text is finally the honest direction there. */
-export function spawnFailureStderr(kind, bunPath, errnoCode) {
+ * whose remedy text is finally the honest direction there. The cwd-missing
+ * message carries the missing directory itself (0.4.1 learnability gate
+ * F5): the operator's own cwd is the piece of information they cannot see
+ * anymore, and naming it turns the remedy from abstract to concrete. */
+export function spawnFailureStderr(kind, bunPath, errnoCode, cwdPath = undefined) {
   if (kind === "exe-vanished") return "";
   if (kind === "cwd-missing") {
-    return "ukp: bun was found at '" + bunPath + "', but the working directory no\n"
-      + "longer exists (moved or renamed?). Change to an existing directory and\n"
+    const place = cwdPath ? " '" + cwdPath + "'" : "";
+    return "ukp: bun was found at '" + bunPath + "', but the working directory" + place + "\n"
+      + "no longer exists (moved or renamed?). Change to an existing directory and\n"
       + "rerun ukp from there.\n";
   }
   const detail = errnoCode === undefined || errnoCode === "" ? "spawn error" : errnoCode;

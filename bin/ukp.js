@@ -131,7 +131,17 @@ if (runningUnderBun) {
       // the honest direction after all.
       fail(`found earlier at '${bunPath}' but gone at launch`);
     }
-    process.stderr.write(spawnFailureStderr(failure.kind, bunPath, failure.code));
+    // F5 (0.4.1 learnability gate): the cwd-missing message names the
+    // missing directory itself — the one piece of information the operator
+    // can no longer see. A deleted cwd makes process.cwd() throw, so the
+    // path is read defensively.
+    let cwdPath;
+    try {
+      cwdPath = process.cwd();
+    } catch {
+      cwdPath = undefined;
+    }
+    process.stderr.write(spawnFailureStderr(failure.kind, bunPath, failure.code, cwdPath));
     process.exit(1);
   }
   process.exit(result.status === null ? (result.signal !== null ? 130 : 1) : result.status);

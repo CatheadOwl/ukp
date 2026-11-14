@@ -327,6 +327,14 @@ async function probeDoorOrigin(input: {
       };
     } catch (error) {
       lastMessage = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+      // F4 (0.4.1 learnability gate): a host door that answers with an EMPTY
+      // roster is up — "declares no endpoints" is a fact about its roster,
+      // not a transport failure, and reading it as "not answering" made the
+      // status frame self-contradict. The transport already succeeded; the
+      // outer frame must not undo it.
+      if (lastMessage.includes("declares no endpoints")) {
+        return { state: "up", origin: input.origin, scheme: input.scheme, roster: [], bearerRequired: false, ...(cert !== undefined ? { identityCert: cert } : {}) };
+      }
       // A TLS verification failure means the door answered and this
       // candidate did not match — the next identity may anchor it. Any
       // connection-level verdict (refused / reset / timeout / resolve) or a

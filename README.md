@@ -96,8 +96,8 @@ predictable scope, and a single command surface. Use UKP when:
   package — read them with `ukp guide manifest full` (`ukp guide manifest`
   is the five-line cheat sheet).
 - Give agents machine-readable results (`--json`; `ukp read` uses
-  `--format json`): each result carries a `docid` — the machine address
-  the next command (`ukp read`) consumes — plus a verified `ukp://`
+  `--format json`): each search result carries a `docid` — the machine
+  address the next command (`ukp read`) consumes — plus a verified `ukp://`
   reference in a sidecar field (a separate `ukp_uri` field carried next
   to the `docid`, not inside it), so handoffs stay replayable in any
   session.
@@ -184,7 +184,7 @@ Registry commands:
 |---|---|
 | `ukp init service` | Creates a minimal `.ukp/service.toml` and a `.ukp/.gitignore` that ignores machine-local state only — the declarations themselves are committable by design (a fresh clone re-registers in one `ukp register`). |
 | `ukp use <endpoint> [endpoint...]` | One-step consumer gesture: sets this workspace's `default_endpoints` (`.ukp/client.toml`, idempotent — every name must be registered). `ukp inspect` confirms the active scope. |
-| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings — local folders and remote endpoints alike (`ukp register --url`, see Remote in 60 seconds). `--name <handle>` disambiguates collisions; a folder that moved re-binds in one step (`ukp register --rebind`). |
+| `ukp register` / `ukp unregister --endpoint <name>` | Manages Host Registry bindings — local folders and remote endpoints alike (`ukp register --url`, see Remote in 60 seconds). On a remote registration `--name <handle>` disambiguates collisions; a folder that moved re-binds in one step (`ukp register --rebind`). |
 | `ukp list` | Lists endpoint bindings and capabilities under the **workspace scope** by default (nearest `.ukp/client.toml`; `-g` for the full Host Registry). `--json` emits the offline machine snapshot (`ukp.list.v1`, zero network). New endpoints on a host door show as a stderr note — importing stays an explicit gesture, and a key-carrying binding sees the door's admission for its own key. |
 
 A legacy `.ukp/.gitignore` carrying the exact retired self-ignore template
