@@ -734,10 +734,15 @@ async function executeRegisterRemote(
       };
     }
 
-    // Endpoint document at the origin: today's single registration.
+    // Endpoint document at the origin: today's single registration. The
+    // /<name> path form addresses host doors only (learnability N2): the
+    // refusal must teach the root-url registration, not contradict the
+    // served name.
     if (parts.endpointName !== undefined) {
       throw new Error(
-        `no such endpoint '${parts.endpointName}' on ${parts.origin}: it serves a single endpoint '${wellKnown.discovery.doc.name}' (not a host door)`,
+        `${parts.origin} serves a single endpoint '${wellKnown.discovery.doc.name}' (not a host door)`
+          + ` - a /<name> path addresses host doors only; register the root url '${parts.origin}'`
+          + ` and the served endpoint arrives under its own name`,
       );
     }
     if (selected !== undefined) {

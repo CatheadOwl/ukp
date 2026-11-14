@@ -323,6 +323,21 @@ describe("ukp register --url", () => {
     expect(readRegistry(registryPath).find((b) => b.name === "serve-fixture")?.url).toBe(info.url);
   });
 
+  test("a /<name> path on a single-endpoint origin teaches the root-url registration (learnability N2)", async () => {
+    const { info } = startRemote();
+    // The path segment IS the served name: the old 'no such endpoint'
+    // prefix contradicted itself, so the refusal must teach the grammar.
+    const pathed = await asResult(executeRegisterCommand(["--url", `${info.url}/serve-fixture`], {
+      currentDirectory: root,
+      registryPath,
+    }));
+    expect(pathed.exitCode).toBe(1);
+    expect(pathed.stderr).toContain("serves a single endpoint 'serve-fixture' (not a host door)");
+    expect(pathed.stderr).toContain(`register the root url '${info.url}'`);
+    expect(pathed.stderr).not.toContain("no such endpoint 'serve-fixture' on");
+    expect(readRegistry(registryPath).length).toBe(0);
+  });
+
   test("refuses plain http on a non-loopback host and reports unreachable services", async () => {
     const refused = await asResult(executeRegisterCommand(["--url", "http://192.168.1.9:8570"], {
       currentDirectory: root,
