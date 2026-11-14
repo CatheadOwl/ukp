@@ -96,13 +96,15 @@ describe("ukp serve status (W16 / ADR-REM-015)", () => {
     );
   });
 
-  test("a down door is a state the report names (exit 0), machine-home facts still render", async () => {
+  test("a down door is named on stdout but exits 1 (report text stays, exit code carries health)", async () => {
     const path = tokenFileWith([{ label: "liku", scopes: "notes:ro" }]);
     const door = startDoor({ tokenFilePath: path });
     const port = doorPort(door);
     door.stopAll();
     const result = await runServeCommand(["status", "--port", port], context);
-    expect(result.exitCode).toBe(0);
+    // Learnability N5 (2026-11-14): exit 0 ⇔ the probe state is `up` — a
+    // `status && share` script must not read a dead door as healthy.
+    expect(result.exitCode).toBe(1);
     expect(result.stdout).toContain(`door: not answering at http://127.0.0.1:${port}`);
     // Walkthrough F2: the down line is address-scoped and names the default
     // probe + same-port retry (a custom-port door is alive elsewhere).
@@ -121,7 +123,7 @@ describe("ukp serve status (W16 / ADR-REM-015)", () => {
     });
     try {
       const result = await runServeCommand(["status", "--port", String(stub.port)], context);
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain(`door: something answered at http://127.0.0.1:${stub.port}, but it is not a ukp door`);
       expect(result.stdout).toContain("check the address and port, and the http/https scheme");
       expect(result.stdout).not.toContain("this address did not answer");
@@ -305,7 +307,7 @@ describe("door probe TLS anchoring (M4, 2026-11-14): one resolution rule, honest
     // home and anchors https by itself (the pre-fix behavior reported the
     // live door as "not answering" here).
     const status = await runServeCommand(["status", "--port", doorPort(door)], context);
-    expect(status.exitCode).toBe(0);
+    expect(status.exitCode).toBe(1);
     expect(status.stdout).toContain("is serving a single endpoint, not a host door");
     expect(status.stdout).toContain("tls: self-signed door identity");
     expect(status.stdout).not.toContain("not answering");
@@ -336,7 +338,7 @@ describe("door probe TLS anchoring (M4, 2026-11-14): one resolution rule, honest
     rmSync(join(root, "tls"), { recursive: true, force: true });
 
     const status = await runServeCommand(["status", "--port", doorPort(door), "--tls"], context);
-    expect(status.exitCode).toBe(0);
+    expect(status.exitCode).toBe(1);
     expect(status.stdout).toContain("answered but its TLS identity could not be anchored from the machine home");
     expect(status.stdout).toContain("the door may still be live");
     expect(status.stdout).not.toContain("not answering");

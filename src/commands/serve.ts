@@ -402,8 +402,13 @@ function tokenFileSummary(path: string): string {
   return `tokens: ${parsed.entries.length} key(s) at ${path} - labels: ${labels.join(", ")} ('ukp serve token list' for key ids and scopes)`;
 }
 
-/** `ukp serve status` (W16): exit 0 whether the door is up or down — it is a
- * report, and a down door is a state the report must be able to name. */
+/** `ukp serve status` (W16): exit 0 ⇔ the probe state is `up`; every other
+ * named state — `down`, `not-a-door`, `tls-unanchored`, `single-endpoint` —
+ * exits 1 (2026-11-14 learnability N5: a `status && share` script must not
+ * read a non-live door as healthy, and the exit-1-on-unhealthy verdict aligns
+ * with inspect/diagnose). stdout stays the full report — every state is still
+ * named there, because "the door is not open" is a state the report must be
+ * able to say; the exit code alone carries the health verdict. */
 async function executeServeStatusCommand(
   args: readonly string[],
   context: ServeCommandContext,
@@ -476,7 +481,7 @@ async function executeServeStatusCommand(
     ? `  deployment: task-managed (start-door.cmd present in ${join(home, ".ukp")} - 'ukp serve --print-task' prints the teardown playbook)`
     : `  deployment: manual (no print-task artifacts in ${join(home, ".ukp")})`);
   lines.push("");
-  return { exitCode: 0, stdout: lines.join("\n"), stderr: "" };
+  return { exitCode: result.state === "up" ? 0 : 1, stdout: lines.join("\n"), stderr: "" };
 }
 
 /** `ukp serve share <endpoint> --to <label> --at <url> [--rw]` (W16): the
