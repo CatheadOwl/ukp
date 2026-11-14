@@ -98,7 +98,8 @@ predictable scope, and a single command surface. Use UKP when:
 - Give agents machine-readable results (`--json`; `ukp read` uses
   `--format json`): each result carries a `docid` — the machine address
   the next command (`ukp read`) consumes — plus a verified `ukp://`
-  reference in a sidecar field, so handoffs stay replayable in any
+  reference in a sidecar field (a separate `ukp_uri` field carried next
+  to the `docid`, not inside it), so handoffs stay replayable in any
   session.
 
 UKP owns endpoint names, Registry bindings, scope, and output shape; the
